@@ -17,6 +17,7 @@ steps:
   - click: "@chat.send"
   - caption: "desktape waits until the answer is complete"
   - expect: { label: "Read aloud", role: Button, timeout: 60 }
+  - absent: "@chat.stop"
   - expect: { label: "Claude responded:", role: Text, prefix: true }
   - pause: 1.5
   - click: "@chat.exit_incognito"

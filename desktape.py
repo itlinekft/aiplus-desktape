@@ -13,7 +13,7 @@ Every tool call is appended to runs/<stamp>/audit.jsonl. Only tools on ALLOWED c
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, json, logging, os, re, subprocess, sys, tempfile, time
+import argparse, json, logging, os, re, shutil, subprocess, sys, tempfile, time
 
 import yaml
 
@@ -21,7 +21,8 @@ logger = logging.getLogger("desktape")
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
 ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_text", "press_key",
-           "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state"}
+           "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state",
+           "set_window_frame"}   # geometry only, for a tape's `window:` (runner-robustness D2)
 DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
@@ -29,15 +30,58 @@ def host_default():
     return os.environ.get("DESKTAPE_HOST") or DEFAULT_HOST
 
 
+# Telemetry, update check and run_script off for every driver process, not only for the daemon.
+DRIVER_ENV = {"CUA_DRIVER_RS_TELEMETRY_ENABLED": "false", "DO_NOT_TRACK": "1",
+              "CUA_DRIVER_RS_UPDATE_CHECK": "false", "CUA_DRIVER_DISABLE_RUN_SCRIPT": "1"}
+PIPE = r"\\.\pipe\cua-driver"
+
+
+class Target:
+    """Where the driver runs (runner-robustness D6): another machine over SSH (`user@host`), or this
+    Windows machine (`local`). Commands are cmd.exe command lines either way; paths are relative to the
+    target user's profile."""
+
+    def __init__(self, host):
+        self.host, self.local = host, host == "local"
+        if self.local and os.name != "nt":
+            raise SystemExit("desktape: --host local drives the driver on this machine, which must be Windows")
+
+    def mcp(self):
+        """(argv, env) that start `cua-driver mcp` speaking MCP on stdio."""
+        if self.local:
+            return [os.path.expandvars(EXE), "mcp", "--socket", PIPE], {**os.environ, **DRIVER_ENV}
+        sets = "".join(f"set {k}={v}&& " for k, v in DRIVER_ENV.items())
+        return ["ssh", "-o", "BatchMode=yes", self.host, sets + f'"{EXE}" mcp --socket {PIPE}'], None
+
+    def sh(self, cmd, check=False):
+        kw = dict(check=check, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if self.local:
+            return subprocess.run(cmd, shell=True, **kw)
+        return subprocess.run(["ssh", "-o", "BatchMode=yes", self.host, cmd], **kw)
+
+    def path(self, rel):
+        return os.path.join(os.environ.get("USERPROFILE", ""), *rel.split("/"))
+
+    def put(self, local_path, rel):
+        if self.local:
+            shutil.copyfile(local_path, self.path(rel))
+        else:
+            subprocess.run(["scp", "-q", local_path, f"{self.host}:{rel}"], check=True)
+
+    def get(self, rel, local_path):
+        if self.local:
+            shutil.copyfile(self.path(rel), local_path)
+        else:
+            subprocess.run(["scp", "-q", f"{self.host}:{rel}", local_path], check=True)
+
+
 class Cua:
-    """One MCP session to cua-driver, over `ssh … cua-driver mcp --socket`."""
+    """One MCP session to cua-driver: `ssh … cua-driver mcp --socket`, or the driver itself when local."""
 
     def __init__(self, host, audit_path):
-        # Telemetry, update check and run_script off for this process too, not only for the daemon.
-        env = "set CUA_DRIVER_RS_TELEMETRY_ENABLED=false&& set DO_NOT_TRACK=1&& set CUA_DRIVER_RS_UPDATE_CHECK=false&& set CUA_DRIVER_DISABLE_RUN_SCRIPT=1&& "
-        self.p = subprocess.Popen(["ssh", "-o", "BatchMode=yes", host, env + f'"{EXE}" mcp --socket \\\\.\\pipe\\cua-driver'],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
-                                  encoding="utf-8", errors="replace")   # the driver speaks UTF-8; Windows' ANSI code page may not be
+        argv, env = Target(host).mcp()
+        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+                                  env=env, encoding="utf-8", errors="replace")   # the driver speaks UTF-8; Windows' ANSI code page may not be
         self.audit = open(audit_path, "a", encoding="utf-8")
         self.n = 0
         self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -185,32 +229,26 @@ def compact(tree_text, texts=False):
 
 def ocr_lines(host):
     """Windows OCR in the interactive session (design D4): a one-off task, deleted after the run."""
-    remote = "desktape"
-    subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                    f"if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote} & "
-                    f"del /q %USERPROFILE%\\{remote}\\ocr-done.txt %USERPROFILE%\\{remote}\\ocr-out.json 2>nul"],
-                   check=False, capture_output=True)
-    subprocess.run(["scp", "-q", os.path.join(HERE, "windows", "desktape-ocr.ps1"), f"{host}:{remote}/desktape-ocr.ps1"], check=True)
+    t, remote = Target(host), "desktape"
+    # The parentheses matter: in cmd, `if … mkdir … & del …` puts the del inside the if, and a stale
+    # ocr-done.txt from the previous run then returned the previous OCR result.
+    t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & "
+         f"del /q %USERPROFILE%\\{remote}\\ocr-done.txt %USERPROFILE%\\{remote}\\ocr-out.json 2>nul")
+    t.put(os.path.join(HERE, "windows", "desktape-ocr.ps1"), f"{remote}/desktape-ocr.ps1")
     tr = f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\desktape-ocr.ps1"
-    subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                    f'schtasks /create /tn desktape-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-ocr >nul'],
-                   check=True)
+    t.sh(f'schtasks /create /tn desktape-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-ocr >nul',
+         check=True)
     try:
         for _ in range(40):
-            r = subprocess.run(["ssh", "-o", "BatchMode=yes", host, f"type %USERPROFILE%\\{remote}\\ocr-done.txt"],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace")
-            if "done" in r.stdout:
+            if "done" in t.sh(f"type %USERPROFILE%\\{remote}\\ocr-done.txt 2>nul").stdout:
                 break
             time.sleep(0.5)
         else:
             raise RuntimeError("OCR task did not finish in 20 s")
-        raw = subprocess.run(["ssh", "-o", "BatchMode=yes", host, f"type %USERPROFILE%\\{remote}\\ocr-out.json"],
-                             capture_output=True, text=True, encoding="utf-8").stdout.lstrip("﻿")
+        raw = t.sh(f"type %USERPROFILE%\\{remote}\\ocr-out.json").stdout.lstrip("\ufeff")
     finally:
         # Nothing stays scheduled, and no screenshot of the desktop is left behind.
-        subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                        f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png 2>nul"],
-                       check=False)
+        t.sh(f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png 2>nul")
     d = json.loads(raw)
     if "error" in d:
         raise RuntimeError(f"OCR: {d['error']}")
@@ -236,29 +274,64 @@ class Runner:
         self.snapshots += 1
         return self.elements
 
-    def find(self, label, role=None, prefix=False):
-        for e in self.elements:
-            name = e.get("label") or e.get("name") or ""
-            if (name.startswith(label) if prefix else name == label) and (role is None or e.get("role") == role):
-                return e
-        return None
+    def find(self, label, role=None, prefix=False, nth=1, enabled_only=False):
+        """The `nth` element (1-based, negative from the end, in tree order) matching role and label."""
+        hits = [e for e in self.elements
+                if ((e.get("label") or e.get("name") or "").startswith(label) if prefix
+                    else (e.get("label") or e.get("name") or "") == label)
+                and (role is None or e.get("role") == role)
+                and not (enabled_only and e.get("enabled") is False)]
+        i = nth - 1 if nth > 0 else len(hits) + nth
+        return hits[i] if 0 <= i < len(hits) else None
 
-    def wait_for(self, label, role=None, timeout=8.0, prefix=False):
+    def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False):
         end = time.time() + timeout
         while True:
             self.snapshot()
-            e = self.find(label, role, prefix)
+            e = self.find(label, role, prefix, nth, enabled_only)
             if e or time.time() > end:
                 return e
             time.sleep(0.4)
 
+    def wait_gone(self, label, role=None, timeout=8.0, prefix=False, nth=1):
+        """True once no element matches (design D5 of runner-robustness)."""
+        end = time.time() + timeout
+        while True:
+            self.snapshot()
+            if not self.find(label, role, prefix, nth) or time.time() > end:
+                return not self.find(label, role, prefix, nth)
+            time.sleep(0.4)
+
     def focus(self, title):
         sc, _ = self.cua.call("list_windows", {})
-        w = next((w for w in sc.get("windows", []) if w.get("title") == title and not w.get("minimized")), None)
+        wins = [w for w in sc.get("windows", []) if w.get("title") == title]
+        w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
         if not w:
-            raise RuntimeError(f"no visible window titled {title!r}")
+            raise RuntimeError(f"no window titled {title!r}")
         self.win = {"pid": w["pid"], "window_id": w["window_id"]}
-        self.cua.call("bring_to_front", {"pid": w["pid"]})
+        self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
+        if w.get("minimized"):
+            # runner-robustness D1: bring_to_front restores it at its previous frame
+            logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
+
+    def set_frame(self, frame):
+        """Pin the window's frame (runner-robustness D2); a maximised window is restored first."""
+        want = {"x": int(frame.get("x", 0)), "y": int(frame.get("y", 0)),
+                "width": int(frame["width"]), "height": int(frame["height"])}
+        try:
+            self.cua.call("set_window_frame", {**self.win, **want})
+        except RuntimeError as e:
+            if "maximized" not in str(e):
+                raise
+            logger.info("window is maximised; restoring it with Win+Down before setting %s", want)
+            self.cua.call("hotkey", {**self.win, "keys": ["win", "down"], "delivery_mode": "foreground"})
+            time.sleep(0.8)
+            self.cua.call("set_window_frame", {**self.win, **want})
+        sc, _ = self.cua.call("list_windows", {})
+        got = next((w["bounds"] for w in sc.get("windows", []) if w.get("window_id") == self.win["window_id"]), None)
+        if not got or [got["x"], got["y"], got["width"], got["height"]] != [want["x"], want["y"], want["width"], want["height"]]:
+            raise RuntimeError(f"window frame is {got}, not {want}")
+        logger.info("window frame set: %s", want)
 
     def step(self, s):
         kind, arg = next(iter(s.items()))
@@ -266,17 +339,24 @@ class Runner:
             self.focus(arg)
         elif kind == "click":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            e = self.wait_for(a["label"], a.get("role"), prefix=a.get("prefix", False))
+            e = self.wait_for(a["label"], a.get("role"), prefix=a.get("prefix", False), nth=a.get("nth", 1),
+                              enabled_only=True)
             if not e:
-                raise RuntimeError(f"click: {a['label']!r} not found")
+                raise RuntimeError(f"click: {a['label']!r} not found (enabled)")
             args = {**self.win, "element_token": e["element_token"]}
             if a.get("action"):
                 args["action"] = a["action"]
             self.cua.call("click", args)
         elif kind == "expect":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            if not self.wait_for(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False)):
+            if not self.wait_for(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
+                                 a.get("nth", 1)):
                 raise AssertionError(f"expected {a.get('role') or 'element'} {a['label']!r} did not appear")
+        elif kind == "absent":
+            a = arg if isinstance(arg, dict) else {"label": arg}
+            if not self.wait_gone(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
+                                  a.get("nth", 1)):
+                raise AssertionError(f"{a.get('role') or 'element'} {a['label']!r} did not go away")
         elif kind == "type":
             a = arg if isinstance(arg, dict) else {"text": arg}
             self.cua.call("type_text", {**self.win, "text": a["text"], "delivery_mode": "foreground"},
@@ -339,13 +419,13 @@ def burn_captions_remote(host, rec_rel, captions, total, local_dir, name):
     flt = os.path.join(local_dir, "captions.ffscript")
     open(flt, "w", encoding="utf-8").write(",\n".join(parts) or "null")
     open(os.path.join(local_dir, f"{name}.srt"), "w", encoding="utf-8").write(srt(captions, total))
-    subprocess.run(["scp", "-q", flt, f"{host}:{rec_rel}/captions.ffscript"], check=True)
+    t = Target(host)
+    t.put(flt, f"{rec_rel}/captions.ffscript")
     win = rec_rel.replace("/", "\\")
-    subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                    f'cd /d %USERPROFILE%\\{win} && "{FFMPEG_WIN}" -y -loglevel error -i recording.mp4 '
-                    f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4'], check=True)
+    t.sh(f'cd /d %USERPROFILE%\\{win} && "{FFMPEG_WIN}" -y -loglevel error -i recording.mp4 '
+         f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
     out = os.path.join(local_dir, f"{name}.mp4")
-    subprocess.run(["scp", "-q", f"{host}:{rec_rel}/captioned.mp4", out], check=True)
+    t.get(f"{rec_rel}/captioned.mp4", out)
     return out
 
 
@@ -366,11 +446,10 @@ def cmd_run(a):
     rec_dir = rec_rel = None
     if a.mode == "video":
         # The daemon has no HOME on Windows, so the recording directory must be absolute.
-        profile = subprocess.run(["ssh", "-o", "BatchMode=yes", a.host, "echo %USERPROFILE%"], capture_output=True,
-                                 text=True, encoding="utf-8", errors="replace").stdout.strip()
+        profile = Target(a.host).sh("echo %USERPROFILE%").stdout.strip()
         rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "\\" + rec_rel.replace("/", "\\")
-    t0 = time.time(); failed = None; done = 0; repair = None
+    t0 = time.time(); failed = None; done = 0; repair = None; frame_set = False
     logger.info("tape %s, mode %s, %d steps, run dir %s", tape["name"], a.mode, len(plan), run_dir)
     try:
         for i, (s, entry) in enumerate(plan):
@@ -379,6 +458,8 @@ def cmd_run(a):
                 r.t_rec = time.time()
             try:
                 r.step(s)
+                if "focus" in s and tape.get("window") and not frame_set:
+                    r.set_frame(tape["window"]); frame_set = True
             except Exception as e:
                 failed = f"step {i}: {e}"
                 logger.error("tape failed at %s", failed)
@@ -408,7 +489,7 @@ def cmd_run(a):
     if r.t_rec is not None:
         local_raw = os.path.join(run_dir, "recording.mp4")
         try:
-            subprocess.run(["scp", "-q", f"{a.host}:{rec_rel}/recording.mp4", local_raw], check=True)
+            Target(a.host).get(f"{rec_rel}/recording.mp4", local_raw)
             summary["video"] = burn_captions_remote(a.host, rec_rel, r.captions, total, run_dir, tape["name"])
         except Exception as e:
             logger.warning("video post-processing failed: %s", e)
@@ -456,7 +537,7 @@ def cmd_look(a):
         cua.close()
     title = window_title(a)
     amap = load_map(a.map)
-    state = os.path.join(HERE, "runs", ".look", re.sub(r"[^\w.-]+", "_", title) + ".txt")
+    state = os.path.join(HERE, "runs", ".look", re.sub(r"[^\w.-]+", "_", title) + ("-text" if a.text else "") + ".txt")
     lines, hidden, unchanged = look_lines(r.tree, None if a.all else (amap or {}).get("ignore"), full=a.full,
                                           texts=a.text, new=a.new, grep=a.grep, state=state)
     what = "tree lines" if a.full else "elements and dialogs" + (" and texts" if a.text else "")
@@ -585,6 +666,27 @@ def selftest():
         assert new == ['Button "Done" (invoke)'] and unchanged == 3, (new, unchanged)
         g, _, _ = look_lines(t2, ign, texts=True, grep=r'^Text "\d+\.\d', state=st)
         assert g == ['Text "0.1.0"'], g
+    # runner-robustness: nth, enabled-only clicks, absent, the two kinds of target.
+    rr = Runner(None, "test")
+    rr.elements = [{"label": "Copy", "role": "Button", "element_token": "a"},
+                   {"label": "Copy", "role": "Button", "element_token": "b", "enabled": False},
+                   {"label": "Copy", "role": "Button", "element_token": "c"}]
+    assert rr.find("Copy", "Button")["element_token"] == "a" and rr.find("Copy", nth=-1)["element_token"] == "c"
+    assert rr.find("Copy", nth=2)["element_token"] == "b" and rr.find("Copy", nth=2, enabled_only=True)["element_token"] == "c"
+    assert rr.find("Copy", nth=4) is None and rr.find("Copy", nth=-4) is None
+    seq = iter([[{"label": "Stop response", "role": "Button"}], []])
+    rr.snapshot = lambda: setattr(rr, "elements", next(seq, []))
+    assert rr.wait_gone("Stop response", "Button", timeout=5)
+    rr.snapshot = lambda: setattr(rr, "elements", [{"label": "Stop response", "role": "Button"}])
+    t0 = time.time(); assert not rr.wait_gone("Stop response", timeout=0.5) and time.time() - t0 < 2
+    argv, env = Target("user@host").mcp()
+    assert argv[:3] == ["ssh", "-o", "BatchMode=yes"] and argv[-1].endswith(r'mcp --socket \\.\pipe\cua-driver') \
+        and "set DO_NOT_TRACK=1&& " in argv[-1] and env is None, argv
+    if os.name != "nt":
+        try:
+            Target("local"); raise AssertionError("expected SystemExit off Windows")
+        except SystemExit:
+            pass
     # The allowlist and the audit log, with a stand-in for the MCP session (no ssh).
     with tempfile.TemporaryDirectory() as d:
         cua = Cua.__new__(Cua)

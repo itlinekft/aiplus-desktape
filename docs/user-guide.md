@@ -41,8 +41,8 @@ so only what is printed costs tokens:
 - `look --grep PATTERN` keeps only the lines matching a regex, with any form of look:
   `look --text --grep '^Text "\d+\.\d'` finds a version number.
 - `look --ocr` adds the target's built-in OCR, one line per text line with its x,y position. Use it only
-  for text the tree does not have (an image, a canvas); OCR can show a frame that is no longer current,
-  so never use it to decide what state the app is in.
+  for text the tree does not have (an image, a canvas). It reads the whole screen, so other windows' text
+  shows up too when the app is not maximised; the tree remains the source of truth for the app's state.
 - `look --full` prints the whole tree. It is the most expensive form; prefer `--text --grep`.
 
 With a map, `--map claude-desktop-win` sets the window title and hides the map's `ignore:` regions (for

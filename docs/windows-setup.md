@@ -65,13 +65,18 @@ keeper lands (`openspec/changes/headless-session`), keep an RDP client connected
 
 ## 6. Running desktape on Windows (Windows as the controller)
 
-desktape also runs on Windows: measured on 2026-10-23 on the reference target driving itself
-(`DESKTAPE_HOST=user@localhost`), Python 3.14 in a venv: the sample tape passed 25/25 in 9.1 s with
-0 model calls, about the same as from Linux. What it needs:
+desktape also runs on Windows, in two ways:
 
-- Python 3.9+ and `pip install -r requirements.txt`; the built-in OpenSSH client (`ssh`, `scp`).
-- Key login to the target, also when the target is the same machine (`user@localhost`, with the key in
-  `authorized_keys` and the host key in `known_hosts`, because desktape uses `BatchMode=yes`).
+- **On the machine it drives, without SSH:** `DESKTAPE_HOST=local` (or `--host local`) starts the driver
+  directly. Measured on 2026-10-23 on the reference target: the Claude Desktop tour 42/42 in 18.3 s,
+  `look --ocr`, and the marketplace tape in video mode 25/25 with its captioned video. Needs Python 3.9+,
+  `pip install -r requirements.txt`, and the driver daemon from §3; no SSH server, no key.
+- **Driving another Windows machine:** `DESKTAPE_HOST=user@host`, with the built-in OpenSSH client and key
+  login (`BatchMode=yes`, so the host key must already be in `known_hosts`). `user@localhost` works too
+  (25/25 in 9.1 s), but `local` is simpler.
+
+Either way:
+
 - **Run it from the desktop session** (a terminal on the desktop, or a `/it` scheduled task), **not from
   inside an SSH session**: there, an `ssh.exe` started by Python got no output at all, even for
   `ssh … echo hi`, while the same calls worked in the desktop session.
