@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""uireel — drive a remote desktop through Cua Driver over SSH: run a YAML tape, look, act.
+"""desktape — drive a remote desktop through Cua Driver over SSH: run a YAML tape, look, act.
 
-  uireel.py run TAPE [--mode test|video]       a tape, as a test or as a captioned video
-  uireel.py look [--window T] [--ocr] [--full]  what the window shows, cheapest form first
-  uireel.py act 'STEP' [--map M] [--append TAPE] one step; appended to the tape only if it passed
-  uireel.py --selftest                          offline checks, no host needed
+  desktape.py run TAPE [--mode test|video]       a tape, as a test or as a captioned video
+  desktape.py look [--window T] [--ocr] [--full]  what the window shows, cheapest form first
+  desktape.py act 'STEP' [--map M] [--append TAPE] one step; appended to the tape only if it passed
+  desktape.py --selftest                          offline checks, no host needed
 
-Host: --host, else UIREEL_HOST, else GUITAPE_HOST (user@host of the Windows machine).
+Host: --host, else DESKTAPE_HOST (user@host of the Windows machine).
 Test mode runs as fast as the UI allows. Video mode records the screen (Cua start_recording), pauses
 between steps, and burns the tape's captions into the video afterwards.
 Every tool call is appended to runs/<stamp>/audit.jsonl. Only tools on ALLOWED can be called.
@@ -17,16 +17,16 @@ import argparse, json, logging, os, re, subprocess, sys, tempfile, time
 
 import yaml
 
-logger = logging.getLogger("uireel")
+logger = logging.getLogger("desktape")
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
 ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_text", "press_key",
            "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state"}
-DEFAULT_HOST = None   # no built-in host: set UIREEL_HOST or pass --host
+DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
 def host_default():
-    return os.environ.get("UIREEL_HOST") or os.environ.get("GUITAPE_HOST") or DEFAULT_HOST
+    return os.environ.get("DESKTAPE_HOST") or DEFAULT_HOST
 
 
 class Cua:
@@ -40,7 +40,7 @@ class Cua:
         self.audit = open(audit_path, "a", encoding="utf-8")
         self.n = 0
         self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                 "clientInfo": {"name": "uireel", "version": "0.1"}})
+                                 "clientInfo": {"name": "desktape", "version": "0.1"}})
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def _send(self, m):
@@ -126,15 +126,15 @@ def compact(tree_text):
 
 def ocr_lines(host):
     """Windows OCR in the interactive session (design D4): a one-off task, deleted after the run."""
-    remote = "uireel"
+    remote = "desktape"
     subprocess.run(["ssh", "-o", "BatchMode=yes", host,
                     f"if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote} & "
                     f"del /q %USERPROFILE%\\{remote}\\ocr-done.txt %USERPROFILE%\\{remote}\\ocr-out.json 2>nul"],
                    check=False, capture_output=True)
-    subprocess.run(["scp", "-q", os.path.join(HERE, "windows", "uireel-ocr.ps1"), f"{host}:{remote}/uireel-ocr.ps1"], check=True)
-    tr = f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\uireel-ocr.ps1"
+    subprocess.run(["scp", "-q", os.path.join(HERE, "windows", "desktape-ocr.ps1"), f"{host}:{remote}/desktape-ocr.ps1"], check=True)
+    tr = f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\desktape-ocr.ps1"
     subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                    f'schtasks /create /tn uireel-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn uireel-ocr >nul'],
+                    f'schtasks /create /tn desktape-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-ocr >nul'],
                    check=True)
     try:
         for _ in range(40):
@@ -150,7 +150,7 @@ def ocr_lines(host):
     finally:
         # Nothing stays scheduled, and no screenshot of the desktop is left behind.
         subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                        f"schtasks /delete /tn uireel-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png 2>nul"],
+                        f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png 2>nul"],
                        check=False)
     d = json.loads(raw)
     if "error" in d:
@@ -246,7 +246,7 @@ def repair_bundle(path, tape_name, index, written, resolved, map_entry, error, t
             f"- map entry: `{map_entry}`" if map_entry else "- map entry: none (inline selector)", "",
             f"## The window now: {len(lines)} labelled actionable elements", "",
             *[f"- {l}" for l in lines], "",
-            "Fix the map entry when the step used one, otherwise the tape. More: `uireel.py look --ocr`."]
+            "Fix the map entry when the step used one, otherwise the tape. More: `desktape.py look --ocr`."]
     open(path, "w", encoding="utf-8").write("\n".join(body) + "\n")
     return path
 
@@ -306,7 +306,7 @@ def cmd_run(a):
         # The daemon has no HOME on Windows, so the recording directory must be absolute.
         profile = subprocess.run(["ssh", "-o", "BatchMode=yes", a.host, "echo %USERPROFILE%"], capture_output=True,
                                  text=True).stdout.strip()
-        rec_rel = f"uireel/rec/{stamp}"
+        rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "\\" + rec_rel.replace("/", "\\")
     t0 = time.time(); failed = None; done = 0; repair = None
     logger.info("tape %s, mode %s, %d steps, run dir %s", tape["name"], a.mode, len(plan), run_dir)
@@ -478,18 +478,18 @@ def main():
     p.add_argument("--ocr", action="store_true"); p.add_argument("--full", action="store_true")
     p = sub.add_parser("act"); p.add_argument("step"); p.add_argument("--map"); p.add_argument("--window")
     p.add_argument("--append")
-    # Old form kept: `uireel.py TAPE [--mode …]` means `run`.
+    # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
     argv = sys.argv[1:]
     if argv and argv[0].endswith((".yaml", ".yml")):
         argv = ["run"] + argv
     a = ap.parse_args(argv)
     if not a.host:
-        ap.error("no host: set UIREEL_HOST=user@host or pass --host")
+        ap.error("no host: set DESKTAPE_HOST=user@host or pass --host")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act}[a.cmd](a)
     except KeyError as e:          # a map name the map lacks: say which, no traceback
-        print(f"uireel: {e.args[0]}", file=sys.stderr)
+        print(f"desktape: {e.args[0]}", file=sys.stderr)
         return 2
 
 

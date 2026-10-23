@@ -6,7 +6,7 @@
 #   win.sh uia [filter]         -> named controls of the Claude window with their rectangles
 #   win.sh focus                -> bring Claude to the foreground
 set -euo pipefail
-H=${UIREEL_HOST:?set UIREEL_HOST=user@host}
+H=${DESKTAPE_HOST:?set DESKTAPE_HOST=user@host}
 HERE=$(cd "$(dirname "$0")" && pwd)
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 a=$1; shift || true

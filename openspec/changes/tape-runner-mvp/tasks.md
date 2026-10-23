@@ -1,7 +1,7 @@
 # Tasks — tape-runner-mvp
 
 ## 1. Rename
-- [x] 1.1 `guitape.py` → `uireel.py` with subcommands `run`, `look`, `act`; `UIREEL_HOST` before `GUITAPE_HOST`; README title [REQ: steps-address-elements-by-role-and-label]
+- [x] 1.1 `guitape.py` → `desktape.py` with subcommands `run`, `look`, `act`; host from `--host` or `DESKTAPE_HOST`; README title [REQ: steps-address-elements-by-role-and-label]
 
 ## 2. App map v0
 - [x] 2.1 `maps/claude-desktop-win.yaml` with the spike's selectors and the four authoring facts as notes [REQ: app-maps-hold-named-selectors]

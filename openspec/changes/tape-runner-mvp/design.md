@@ -12,11 +12,11 @@ few tokens as possible; local OCR instead of sending every image to a model; map
 advance, so the agent does not have to work out the UI from scratch every time; keep an ad hoc path too; and
 do not spend days making deterministic what is simpler to run through a model.
 
-The spike's working name was guitape; the project is **uireel**.
+The spike's working name was guitape; the project is **desktape**.
 
 ## Goals / Non-Goals
 
-Goals: the agent that drives uireel (a Claude Code session) can look at the screen cheaply, act one step at a
+Goals: the agent that drives desktape (a Claude Code session) can look at the screen cheaply, act one step at a
 time, and turn what worked into a tape; a tape reuses app facts by name; a failed run leaves exactly what is
 needed to repair it.
 
@@ -36,10 +36,10 @@ The proposal's „fix proposed, never applied silently” holds: the agent edits
 
 ### D2. Two interactive commands are the ad hoc path
 
-- `uireel look [--window T] [--ocr] [--full]`: prints the compact tree (role, label, actions; one line per
+- `desktape look [--window T] [--ocr] [--full]`: prints the compact tree (role, label, actions; one line per
   labelled actionable element). `--ocr` adds OCR lines with x,y; `--full` the full tree (costs more than a
   screenshot, so never by default).
-- `uireel act '<step yaml>' [--append TAPE]`: runs one tape step (with map names resolved) and, if it
+- `desktape act '<step yaml>' [--append TAPE]`: runs one tape step (with map names resolved) and, if it
   passes, appends it to a tape. That is how a tape is authored: look, act, append.
 
 Each command opens its own MCP session (≈0.5 s over SSH). Element tokens are never shared between commands:
@@ -61,10 +61,10 @@ Windows OCR needs the user's desktop, which SSH does not have (spike pitfalls 1 
 ASCII PowerShell script, runs it as a one-off `schtasks /it` task, waits for its done-file and reads the JSON.
 The task is deleted after the run, so nothing is left scheduled.
 
-### D5. The rename keeps old settings working
+### D5. One name, one setting
 
-The CLI becomes `uireel.py`; `UIREEL_HOST` is read first, then `GUITAPE_HOST`. The keys stay in
-`~/.config/guitape/` until that folder is moved by hand.
+The CLI is `desktape.py`, and the host comes only from `--host` or `DESKTAPE_HOST`: there is no built-in host
+and no legacy variable, since nothing was released under the spike name.
 
 ## Risks / Trade-offs
 

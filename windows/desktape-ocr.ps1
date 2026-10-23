@@ -1,7 +1,7 @@
-# uireel look --ocr: Windows built-in OCR (Windows.Media.Ocr) on a full-screen capture, run in the
-# interactive session by a one-off task. Writes %USERPROFILE%\uireel\ocr-out.json, then ocr-done.txt. ASCII only.
+# desktape look --ocr: Windows built-in OCR (Windows.Media.Ocr) on a full-screen capture, run in the
+# interactive session by a one-off task. Writes %USERPROFILE%\desktape\ocr-out.json, then ocr-done.txt. ASCII only.
 $ErrorActionPreference = 'Stop'
-$d = Join-Path $env:USERPROFILE 'uireel'
+$d = Join-Path $env:USERPROFILE 'desktape'
 $out = Join-Path $d 'ocr-out.json'
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime, System.Drawing, System.Windows.Forms
