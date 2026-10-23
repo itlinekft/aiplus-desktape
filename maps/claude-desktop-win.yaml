@@ -1,29 +1,178 @@
 # Claude Desktop on Windows: named selectors for tapes (`click: "@plugins.add_plugin"`).
-# Learned while authoring the spike tape (docs/spike-2026-10-23.md §4). Add an entry when a tape that
-# repeats needs it; keep one-off selectors inline in the tape.
+# Mapped 2026-10-23 with `look --new` on every main screen, menu and dialog; the first entries come from the
+# spike tape (docs/spike-2026-10-23.md §4). Only fixed UI is named here: never a user's chats, projects,
+# artifacts or account. Keep one-off selectors inline in a tape.
 app: Claude Desktop
 version: "3.6556.2.0 (Microsoft Store build)"
 window: Claude
-# Hidden from `look` and repair bundles (`look --all` shows them): the user's own pinned chats, projects
-# and sessions, and the account button, which sit between the sidebar's fixed buttons and the main pane;
-# and the notifications region. Named by fixed elements only, so the map never names a user's items.
+
+# Hidden from `look` and repair bundles (`look --all` shows them), named by fixed elements only.
 ignore:
+  # Sidebar: the user's pinned and recent chats, projects and sessions, and the account button
   - { from: { role: Text, label: "Pinned" }, until: { role: Group, label: "Primary pane" } }
   - { subtree: { role: Group, label: "Notifications" } }
+  - { from: { role: Text, label: "Recent artifacts" } }        # the new-chat screen's artifact list
+  - { from: { role: List, label: "Search or create a project" }, until: { role: ListItem, label: "New project" } }
+  - { from: { role: List, label: "Command palette options" }, until: { role: Button, label: "Compose" } }  # search: recent sessions
+  - { subtree: { role: List, label: "Artifacts" } }             # Artifacts and Design pages: the user's artifacts
+  - { subtree: { role: List, label: "Projects" } }              # Projects page: the user's projects
+  # An open chat's messages (their text is the label), so a look or a repair bundle never carries them:
+  - { subtree: { role: Text, label: "You said:", prefix: true } }
+  - { subtree: { role: Text, label: "Claude responded:", prefix: true } }
+  - { subtree: { role: Button, label: "Show message actions for", prefix: true } }
+
 elements:
+  # --- mode switch (top of the sidebar). The Chat radio's label carries a status ("Claude, awaiting your
+  # input"), so match it by prefix.
+  mode.chat:                  { label: "Claude", role: RadioButton, prefix: true, action: select }
+  mode.code:                  { label: "Code", role: RadioButton, action: select }
+
+  # --- sidebar, fixed navigation
+  sidebar.new:                { label: "New", role: Button }
+  sidebar.search:             { label: "Search", role: Button }
+  sidebar.projects:           { label: "Projects", role: Button, prefix: true }   # "Projects Beta" / "Projects New"
+  sidebar.create_project:     { label: "Create project", role: Button, action: expand }
+  sidebar.artifacts:          { label: "Artifacts", role: Button }
+  sidebar.scheduled:          { label: "Scheduled", role: Button }        # Chat mode
+  sidebar.design:             { label: "Design", role: Button }           # Chat mode
+  sidebar.new_task:           { label: "New task", role: Button, action: expand }   # Chat mode
+  sidebar.new_from_template:  { label: "New from a template", role: Button, action: expand }
   sidebar.customize:          { label: "Customize", role: Button }
+  sidebar.more:               { label: "More navigation items", role: Button, action: expand }
+  sidebar.hide:               { label: "Hide sidebar", role: Button }
+  app.menu:                   { label: "Menu", role: Button }             # File, Edit, View, Go, Help
+
+  # --- new chat (Chat mode)
+  chat.prompt:                { label: "Write your prompt to Claude", role: Edit }
+  chat.add:                   { label: "Add files, connectors, and more", role: Button, action: expand }
+  chat.add.upload:            { label: "Upload or add files", role: MenuItem }
+  chat.add.folder:            { label: "Add folder", role: MenuItem }
+  chat.add.skills:            { label: "Skills", role: MenuItem, action: expand }
+  chat.add.connectors:        { label: "Connectors", role: MenuItem, action: expand }
+  chat.add.plugins:           { label: "Plugins", role: MenuItem, action: expand }
+  chat.add.research:          { label: "Research", role: CheckBox, action: toggle }
+  chat.project_or_folder:     { label: "Project or folder", role: Button, action: expand }
+  chat.project_search:        { label: "Search or create a project", role: ComboBox }
+  chat.permission_mode:       { label: "Auto", role: Button, action: expand }   # label is the current mode
+  chat.permission.manual:     { label: "Manual", role: RadioButton, prefix: true, action: select }
+  chat.permission.auto:       { label: "Auto", role: RadioButton, prefix: true, action: select }
+  chat.incognito:             { label: "Use incognito", role: Button }
+  chat.recent_artifacts:      { label: "Recent artifacts", role: Button }
+
+  # --- model picker (both modes); its label carries the current model ("Model: Opus 5.5 Medium")
+  model.picker:               { label: "Model:", role: Button, prefix: true }
+  model.fable:                { label: "Fable", role: RadioButton, prefix: true, action: select }
+  model.opus:                 { label: "Opus", role: RadioButton, prefix: true, action: select }
+  model.sonnet:               { label: "Sonnet", role: RadioButton, prefix: true, action: select }
+  model.haiku:                { label: "Haiku", role: RadioButton, prefix: true, action: select }
+  model.effort:               { label: "Effort", role: MenuItem, prefix: true, action: expand }
+  model.more:                 { label: "More models", role: MenuItem, action: expand }
+
+  # --- new session (Code mode)
+  code.prompt:                { label: "Prompt", role: Edit }
+  code.add:                   { label: "Add", role: Button, action: expand }
+  code.terminal:              { label: "Terminal", role: Button, action: toggle }
+  code.browser:               { label: "Browser", role: Button, action: toggle }
+  code.environment:           { label: "Environment:", role: Button, prefix: true, action: expand }
+  code.folder:                { label: "Folder:", role: Button, prefix: true, action: expand }
+  code.permissions:           { label: "Permissions:", role: Button, prefix: true, action: expand }
+  usage.indicator:            { label: "Usage:", role: Button, prefix: true }
+
+  # --- search dialog
+  search.input:               { label: "Search", role: ComboBox }
+  search.close:               { label: "Close", role: Button }
+  search.tab.all:             { label: "All", role: TabItem, action: select }
+  search.tab.artifacts:       { label: "Artifacts", role: TabItem, action: select }
+  search.tab.sessions:        { label: "Sessions", role: TabItem, action: select }
+  search.tab.code:            { label: "Code", role: TabItem, action: select }
+  search.tab.projects:        { label: "Projects", role: TabItem, action: select }
+  search.tab.scheduled:       { label: "Scheduled", role: TabItem, action: select }
+
+  # --- Projects page
+  projects.tab.yours:         { label: "Your projects", role: TabItem, action: select }
+  projects.tab.archived:      { label: "Archived", role: TabItem, action: select }
+  projects.search:            { label: "Search projects", role: Button }
+  projects.new:               { label: "New project", role: Button }
+  projects.from_repository:   { label: "Start from repository", role: Button, action: expand }
+
+  # --- Artifacts page
+  artifacts.tab.all:          { label: "All", role: TabItem, action: select }
+  artifacts.tab.yours:        { label: "Yours", role: TabItem, action: select }
+  artifacts.tab.shared:       { label: "Shared with you", role: TabItem, action: select }
+  artifacts.search:           { label: "Search your artifacts", role: Button }
+  artifacts.new_docs:         { label: "Docs, New", role: Button }
+  artifacts.new_slides:       { label: "Slides, New", role: Button }
+  artifacts.new_design:       { label: "Design, New", role: Button }
+  artifacts.new_dashboard:    { label: "Dashboard", role: Button, prefix: true }
+
+  # --- Scheduled tasks page
+  scheduled.templates_tab:    { label: "Templates", role: TabItem, action: select }
+  scheduled.set_up_manually:  { label: "Set up manually", role: Button }
+
+  # --- Customize: Skills, Connectors, Plugins tabs (each with Yours / Discover)
+  customize.skills_tab:       { label: "Skills", role: TabItem, action: select }
+  customize.connectors_tab:   { label: "Connectors", role: TabItem, action: select }
   customize.plugins_tab:      { label: "Plugins", role: TabItem, action: select }
+  customize.yours:            { label: "Yours", role: RadioButton, action: select }
+  customize.discover:         { label: "Discover", role: RadioButton, action: select }
+  customize.search:           { label: "Search", role: Edit }
+  customize.filter:           { label: "Filter", role: Button, prefix: true, action: expand }   # "Filter, 1 on" when set
+  customize.sort:             { label: "Sort", role: Button, prefix: true, action: expand }
+  skills.add_skill:           { label: "Add skill", role: Button, action: expand }
+  connectors.add_connector:   { label: "Add connector", role: Button, action: expand }
+
+  # --- plugins and marketplaces
   plugins.add_plugin:         { label: "Add plugin", role: Button, action: expand }
   plugins.add_marketplace:    { label: "Add marketplace", role: MenuItem }
+  plugins.manage_marketplaces: { label: "Manage marketplaces", role: MenuItem }
+  plugins.upload_plugin:      { label: "Upload plugin", role: MenuItem }
+  plugins.update:             { label: "Update", role: Button }           # on a plugin's own page, not in the list
+  plugins.update_anyway:      { label: "Update anyway", role: Button }    # "Update will overwrite local changes"
   marketplace.from_repository: { label: "Add from a repository", role: Button, prefix: true }
   marketplace.url:            { label: "URL", role: ComboBox, prefix: true, action: expand }
   marketplace.use_url:        { label: "Use", prefix: true }
   marketplace.sync:           { label: "Sync", role: Button }
   marketplace.cancel:         { label: "Cancel", role: Button }
+  marketplace.check_updates:  { label: "Check for updates", role: MenuItem }
+  marketplace.remove:         { label: "Remove", role: MenuItem }
+  dialog.done:                { label: "Done", role: Button }
+  dialog.close:               { label: "Close", role: Button }
+
+  # --- Settings dialog (open it from the account menu: see notes)
+  settings.menu_item:         { label: "Settings", role: MenuItem }
+  settings.search:            { label: "Search settings", role: Edit }
+  settings.general:           { label: "General", role: Button }
+  settings.account:           { label: "Account", role: Button }
+  settings.privacy:           { label: "Privacy", role: Button }
+  settings.billing:           { label: "Billing", role: Button }
+  settings.usage:             { label: "Usage", role: Button }
+  settings.capabilities:      { label: "Capabilities", role: Button }
+  settings.memory:            { label: "Memory", role: Button }
+  settings.design_systems:    { label: "Design systems", role: Button }
+  settings.time_and_focus:    { label: "Time and focus", role: Button }
+  settings.claude_code:       { label: "Claude Code", role: Button }
+  settings.claude_in_chrome:  { label: "Claude in Chrome", role: Button }
+  settings.system:            { label: "System", role: Button }
+  settings.extensions:        { label: "Extensions", role: Button }
+  settings.developer:         { label: "Developer", role: Button }
+  settings.theme.system:      { label: "System", role: RadioButton, action: select }   # General
+  settings.theme.light:       { label: "Light", role: RadioButton, action: select }
+  settings.theme.dark:        { label: "Dark", role: RadioButton, action: select }
+  settings.developer.edit_config: { label: "Edit config", role: Button }
+
 notes:
-  - "Settings: Ctrl+, does not open them; the sidebar's Customize does."
+  - "Settings: Ctrl+, does not open them. Open the account menu (the sidebar button labelled with the account's name, just above Send feedback; it sits inside the hidden sidebar region, so find it with `look --all`) and pick @settings.menu_item. Settings is a Dialog; @dialog.close closes it."
+  - "The account menu's items (Settings, Usage, Language, Get help, View changelog, Get API keys, Log out) render inside the hidden sidebar region too: `look --all --grep MenuItem` shows them."
+  - "The app menu's top items (File, Edit, View, Go, Help) cannot be expanded through UI Automation (ExpandCollapse fails with 0x80040201). Do not drive them with arrow keys: Down moved focus into the sidebar's chat list and opened a chat."
+  - "Labels are matched by role and label only, first match in tree order: the Artifacts page's own Button \"New\" cannot be told apart from the sidebar's, so it is not mapped."
+  - "Chat mode and Code mode have different new-session screens: @chat.prompt vs @code.prompt."
   - "Plugins under Customize is a TabItem (action select), not a Button."
   - "The repository card's label carries its description too, so match it by prefix."
   - "A disabled button (Sync before a URL is chosen) is absent from the tree; expect it to appear instead."
   - "The URL field is a ComboBox: expand it, type, then pick the „Use …” option."
+  - "Add marketplace accepts only github.com, gitlab.com, bitbucket.org, or a GitHub Enterprise / GitLab instance configured by the organization; any other host shows \"This host isn’t supported…\" and no Sync button (a placeholder host was accepted earlier on 2026-10-23 and rejected at 22:08; the cause was not measured)."
+  - "Updating a plugin from a git marketplace is three steps: Manage marketplaces > Check for updates; Yours > the plugin's card > @plugins.update; then @plugins.update_anyway, because Desktop counts its own .in_use marker in the plugin cache as a local change."
+  - "A plugin's version shows on its own page as a separate Text (\"0.1.0\"): `look --text --grep '^Text \"\\d+\\.\\d'`."
+  - "Removing a marketplace asks to confirm with a Button \"Remove\" in a \"Remove marketplace?\" dialog, and uninstalls its plugins."
   - "Typing into the Electron window needs delivery_mode foreground; clicks by element work in the background."
+  - "Do not press Dictate, Use voice mode or \"Press and hold to record\" in a tape: they open the microphone."

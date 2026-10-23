@@ -15,7 +15,7 @@ steps:
   - click: "@sidebar.customize"
   - expect: { label: "Plugins", role: TabItem }
   - caption: "Add a plugin marketplace"
-  - type: "https://git.example.invalid/example/plugins.git"
+  - type: "https://github.com/example/plugins.git"
 ```
 
 ### Steps

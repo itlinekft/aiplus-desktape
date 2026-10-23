@@ -1,0 +1,49 @@
+# Claude Desktop (Windows, Store build): a read-only tour of the main screens through the map.
+# Changes nothing and sends nothing; doubles as the map's regression test.
+name: claude-desktop-tour
+app: Claude Desktop 3.6556 (Windows)
+map: claude-desktop-win
+video_pause: 1.0
+steps:
+  - focus: "@window"
+  - click: "@mode.chat"
+  - click: "@sidebar.new"
+  - expect: "@chat.prompt"
+  - caption: "Claude Desktop, mapped for desktape: every main screen by role and label"
+  - click: "@model.picker"
+  - expect: "@model.opus"
+  - caption: "The model picker"
+  - key: Escape
+  - click: "@chat.add"
+  - expect: "@chat.add.upload"
+  - caption: "Files, connectors, skills and plugins"
+  - key: Escape
+  - click: "@sidebar.search"
+  - expect: "@search.tab.sessions"
+  - caption: "Search across sessions, artifacts and projects"
+  - click: "@search.close"
+  - click: "@sidebar.projects"
+  - expect: "@projects.tab.yours"
+  - caption: "Projects"
+  - click: "@sidebar.artifacts"
+  - expect: "@artifacts.tab.shared"
+  - caption: "Artifacts"
+  - click: "@sidebar.scheduled"
+  - expect: "@scheduled.templates_tab"
+  - caption: "Scheduled tasks"
+  - click: "@sidebar.customize"
+  - click: "@customize.skills_tab"
+  - expect: "@skills.add_skill"
+  - caption: "Customize: skills, connectors and plugins"
+  - click: "@customize.connectors_tab"
+  - expect: "@connectors.add_connector"
+  - click: "@customize.plugins_tab"
+  - expect: "@plugins.add_plugin"
+  - click: "@mode.code"
+  - click: "@sidebar.new"
+  - expect: "@code.prompt"
+  - expect: "@code.terminal"
+  - caption: "Code mode: terminal, browser, environment and permissions"
+  - click: "@mode.chat"
+  - click: "@sidebar.new"
+  - expect: "@chat.prompt"

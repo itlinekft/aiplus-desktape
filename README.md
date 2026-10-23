@@ -66,7 +66,8 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
 
 - `desktape.py` — the runner and the CLI: `run`, `look`, `act`, `--selftest`.
 - `maps/` — app maps: named selectors and app facts per app version.
-- `tapes/` — flows.
+- `tapes/` — flows: the marketplace-dialog sample, and `claude-desktop-tour.yaml`, a read-only tour of
+  Claude Desktop's main screens that doubles as the map's regression test.
 - `windows/` — scripts desktape copies to the target (the OCR, run as a one-off interactive task).
 - `docs/` — setup, the tape format, and measured results.
 - `openspec/` — requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).

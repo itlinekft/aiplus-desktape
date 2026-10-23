@@ -22,7 +22,7 @@ steps:
   - expect: "@marketplace.url"
   - caption: "The URL of the marketplace repository goes here"
   - click: "@marketplace.url"
-  - type: "https://git.example.invalid/example/plugins.git"
+  - type: "https://github.com/example/plugins.git"
   - expect: "@marketplace.use_url"
   - click: "@marketplace.use_url"
   - expect: "@marketplace.sync"

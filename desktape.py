@@ -134,7 +134,8 @@ def matches(node, sel):
 
 def apply_ignore(lines, ignore):
     """Drop a map's ignore regions (design D4 of look-refinements): `subtree` hides an element and the
-    lines indented under it; `from`/`until` hides a range up to, not including, the `until` line.
+    lines indented under it; `from`/`until` hides a range up to, not including, the `until` line, and
+    `from` alone hides to the end of the block it sits in (until the indentation falls below its own).
     Returns (kept lines, number of labelled lines hidden)."""
     if not ignore:
         return lines, 0
@@ -149,8 +150,11 @@ def apply_ignore(lines, ignore):
         if "subtree" in rule:
             while j < len(lines) and (parse(lines[j]) or (n[0] + 1,))[0] > n[0]:
                 j += 1
-        else:
-            while j < len(lines) and not ((p := parse(lines[j])) and matches(p, rule.get("until", {}))):
+        elif "until" in rule:
+            while j < len(lines) and not ((p := parse(lines[j])) and matches(p, rule["until"])):
+                j += 1
+        else:   # no `until`: to the end of the block the `from` line sits in
+            while j < len(lines) and (parse(lines[j]) or (n[0],))[0] >= n[0]:
                 j += 1
         hidden += sum(1 for l in lines[i:j] if (p := parse(l)) and p[2])
         i = j
@@ -568,6 +572,11 @@ def selftest():
                                   AssertionError("no"), t2, ign), encoding="utf-8").read()
         assert 'Dialog "Update will overwrite local changes"' in body and "modified locally" in body, body
         assert "my chat" not in body and "5 hidden" in body, body
+    t4 = ('- Window "App"\n  - Group "Main"\n    - Text "Recent artifacts"\n      - [1] Button "Recent artifacts" [actions=[expand]]\n'
+          '    - [2] Hyperlink "View all" [actions=[invoke]]\n      - ListItem "my secret doc"\n'
+          '  - [3] Button "Send" [actions=[invoke]]')
+    k4, h4 = apply_ignore(t4.splitlines(), [{"from": {"role": "Text", "label": "Recent artifacts"}}])
+    assert compact(k4) == ['Button "Send" (invoke)'] and h4 == 4, (compact(k4), h4)
     with tempfile.TemporaryDirectory() as d:
         st = os.path.join(d, "look", "App.txt")
         look_lines(t2, ign, state=st)
@@ -590,8 +599,10 @@ def selftest():
         log = [json.loads(l) for l in open(os.path.join(d, "audit.jsonl"), encoding="utf-8")]
         assert len(log) == 1 and log[0]["args"]["text"] == "<redacted>" and "hunter2" not in json.dumps(log), log
     real = load_map("claude-desktop-win")
-    tape = yaml.safe_load(open(os.path.join(HERE, "tapes", "claude-desktop-add-marketplace-dialog.yaml"), encoding="utf-8"))
-    resolve_all(tape["steps"], load_map(tape.get("map")))
+    for name in sorted(os.listdir(os.path.join(HERE, "tapes"))):   # every bundled tape resolves on its map
+        if name.endswith((".yaml", ".yml")):
+            tape = yaml.safe_load(open(os.path.join(HERE, "tapes", name), encoding="utf-8"))
+            resolve_all(tape["steps"], load_map(tape.get("map")))
     assert real["window"] == "Claude"
     print("selftest ok")
     return 0
