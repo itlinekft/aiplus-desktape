@@ -56,7 +56,8 @@ in video mode the captioned `.mp4` and an `.srt`.
 The sample tape opens Claude Desktop's "Add marketplace" dialog, fills in a URL and cancels; it changes
 nothing. Measured on a Windows 11 target: 25/25 steps in 9.3 s (test) and 38.6 s (video), 0 model calls.
 
-The tape and map format: [`docs/tape-format.md`](docs/tape-format.md).
+A walkthrough from install to a captioned video: [`docs/user-guide.md`](docs/user-guide.md). The tape and
+map format: [`docs/tape-format.md`](docs/tape-format.md).
 
 ## Layout
 
