@@ -36,7 +36,8 @@ class Cua:
         # Telemetry, update check and run_script off for this process too, not only for the daemon.
         env = "set CUA_DRIVER_RS_TELEMETRY_ENABLED=false&& set DO_NOT_TRACK=1&& set CUA_DRIVER_RS_UPDATE_CHECK=false&& set CUA_DRIVER_DISABLE_RUN_SCRIPT=1&& "
         self.p = subprocess.Popen(["ssh", "-o", "BatchMode=yes", host, env + f'"{EXE}" mcp --socket \\\\.\\pipe\\cua-driver'],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+                                  encoding="utf-8", errors="replace")   # the driver speaks UTF-8; Windows' ANSI code page may not be
         self.audit = open(audit_path, "a", encoding="utf-8")
         self.n = 0
         self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -139,7 +140,7 @@ def ocr_lines(host):
     try:
         for _ in range(40):
             r = subprocess.run(["ssh", "-o", "BatchMode=yes", host, f"type %USERPROFILE%\\{remote}\\ocr-done.txt"],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
             if "done" in r.stdout:
                 break
             time.sleep(0.5)
@@ -305,7 +306,7 @@ def cmd_run(a):
     if a.mode == "video":
         # The daemon has no HOME on Windows, so the recording directory must be absolute.
         profile = subprocess.run(["ssh", "-o", "BatchMode=yes", a.host, "echo %USERPROFILE%"], capture_output=True,
-                                 text=True).stdout.strip()
+                                 text=True, encoding="utf-8", errors="replace").stdout.strip()
         rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "\\" + rec_rel.replace("/", "\\")
     t0 = time.time(); failed = None; done = 0; repair = None
@@ -498,6 +499,9 @@ def main():
     a = ap.parse_args(argv)
     if not a.host:
         ap.error("no host: set DESKTAPE_HOST=user@host or pass --host")
+    for stream in (sys.stdout, sys.stderr):
+        if (stream.encoding or "").lower().replace("-", "") != "utf8":
+            stream.reconfigure(encoding="utf-8", errors="replace")   # labels are UTF-8, whatever the console's code page
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act}[a.cmd](a)

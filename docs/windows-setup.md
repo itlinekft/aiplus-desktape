@@ -63,6 +63,23 @@ which needs a full build (for `drawtext`). The reference target used `winget ins
 Windows stops rendering a session whose RDP window is minimised or disconnected. Until the headless session
 keeper lands (`openspec/changes/headless-session`), keep an RDP client connected and visible during a run.
 
+## 6. Running desktape on Windows (Windows as the controller)
+
+desktape also runs on Windows: measured on 2026-10-23 on the reference target driving itself
+(`DESKTAPE_HOST=user@localhost`), Python 3.14 in a venv: the sample tape passed 25/25 in 9.1 s with
+0 model calls, about the same as from Linux. What it needs:
+
+- Python 3.9+ and `pip install -r requirements.txt`; the built-in OpenSSH client (`ssh`, `scp`).
+- Key login to the target, also when the target is the same machine (`user@localhost`, with the key in
+  `authorized_keys` and the host key in `known_hosts`, because desktape uses `BatchMode=yes`).
+- **Run it from the desktop session** (a terminal on the desktop, or a `/it` scheduled task), **not from
+  inside an SSH session**: there, an `ssh.exe` started by Python got no output at all, even for
+  `ssh … echo hi`, while the same calls worked in the desktop session.
+- Labels are UTF-8 and desktape decodes them as UTF-8 whatever the system's ANSI code page is (the
+  reference machine reports cp936). A shell that captures desktape's output may still show them garbled.
+- A Python installed by `uv` sits behind a junction; call it by its real directory when you are in an SSH
+  session (pitfall 1 below).
+
 ## Pitfalls
 
 All seven met during the spike, with their fixes, are in

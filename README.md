@@ -30,7 +30,8 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 
 ## Requirements
 
-- **Linux side:** Python 3.9+, PyYAML (`pip install -r requirements.txt`), OpenSSH with key login to the target.
+- **Controller (where desktape runs):** Linux, or Windows from the user's desktop session; Python 3.9+,
+  PyYAML (`pip install -r requirements.txt`), and an OpenSSH client with key login to the target.
 - **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
   session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
 - An RDP client must stay connected and visible on the target during a run, because Windows stops
@@ -72,7 +73,11 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
 ## Roadmap
 
 - Headless session keeper: FreeRDP on Xvfb, so a run needs no person's RDP window.
+- desktape as a local MCP server, so Claude Desktop and Cowork can call `look`, `act` and `run`.
 - macOS targets through Cua's AX backend.
+
+How desktape relates to VHS, Playwright, Cua Driver, OpenAdapt, Terminator and others:
+[`docs/related-work.md`](docs/related-work.md).
 
 ## Contributing
 
