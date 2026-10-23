@@ -75,14 +75,48 @@ class Target:
             subprocess.run(["scp", "-q", f"{self.host}:{rel}", local_path], check=True)
 
 
+NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
+FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
+
+
+def start_daemon(host):
+    """Start the driver daemon in the target's desktop session (driver-autostart), with the same one-off
+    `/it` task the OCR uses; the task is deleted once the daemon runs."""
+    t = Target(host)
+    t.sh("if not exist %USERPROFILE%\\desktape mkdir %USERPROFILE%\\desktape")
+    t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
+    tr = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\desktape\\cua-serve.ps1"
+    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-cua >nul',
+         check=True)
+    time.sleep(4)
+    t.sh("schtasks /delete /tn desktape-cua /f >nul")
+
+
 class Cua:
-    """One MCP session to cua-driver: `ssh … cua-driver mcp --socket`, or the driver itself when local."""
+    """One MCP session to cua-driver: `ssh … cua-driver mcp --socket`, or the driver itself when local.
+    A target with no daemon gets one started, once (driver-autostart)."""
 
     def __init__(self, host, audit_path):
-        argv, env = Target(host).mcp()
-        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
-                                  env=env, encoding="utf-8", errors="replace")   # the driver speaks UTF-8; Windows' ANSI code page may not be
         self.audit = open(audit_path, "a", encoding="utf-8")
+        try:
+            self._connect(host)
+        except RuntimeError as e:
+            if NO_DAEMON not in str(e):
+                raise
+            logger.warning("no driver daemon on %s (after a logout or reboot?); starting it in the desktop session",
+                           host)
+            start_daemon(host)
+            try:
+                self._connect(host)
+            except RuntimeError as e2:
+                raise RuntimeError(f"{e2}; start the daemon by hand: docs/windows-setup.md section 3") from e2
+            logger.info("driver daemon started on %s", host)
+
+    def _connect(self, host):
+        argv, env = Target(host).mcp()
+        self.err = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
+        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, text=True,
+                                  bufsize=1, env=env, encoding="utf-8", errors="replace")   # the driver speaks UTF-8; Windows' ANSI code page may not be
         self.n = 0
         self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                  "clientInfo": {"name": "desktape", "version": "0.1"}})
@@ -99,7 +133,12 @@ class Cua:
                 m = json.loads(line)
                 if m.get("id") == self.n:
                     return m
-        raise RuntimeError("cua-driver connection closed")
+        try:
+            self.p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning("cua-driver closed its output but is still running (pid %s)", self.p.pid)
+        self.err.seek(0)
+        raise RuntimeError(f"cua-driver connection closed: {self.err.read().strip()[:300]}")
 
     def call(self, tool, args, secret=False):
         if tool not in ALLOWED:
@@ -119,7 +158,7 @@ class Cua:
         return res.get("structuredContent") or {}, text
 
     def close(self):
-        self.p.stdin.close(); self.p.terminate(); self.audit.close()
+        self.p.stdin.close(); self.p.terminate(); self.audit.close(); self.err.close()
 
 
 # ---- the app map (design D3) -------------------------------------------------------------------
@@ -341,7 +380,14 @@ class Runner:
         if not w:
             raise RuntimeError(f"no window titled {title!r}")
         self.win = {"pid": w["pid"], "window_id": w["window_id"]}
-        self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
+        try:
+            self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
+        except RuntimeError as e:
+            if FOREGROUND_REFUSED not in str(e):
+                raise
+            # driver-autostart: UI Automation still reaches the window; a step that needs the focus fails itself
+            logger.warning("window %r (pid %s) is raised but Windows kept the foreground elsewhere; continuing",
+                           title, w["pid"])
         if w.get("minimized"):
             # runner-robustness D1: bring_to_front restores it at its previous frame
             logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
@@ -677,6 +723,36 @@ def selftest():
             '  - [11] Text "A long description" [actions=[text]]')
     assert compact(tree) == ['Button "Kis méret" (invoke)', 'TabItem "Plugins" (select)'], compact(tree)
     assert srt([(0.0, "a"), (2.5, "b")], 4.0).splitlines()[1] == "00:00:00,000 --> 00:00:02,500"
+    # driver-autostart: a target with no daemon gets one started, once, then the session connects.
+    fake_server = ("import sys, json\n"
+                   "for l in sys.stdin:\n"
+                   "    m = json.loads(l)\n"
+                   "    if 'id' in m: print(json.dumps({'jsonrpc': '2.0', 'id': m['id'], 'result': {}}), flush=True)\n")
+    no_daemon = f"import sys; sys.stderr.write('cua-driver-rs: {NO_DAEMON} on pipe'); sys.exit(1)"
+    started, real, level = [], (Target.mcp, globals()["start_daemon"]), logger.level
+    logger.setLevel(logging.ERROR)      # the warnings below are expected
+    Target.mcp = lambda self: ([sys.executable, "-c", fake_server if started else no_daemon], None)
+    globals()["start_daemon"] = lambda host: started.append(host)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            c = Cua("user@box", os.path.join(d, "a.jsonl")); c.close()
+            assert started == ["user@box"], started
+            started.clear(); Target.mcp = lambda self: ([sys.executable, "-c", no_daemon], None)
+            try:
+                Cua("user@box", os.path.join(d, "b.jsonl")); raise AssertionError("expected RuntimeError")
+            except RuntimeError as e:
+                assert "windows-setup.md" in str(e) and NO_DAEMON in str(e) and started == ["user@box"], e
+    finally:
+        Target.mcp, globals()["start_daemon"] = real
+
+    class Refusing:                     # driver-autostart: a refused foreground is a warning, not a stop
+        def call(self, tool, args, secret=False):
+            if tool == "list_windows":
+                return {"windows": [{"title": "W", "pid": 1, "window_id": 2}]}, ""
+            raise RuntimeError(f"bring_to_front failed: … Windows kept foreground on hwnd 0x1; {FOREGROUND_REFUSED}.")
+    r = Runner(Refusing(), "test"); r.focus("W")
+    assert r.win == {"pid": 1, "window_id": 2}, r.win
+    logger.setLevel(level)
     # video-redaction: an empty caption ends the one before; rectangles; spans with margins; boxes first.
     assert [l for l in srt([(0.0, "A"), (2.0, ""), (5.0, "B")], 6.0).splitlines() if "-->" in l] == \
         ["00:00:00,000 --> 00:00:02,000", "00:00:05,000 --> 00:00:06,000"]

@@ -40,11 +40,15 @@ constant); a different version needs that constant changed.
 
 ## 3. The driver daemon in the interactive session
 
-The driver must run in the session that owns the desktop. Copy
-[`spike/windows-setup/cua-serve.ps1`](../spike/windows-setup/cua-serve.ps1) to `%USERPROFILE%\desktape\`
-and start it with the same one-off `/it` task pattern as above. It logs to
-`%USERPROFILE%\desktape\cua-serve.log`. After a reboot, start it again the same way (no auto-start task is
-installed).
+The driver must run in the session that owns the desktop, and it does not survive a logout or a reboot.
+**desktape starts it on demand:** when the driver reports that no daemon is listening, desktape copies
+[`windows/cua-serve.ps1`](../windows/cua-serve.ps1) to `%USERPROFILE%\desktape\`, starts it with the same
+one-off `/it` task pattern as above, logs a warning and reconnects once (measured 2026-10-24: a `look` after
+the daemon was stopped took 7 s and passed). It logs to `%USERPROFILE%\desktape\cua-serve.log`. No
+start-at-logon task is installed.
+
+If the automatic start fails, desktape stops and points here: copy the script and start it by hand with
+the `/it` task pattern above.
 
 Check it from Linux:
 
