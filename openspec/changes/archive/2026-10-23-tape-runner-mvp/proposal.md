@@ -24,11 +24,14 @@ run, a default-deny tool list and an audit log (gap analysis, same day).
 - **Runner:** an MCP client to Cua Driver over SSH; waits by polling the tree; allowlist of tools; JSONL audit
   log with secrets redacted; summary with steps, time, snapshots, model calls.
 - **Video:** Cua recording, captions burned by an ffmpeg that has `drawtext`, plus an `.srt`.
-- **Fallback rung (new):** on a failed `expect`, hand a model the compact tree or OCR (never the full tree),
-  vision only on a cropped region; its successful fix is proposed as a tape/map patch, never applied silently.
+- **Fallback rung (new):** on a failed step the runner writes a repair bundle (the step, the compact tree,
+  OCR on request; never the full tree) for the agent that drives it; the fix lands as a tape or map patch in
+  git, never applied silently (design D1: the runner itself calls no model).
 - **App map v0 (new):** per app and version, named screens and stable selectors that tapes reference.
-- **Session keeper (to measure):** hold the RDP session from Linux (FreeRDP + Xvfb) so a run does not depend
-  on a person's open window.
+- **Ad hoc path (new):** `look` and `act`, so a tape is authored one passing step at a time.
+
+The session keeper (hold the RDP session from Linux so a run does not depend on a person's open window) is
+its own change, `headless-session`.
 
 ## Rules
 

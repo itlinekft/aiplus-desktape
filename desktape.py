@@ -412,8 +412,8 @@ def cmd_act(a):
         if r.win is not None:
             try:
                 r.snapshot()
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.warning("no snapshot for the repair bundle: %s", e2)
         p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", 0, step, s, entry, e, r.tree)
         print(f"FAILED: {e}\nrepair bundle: {p}")
         return 1
@@ -459,6 +459,19 @@ def selftest():
                           {"expect": {"label": "Add"}}, "a.b", AssertionError("did not appear"), tree)
         body = open(p, encoding="utf-8").read()
         assert "step 3" in body and "`a.b`" in body and 'TabItem "Plugins"' in body and "Kis méret" in body
+    # The allowlist and the audit log, with a stand-in for the MCP session (no ssh).
+    with tempfile.TemporaryDirectory() as d:
+        cua = Cua.__new__(Cua)
+        cua.audit = open(os.path.join(d, "audit.jsonl"), "a", encoding="utf-8")
+        cua._rpc = lambda method, params: {"result": {"content": [{"type": "text", "text": "ok"}]}}
+        cua.call("type_text", {"text": "hunter2"}, secret=True)
+        try:
+            cua.call("run_script", {}); raise AssertionError("expected PermissionError")
+        except PermissionError:
+            pass
+        cua.audit.close()
+        log = [json.loads(l) for l in open(os.path.join(d, "audit.jsonl"), encoding="utf-8")]
+        assert len(log) == 1 and log[0]["args"]["text"] == "<redacted>" and "hunter2" not in json.dumps(log), log
     real = load_map("claude-desktop-win")
     tape = yaml.safe_load(open(os.path.join(HERE, "tapes", "claude-desktop-add-marketplace-dialog.yaml"), encoding="utf-8"))
     resolve_all(tape["steps"], load_map(tape.get("map")))

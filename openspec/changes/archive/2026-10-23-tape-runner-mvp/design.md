@@ -20,7 +20,8 @@ Goals: the agent that drives desktape (a Claude Code session) can look at the sc
 time, and turn what worked into a tape; a tape reuses app facts by name; a failed run leaves exactly what is
 needed to repair it.
 
-Non-goals: a model inside the runner; a GUI recorder; Linux targets; publishing.
+Non-goals: a model inside the runner; a GUI recorder; Linux targets; the session keeper (change
+`headless-session`).
 
 ## Decisions
 
@@ -72,8 +73,8 @@ and no legacy variable, since nothing was released under the spike name.
   the agent's last resort, outside the runner.
 - [A map goes stale on an app update] → the map records the version; a failed run's bundle names the map
   entry it used, so the fix lands in the map, not in every tape.
-- [The session keeper (FreeRDP + Xvfb) takes over the user's RDP session] → measured only after warning the
-  owner, since a second RDP login as the same user disconnects his open window.
+- [A run depends on a person's open RDP window (spike pitfall 7)] → the change `headless-session` measures a
+  headless client; until then the window stays open during a run.
 
 ## Migration Plan
 
@@ -81,5 +82,4 @@ Rename in place; the spike tape is rewritten to use the map and must still pass 
 
 ## Open Questions
 
-- Session keeper: FreeRDP's `/size` and whether recording works with no client attached (measure).
-- macOS through Cua's AX backend on the Mac mini (after Windows is stable).
+- macOS through Cua's AX backend (after Windows is stable): a later change.

@@ -1,5 +1,14 @@
 schema: spec-driven
 
+context: |
+  desktape is a public MIT repository: artifacts are written in English, and none may carry a host name,
+  an IP address, a user name, a key, a client or internal project name (the host comes only from --host or
+  DESKTAPE_HOST).
+  The runner never calls a model; the agent that drives desktape authors and repairs tapes (design D1 of
+  the archived tape-runner-mvp change).
+  Make deterministic only what repeats; reuse drivers, capture and rendering instead of rebuilding them.
+  A claim about the Windows host is measured on it, and the artifact says when and how.
+
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.
