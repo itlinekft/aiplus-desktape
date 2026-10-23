@@ -1,0 +1,23 @@
+# Claude Desktop on Windows: named selectors for tapes (`click: "@plugins.add_plugin"`).
+# Learned while authoring the spike tape (docs/spike-2026-10-23.md §4). Add an entry when a tape that
+# repeats needs it; keep one-off selectors inline in the tape.
+app: Claude Desktop
+version: "3.6556.2.0 (Microsoft Store build)"
+window: Claude
+elements:
+  sidebar.customize:          { label: "Customize", role: Button }
+  customize.plugins_tab:      { label: "Plugins", role: TabItem, action: select }
+  plugins.add_plugin:         { label: "Add plugin", role: Button, action: expand }
+  plugins.add_marketplace:    { label: "Add marketplace", role: MenuItem }
+  marketplace.from_repository: { label: "Add from a repository", role: Button, prefix: true }
+  marketplace.url:            { label: "URL", role: ComboBox, prefix: true, action: expand }
+  marketplace.use_url:        { label: "Use", prefix: true }
+  marketplace.sync:           { label: "Sync", role: Button }
+  marketplace.cancel:         { label: "Cancel", role: Button }
+notes:
+  - "Settings: Ctrl+, does not open them; the sidebar's Customize does."
+  - "Plugins under Customize is a TabItem (action select), not a Button."
+  - "The repository card's label carries its description too, so match it by prefix."
+  - "A disabled button (Sync before a URL is chosen) is absent from the tree; expect it to appear instead."
+  - "The URL field is a ComboBox: expand it, type, then pick the „Use …” option."
+  - "Typing into the Electron window needs delivery_mode foreground; clicks by element work in the background."

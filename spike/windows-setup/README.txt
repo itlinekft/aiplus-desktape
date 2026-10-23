@@ -1,0 +1,1 @@
+Cua installer used: https://cua.ai/driver/install.ps1, sha256 d9d4d29aa10c76dcc1bb3595cd9003d2fbf554f99c09ce3dd6147dfaa869da9b (read before running), pinned CUA_DRIVER_RS_VERSION=0.34.1, -NoAutoStart -NoPathUpdate.

@@ -1,0 +1,33 @@
+# Claude Desktop (Windows, Store build): open the "Add marketplace" dialog from Settings → Plugins,
+# fill the repository URL, then cancel. Changes nothing. Opens Customize → Plugins itself.
+# Selectors come from maps/claude-desktop-win.yaml (`@name`).
+name: add-marketplace-dialog
+app: Claude Desktop 3.6556 (Windows)
+map: claude-desktop-win
+video_pause: 1.2
+steps:
+  - focus: "@window"
+  - click: "@sidebar.customize"
+  - expect: "@customize.plugins_tab"
+  - click: "@customize.plugins_tab"
+  - caption: "Add a plugin marketplace to Claude Desktop"
+  - expect: "@plugins.add_plugin"
+  - click: "@plugins.add_plugin"
+  - expect: "@plugins.add_marketplace"
+  - caption: "Add plugin → Add marketplace"
+  - click: "@plugins.add_marketplace"
+  - expect: "@marketplace.from_repository"
+  - caption: "Add from a repository: a GitHub repo or any git URL"
+  - click: "@marketplace.from_repository"
+  - expect: "@marketplace.url"
+  - caption: "The URL of the marketplace repository goes here"
+  - click: "@marketplace.url"
+  - type: "https://git.example.invalid/example/plugins.git"
+  - expect: "@marketplace.use_url"
+  - click: "@marketplace.use_url"
+  - expect: "@marketplace.sync"
+  - pause: 1.5
+  - caption: "With a stored git credential, no password prompt appears"
+  - pause: 2
+  - click: "@marketplace.cancel"
+  - expect: "@plugins.add_plugin"

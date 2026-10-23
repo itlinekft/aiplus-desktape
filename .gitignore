@@ -1,0 +1,7 @@
+# Measurement output, screenshots and recordings stay local.
+runs/
+*.png
+*.mp4
+*.key
+secrets/
+__pycache__/
