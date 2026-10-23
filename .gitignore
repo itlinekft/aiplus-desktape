@@ -5,3 +5,16 @@ runs/
 *.key
 secrets/
 __pycache__/
+.env
+
+# Per-machine agent tooling (set-core); not part of desktape.
+.set/
+set/
+.claude/rules/set-*.md
+.claude/commands/set/
+.claude/skills/set/
+.claude/agents/
+.claude/settings.json
+.claude/settings.local.json
+.claude/.set-version
+CLAUDE.local.md

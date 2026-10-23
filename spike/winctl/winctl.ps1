@@ -1,8 +1,8 @@
-# Runs inside the interactive session (scheduled task /IT). Reads meres\vez-cmd.json, writes
-# meres\vez-out.txt and, for screenshots, meres\vez-shot.png. One action per run.
+# Runs inside the interactive session (scheduled task /IT). Reads desktape\winctl-cmd.json, writes
+# desktape\winctl-out.txt and, for screenshots, desktape\winctl-shot.png. One action per run.
 $ErrorActionPreference = 'Stop'
-$d = Join-Path $env:USERPROFILE 'meres'
-$out = Join-Path $d 'vez-out.txt'
+$d = Join-Path $env:USERPROFILE 'desktape'
+$out = Join-Path $d 'winctl-out.txt'
 try {
   Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient, UIAutomationTypes
   Add-Type @'
@@ -15,7 +15,7 @@ public static class W {
 }
 '@
   [W]::SetProcessDPIAware() | Out-Null
-  $c = Get-Content (Join-Path $d 'vez-cmd.json') -Raw | ConvertFrom-Json
+  $c = Get-Content (Join-Path $d 'winctl-cmd.json') -Raw | ConvertFrom-Json
   $r = @()
   switch ($c.a) {
     'shot' {
@@ -23,7 +23,7 @@ public static class W {
       $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
       $g = [System.Drawing.Graphics]::FromImage($bmp)
       $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
-      $bmp.Save((Join-Path $d 'vez-shot.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+      $bmp.Save((Join-Path $d 'winctl-shot.png'), [System.Drawing.Imaging.ImageFormat]::Png)
       $r += "shot $($b.Width)x$($b.Height) at $($b.Left),$($b.Top)"
     }
     'click' {

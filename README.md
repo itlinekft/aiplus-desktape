@@ -1,52 +1,83 @@
 # desktape
 
-Like VHS, but for desktop GUIs.
+Like VHS, but for desktop GUIs: record a desktop flow once with your agent, then replay it with zero model
+tokens, as a test or as a captioned video.
 
-Drive a remote desktop (Windows first, macOS next) from an AI agent, cheaply and repeatably, and turn
-the same scripted run into both a test and a demo video.
+desktape drives a remote desktop (Windows today, macOS next) from a Linux machine. An AI agent looks at the
+screen cheaply, acts one step at a time, and keeps the steps that worked as a YAML **tape**. The same tape
+then runs as a fast test or as a slow, captioned screen recording, without calling a model.
 
 Status: **early**. The tape format and the commands may still change.
 
-## Idea in one screen
+## How it works
 
-- **Driver:** reuse [Cua Driver](https://github.com/trycua/cua) (MIT): UI Automation on Windows, AX on
-  macOS, MCP over stdio, reached over SSH with no inbound port.
-- **Perception ladder, cheapest first:** accessibility tree (text) → screen-changed check (no image) →
-  local OCR (Windows has one built in) → vision on a cropped region only when still ambiguous.
-- **Knowledge:** commands and shortcuts before clicking; per-app maps (screens, stable selectors,
-  transitions) learned once and reused; a failed assertion falls back to the model for that step only,
-  and the fix is written back.
-- **Tape:** a YAML flow of intents (`click "Add plugin"`, `expect`, `caption`, `zoom`). One file, two
-  modes: test (fast) and video (slow cursor, pauses, captions).
-- **Safety:** default-deny tool list, audit log of every action, telemetry off, secrets never in a tape.
+- **Driver:** [Cua Driver](https://github.com/trycua/cua) (MIT) runs on the target and exposes UI
+  Automation over MCP. desktape reaches it with `ssh … cua-driver mcp`, so the target needs no inbound port
+  beyond SSH.
+- **Perception, cheapest first:** a compact list of labelled actionable elements (≈700 tokens a screen),
+  then the target's built-in OCR (≈420), and only then an image. The full accessibility tree costs more
+  than a screenshot, so it is never the default. Numbers: [`docs/spike-2026-10-23.md`](docs/spike-2026-10-23.md).
+- **Tapes and maps:** a tape addresses elements by role and label, waits for them and checks them. Facts
+  about an app (a label that carries a description, a tab that is a `TabItem`) go into a per-app **map**,
+  so a tape can say `click: "@plugins.add_plugin"`.
+- **No model in the runner:** a failed step writes a repair bundle, `runs/<stamp>/repair.md`, with the
+  step, the map entry and the window's compact element list. The agent driving desktape fixes the map or
+  the tape from it.
+- **Safety:** a default-deny tool allowlist, an audit log of every call with secrets redacted, and the
+  driver's telemetry, update check and script runner switched off.
 
 Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with the model.
+
+## Requirements
+
+- **Linux side:** Python 3.9+, PyYAML (`pip install -r requirements.txt`), OpenSSH with key login to the target.
+- **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
+  session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
+- An RDP client must stay connected and visible on the target during a run, because Windows stops
+  rendering a minimised or disconnected session. Holding the session headless from Linux is the next change
+  (`openspec/changes/headless-session`).
 
 ## Use
 
 ```bash
-python3 desktape.py look [--map claude-desktop-win] [--ocr] [--full]   # what the window shows, cheapest first
-python3 desktape.py act 'click: "@plugins.add_plugin"' --append tapes/x.yaml   # one step; appended only if it passed
-python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml [--mode video]
-python3 desktape.py --selftest                                          # offline, no host
+export DESKTAPE_HOST=user@windows-host                     # or pass --host; there is no default
+python3 desktape.py --selftest                             # offline checks, no host needed
+python3 desktape.py look --map claude-desktop-win          # the window's labelled actionable elements
+python3 desktape.py look --map claude-desktop-win --ocr    # … plus OCR lines with x,y
+python3 desktape.py act 'click: "@plugins.add_plugin"' --append tapes/my-flow.yaml   # one step, kept if it passed
+python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml             # test mode
+python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml --mode video
 ```
 
-Authoring a tape: `look`, then `act` step by step with `--append`. A failed `run` or `act` writes
-`runs/<stamp>/repair.md` (the step, the map entry, the window's compact element list); the agent driving
-desktape fixes the map or the tape from it. The runner itself never calls a model. Host: `--host`, else
-`DESKTAPE_HOST` (`user@host` of the Windows machine; there is no default).
+Authoring a tape: `look`, then `act` one step at a time with `--append`; a step is appended only if it
+passed. Every command writes a run folder under `runs/` with `audit.jsonl`; `run` adds `summary.json`, and
+in video mode the captioned `.mp4` and an `.srt`.
+
+The sample tape opens Claude Desktop's "Add marketplace" dialog, fills in a URL and cancels; it changes
+nothing. Measured on a Windows 11 target: 25/25 steps in 9.3 s (test) and 38.6 s (video), 0 model calls.
+
+The tape and map format: [`docs/tape-format.md`](docs/tape-format.md).
 
 ## Layout
 
-- `desktape.py` — the runner: `run`, `look`, `act`.
-- `maps/` — app maps: named selectors and app facts per app version (`@name` in a tape).
-- `windows/` — scripts run on the Windows host (the OCR, as a one-off interactive task).
-- `client/` — the spike's raw MCP client for Cua Driver over SSH.
-- `spike/` — the first measurements (tokens per step, built-in OCR, one tape, video).
+- `desktape.py` — the runner and the CLI: `run`, `look`, `act`, `--selftest`.
+- `maps/` — app maps: named selectors and app facts per app version.
 - `tapes/` — flows.
-- `docs/` — design notes and measured results.
+- `windows/` — scripts desktape copies to the target (the OCR, run as a one-off interactive task).
+- `docs/` — setup, the tape format, and measured results.
+- `openspec/` — requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).
+- `client/`, `spike/` — the first measurements; kept for reference, not used by the runner.
+
+## Roadmap
+
+- Headless session keeper: FreeRDP on Xvfb, so a run needs no person's RDP window.
+- macOS targets through Cua's AX backend.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
 MIT, see `LICENSE`. desktape drives [Cua Driver](https://github.com/trycua/cua) (MIT), which is installed
-separately on the target machine and is not part of this repository.
+separately on the target and is not part of this repository.

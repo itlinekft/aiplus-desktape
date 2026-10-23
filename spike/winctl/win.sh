@@ -17,12 +17,12 @@ case $a in
   uia) j=$(jq -nc --arg f "${1:-}" '{a:"uia",f:$f}') ;;
   *) echo "unknown: $a" >&2; exit 2 ;;
 esac
-printf '%s' "$j" | "${SSH[@]}" $H 'powershell -NoProfile -Command "$input | Set-Content -Encoding ascii $env:USERPROFILE\meres\vez-cmd.json; Remove-Item $env:USERPROFILE\meres\vez-out.txt -ErrorAction SilentlyContinue; exit 0"'
-"${SSH[@]}" $H 'schtasks /run /tn meres-vez >nul'
+printf '%s' "$j" | "${SSH[@]}" $H 'powershell -NoProfile -Command "$input | Set-Content -Encoding ascii $env:USERPROFILE\desktape\winctl-cmd.json; Remove-Item $env:USERPROFILE\desktape\winctl-out.txt -ErrorAction SilentlyContinue; exit 0"'
+"${SSH[@]}" $H 'schtasks /run /tn desktape-winctl >nul'
 for i in $(seq 1 40); do
   sleep 0.5
-  o=$("${SSH[@]}" $H 'type %USERPROFILE%\meres\vez-out.txt 2>nul' 2>/dev/null | tr -d '\r' || true)
+  o=$("${SSH[@]}" $H 'type %USERPROFILE%\desktape\winctl-out.txt 2>nul' 2>/dev/null | tr -d '\r' || true)
   grep -q '^done$' <<<"$o" && break
 done
 grep -v '^done$' <<<"$o" | sed 's/^\xEF\xBB\xBF//'
-if [ "$a" = shot ]; then scp -q $H:meres/vez-shot.png "$HERE/shot.png" && echo "saved $HERE/shot.png"; fi
+if [ "$a" = shot ]; then scp -q $H:desktape/winctl-shot.png "$HERE/shot.png" && echo "saved $HERE/shot.png"; fi

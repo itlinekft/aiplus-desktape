@@ -1,5 +1,5 @@
-$d = Join-Path $env:USERPROFILE 'meres'
-$f = Join-Path $d 'cua-telepit.log'
+$d = Join-Path $env:USERPROFILE 'desktape'
+$f = Join-Path $d 'cua-setup.log'
 $env:CUA_DRIVER_RS_VERSION = '0.34.1'
 $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = 'false'
 $env:DO_NOT_TRACK = '1'

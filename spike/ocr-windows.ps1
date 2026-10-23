@@ -1,7 +1,7 @@
 # Spike: Windows' built-in OCR (Windows.Media.Ocr) on a full-screen capture, in the interactive
-# session. No install. Writes meres\ocr-out.json: languages, timings, lines with boxes.
+# session. No install. Writes desktape\ocr-out.json: languages, timings, lines with boxes.
 $ErrorActionPreference = 'Stop'
-$d = Join-Path $env:USERPROFILE 'meres'
+$d = Join-Path $env:USERPROFILE 'desktape'
 $out = Join-Path $d 'ocr-out.json'
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime, System.Drawing, System.Windows.Forms

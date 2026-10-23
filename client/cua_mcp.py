@@ -29,7 +29,7 @@ def recv(want_id):
     raise SystemExit("connection closed")
 
 send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-      "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "meres", "version": "0"}}})
+      "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "desktape-spike", "version": "0"}}})
 recv(1)
 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 if tool == "--list":
