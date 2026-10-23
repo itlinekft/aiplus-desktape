@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>desktape: tapes for desktop GUIs</title>
+<meta name="description" content="Record a desktop flow once with your agent, then replay it with zero model tokens, as a test or as a captioned video.">
+<meta property="og:title" content="desktape">
+<meta property="og:description" content="Like VHS, but for desktop GUIs: record a flow once with your agent, replay it with zero model tokens.">
+<meta property="og:image" content="demo-poster.jpg">
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1d1c1a; --muted: #5f5b54; --line: #e4e0d8; --card: #ffffff;
+    --accent: #b4532a; --code-bg: #f2efe8; --code-fg: #2a2824;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161513; --fg: #ecebe6; --muted: #a7a39b; --line: #2d2b27; --card: #1e1d1a;
+      --accent: #e3825a; --code-bg: #22211e; --code-fg: #e6e3dc;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161513; --fg: #ecebe6; --muted: #a7a39b; --line: #2d2b27; --card: #1e1d1a;
+    --accent: #e3825a; --code-bg: #22211e; --code-fg: #e6e3dc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+  .mark { font: 600 20px/1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: var(--fg); text-decoration: none; }
+  .mark span { color: var(--accent); }
+  nav a { margin-left: 20px; color: var(--muted); text-decoration: none; }
+  nav a:hover { color: var(--fg); }
+  .hero { padding: 48px 0 28px; }
+  h1 { font-size: clamp(32px, 6vw, 52px); line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.02em; }
+  .lede { font-size: 20px; color: var(--muted); max-width: 680px; margin: 0 0 28px; }
+  .buttons a {
+    display: inline-block; padding: 10px 18px; border-radius: 8px; margin: 0 10px 10px 0;
+    text-decoration: none; font-weight: 600; border: 1px solid var(--line); color: var(--fg); background: var(--card);
+  }
+  .buttons a.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  figure { margin: 24px 0 8px; }
+  video { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); background: #000; display: block; }
+  figcaption { color: var(--muted); font-size: 15px; margin-top: 10px; }
+  section { padding: 40px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; margin: 0 0 20px; letter-spacing: -0.01em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 18px; }
+  .card p { margin: 0; color: var(--muted); font-size: 16px; }
+  pre {
+    background: var(--code-bg); color: var(--code-fg); padding: 16px; border-radius: 10px; overflow-x: auto;
+    font: 14px/1.55 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; margin: 0;
+  }
+  code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.92em; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } nav a { margin-left: 14px; } }
+  @media (max-width: 480px) { nav a.wide { display: none; } }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
+  ul.plain { padding-left: 20px; margin: 0; }
+  ul.plain li { margin-bottom: 6px; }
+  footer { padding: 32px 0 48px; color: var(--muted); font-size: 15px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="mark" href="./">desk<span>tape</span></a>
+    <nav>
+      <a href="https://github.com/tatargabor/desktape/blob/main/docs/user-guide.md">Guide</a>
+      <a class="wide" href="https://github.com/tatargabor/desktape/blob/main/docs/tape-format.md">Tape format</a>
+      <a href="https://github.com/tatargabor/desktape">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>Like VHS, but for desktop&nbsp;GUIs.</h1>
+    <p class="lede">Record a desktop flow once with your agent, then replay it with zero model tokens, as a
+      test or as a captioned video. desktape drives a Windows desktop from Linux over SSH, through UI Automation.</p>
+    <div class="buttons">
+      <a class="primary" href="https://github.com/tatargabor/desktape">View on GitHub</a>
+      <a href="https://github.com/tatargabor/desktape/blob/main/docs/user-guide.md">Read the guide</a>
+    </div>
+    <figure>
+      <video src="demo.mp4" poster="demo-poster.jpg" controls muted playsinline preload="metadata"></video>
+      <figcaption>Recorded by the tape it shows, <code>tapes/claude-desktop-demo.yaml</code>: 43 steps, no model
+        calls. The grey boxes are desktape's own redaction, covering the account's chats and repositories.</figcaption>
+    </figure>
+  </div>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Look cheaply</h3>
+        <p>A compact list of labelled actionable elements and open dialogs: about 860 tokens for a busy screen,
+          about 120 for what changed after a click. OCR next, and an image only when nothing else will do.</p>
+      </div>
+      <div class="card">
+        <h3>Act one step, keep it</h3>
+        <p>The agent clicks, types and checks one step at a time. A step that passed is appended to a YAML tape;
+          one that failed is not.</p>
+      </div>
+      <div class="card">
+        <h3>Replay without a model</h3>
+        <p>The runner never calls a model. A failed step writes <code>repair.md</code> with the step, the map entry
+          and the window's elements, and the agent fixes the map or the tape from it.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>A tape</h2>
+    <div class="two">
+      <pre><code>name: add-marketplace-dialog
+map: claude-desktop-win
+steps:
+  - focus: "@window"
+  - click: "@sidebar.customize"
+  - click: "@customize.plugins_tab"
+  - caption: "Add a plugin marketplace"
+  - click: "@plugins.add_plugin"
+  - click: "@plugins.add_marketplace"
+  - click: "@marketplace.from_repository"
+  - click: "@marketplace.url"
+  - type: "https://github.com/example/plugins.git"
+  - expect: "@marketplace.use_url"
+  - click: "@marketplace.cancel"</code></pre>
+      <div>
+        <p>Steps address elements by role and label, wait for them and check them. Facts about an app (a tab
+          that is a <code>TabItem</code>, a label that carries a description) go into a per-app <strong>map</strong>, so the
+          tape can say <code>@plugins.add_plugin</code>.</p>
+        <p>The same file runs as a fast test, or in video mode with pauses, captions and redaction boxes
+          burned in, plus an <code>.srt</code>.</p>
+        <pre><code>desktape.py run tape.yaml
+desktape.py run tape.yaml --mode video</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Measured, on a Windows&nbsp;11 target</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Tape</th><th>Result</th><th>Notes</th></tr>
+        <tr><td>Add-marketplace dialog</td><td class="num">25/25 · 9.3 s</td><td>45.3 s as a captioned video</td></tr>
+        <tr><td>Claude Desktop tour</td><td class="num">42/42 · 19–26 s</td><td>at 1920×1032, 1280×800, 1024×700 and 800×600; minimised, maximised, covered by another window</td></tr>
+        <tr><td>This page's demo</td><td class="num">43/43 · 19 s</td><td>70 s as the video above</td></tr>
+      </table>
+    </div>
+    <p style="color: var(--muted); font-size: 15px;">Every run: 0 model calls. The method and the raw numbers are
+      in <a href="https://github.com/tatargabor/desktape/blob/main/docs/spike-2026-10-23.md">the spike notes</a>.</p>
+  </section>
+
+  <section>
+    <h2>Safe by default</h2>
+    <ul class="plain">
+      <li>A default-deny allowlist of driver tools; nothing else reaches the desktop.</li>
+      <li>Every call goes to <code>audit.jsonl</code>, with typed secrets redacted.</li>
+      <li>The driver's telemetry, update check and script runner are switched off.</li>
+      <li>Recordings and OCR text are removed from the target after a run; a redacting tape keeps no unredacted copy.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Get started</h2>
+    <pre><code>git clone https://github.com/tatargabor/desktape && cd desktape
+pip install -r requirements.txt
+python3 desktape.py --selftest                       # offline, no host needed
+export DESKTAPE_HOST=user@windows-host
+python3 desktape.py look --map claude-desktop-win    # what is on screen, cheaply
+python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml</code></pre>
+    <p>The target needs OpenSSH Server, <a href="https://github.com/trycua/cua">Cua Driver</a> in the user's session,
+      and ffmpeg for video: <a href="https://github.com/tatargabor/desktape/blob/main/docs/windows-setup.md">Windows setup</a>.</p>
+  </section>
+
+  <section>
+    <h2>Status</h2>
+    <p>Early: the tape format and the commands may still change. Next: a headless session keeper (FreeRDP on
+      Xvfb, so a run needs no RDP window), desktape as a local MCP server for Claude Desktop, and macOS targets.</p>
+  </section>
+
+  <footer>
+    MIT licensed. desktape drives <a href="https://github.com/trycua/cua">Cua Driver</a> (MIT), installed separately on
+    the target. An independent project, not affiliated with Anthropic or Cua; Claude Desktop appears only as the
+    application under test.
+  </footer>
+</div>
+</body>
+</html>

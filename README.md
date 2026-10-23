@@ -3,6 +3,9 @@
 Like VHS, but for desktop GUIs: record a desktop flow once with your agent, then replay it with zero model
 tokens, as a test or as a captioned video.
 
+[Watch the 70-second demo](site/demo.mp4): recorded by `tapes/claude-desktop-demo.yaml`, 43 steps, no model
+calls. The landing page is `site/`, published to GitHub Pages.
+
 desktape drives a remote desktop (Windows today, macOS next) from a Linux machine. An AI agent looks at the
 screen cheaply, acts one step at a time, and keeps the steps that worked as a YAML **tape**. The same tape
 then runs as a fast test or as a slow, captioned screen recording, without calling a model.
@@ -25,7 +28,8 @@ Status: **early**. The tape format and the commands may still change.
   step, the map entry and the window's compact element list. The agent driving desktape fixes the map or
   the tape from it.
 - **Safety:** a default-deny tool allowlist, an audit log of every call with secrets redacted, and the
-  driver's telemetry, update check and script runner switched off.
+  driver's telemetry, update check and script runner switched off. A video can cover the user's own
+  content with redaction boxes, and then keeps no unredacted copy.
 
 Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with the model.
 
@@ -57,7 +61,7 @@ passed. Every command writes a run folder under `runs/` with `audit.jsonl`; `run
 in video mode the captioned `.mp4` and an `.srt`.
 
 The sample tape opens Claude Desktop's "Add marketplace" dialog, fills in a URL and cancels; it changes
-nothing. Measured on a Windows 11 target: 25/25 steps in 9.3 s (test) and 38.6 s (video), 0 model calls.
+nothing. Measured on a Windows 11 target: 25/25 steps in 9.3 s (test) and 45.3 s (video, a pause after each caption), 0 model calls.
 
 A walkthrough from install to a captioned video: [`docs/user-guide.md`](docs/user-guide.md). The tape and
 map format: [`docs/tape-format.md`](docs/tape-format.md).
@@ -68,9 +72,11 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
 - `maps/` — app maps: named selectors and app facts per app version.
 - `tapes/` — flows: the marketplace-dialog sample, and `claude-desktop-tour.yaml`, a read-only tour of
   Claude Desktop's main screens that doubles as the map's regression test, and
-  `claude-desktop-incognito-ask.yaml`, which asks one question in an incognito chat and waits for the answer.
+  `claude-desktop-incognito-ask.yaml`, which asks one question in an incognito chat and waits for the answer,
+  and `claude-desktop-demo.yaml`, which records the public demo with the user's content covered.
 - `windows/` — scripts desktape copies to the target (the OCR, run as a one-off interactive task).
 - `docs/` — setup, the tape format, and measured results.
+- `site/` — the landing page and the demo video (GitHub Pages, `.github/workflows/pages.yml`).
 - `openspec/` — requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).
 - `client/`, `spike/` — the first measurements; kept for reference, not used by the runner.
 
