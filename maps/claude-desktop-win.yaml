@@ -110,6 +110,39 @@ elements:
   code.permissions:           { label: "Permissions:", role: Button, prefix: true, action: expand }
   usage.indicator:            { label: "Usage:", role: Button, prefix: true }
 
+  code.send:                  { label: "Send", role: Button }             # appears once the prompt has text
+  code.stop:                  { label: "Stop", role: Button }             # only while Claude Code is working
+  code.permission.auto:       { label: "Auto", role: RadioButton, prefix: true, action: select }
+  code.permission.manual:     { label: "Manual", role: RadioButton, prefix: true, action: select }   # always ask
+  code.permission.accept_edits: { label: "Accept edits", role: RadioButton, prefix: true, action: select }
+  code.permission.plan:       { label: "Plan", role: RadioButton, prefix: true, action: select }
+  code.env.this_computer:     { label: "This computer", role: RadioButton, action: select }
+  code.env.cloud:             { label: "Cloud", role: MenuItem, action: expand }
+  code.env.remote_control:    { label: "Remote Control", role: MenuItem, action: expand }
+  code.folder.none:           { label: "No folder", role: RadioButton, action: select }
+  code.folder.open:           { label: "Open folder…", role: MenuItem }   # opens the native folder picker
+
+  # --- inside a Code session
+  session.rail:               { label: "Session rail", role: Button }
+  session.changes:            { label: "Changes", role: Button, action: toggle }
+  session.files:              { label: "Files", role: Button, action: toggle }
+  session.view_options:       { label: "View options", role: Button, action: expand }
+  session.side_chat:          { label: "Side chat", role: CheckBox, action: toggle }
+  session.context:            { label: "Context", role: Button, prefix: true, action: expand }   # "Context 76.5k"
+  session.connectors:         { label: "Connectors", role: Button, prefix: true, action: expand }
+  session.archive:            { label: "Archive", role: MenuItem }       # in the session's More options menu
+  session.rename:             { label: "Rename", role: MenuItem }
+  session.fork:               { label: "Fork", role: MenuItem }
+  terminal.new:               { label: "New terminal", role: Button }
+  files.go_to:                { label: "Go to file or search", role: Button }
+  message.fork_here:          { label: "Fork from here", role: Button }
+  message.pin_chapter:        { label: "Pin as chapter", role: Button, action: toggle }
+  permission.request:         { label: "Permission request:", role: Group, prefix: true }   # "Permission request: write"
+  permission.deny:            { label: "Deny", role: Button }
+  permission.always_allow:    { label: "Always allow", role: Button, prefix: true }        # this session only
+  permission.more_allow:      { label: "More allow options", role: Button, action: expand }
+  code.finished:              { label: "Claude finished the response", role: Text }
+
   # --- search dialog
   search.input:               { label: "Search", role: ComboBox }
   search.close:               { label: "Close", role: Button }
@@ -200,6 +233,10 @@ notes:
   - "Cowork: the UI never says Cowork (only plugin descriptions do: \"Claude Desktop / Cowork\"). Its agentic session is Chat mode's new session, with @chat.project_or_folder and the Manual / Auto permission modes; @sidebar.new_task opens the scheduled-task dialog instead."
   - "An answer is finished when @message.read_aloud is present and @chat.stop is gone: `expect: \"@message.read_aloud\"`, then `absent: \"@chat.stop\"`, after @chat.send."
   - "An incognito chat (@chat.incognito) stays out of history and search; inside it the sidebar is hidden, so @sidebar.new is absent until @chat.exit_incognito."
+  - "A Code session runs Claude Code on the target. Pick @code.permission.manual (asks before every change) or @code.permission.plan for tapes; a tool use then shows @permission.request with @permission.deny and @permission.always_allow. Wait for an answer with `expect: \"@code.finished\"` (or `absent: \"@code.stop\"`)."
+  - "A Code session's messages are plain Text nodes (no \"You said:\" prefix), so ignore regions cannot hide them: they appear with `look --text` and in repair bundles, which stay local under runs/."
+  - "A session's title is generated from the first prompt and is part of its header buttons (\"<title>, rename session\", \"More options for <title>\"), so they are not mapped: the sidebar's \"More options for …\" buttons come first in tree order and a prefix would hit them. Use the exact title in an ad hoc step."
+  - "After Archive, Desktop opens the next session in the sidebar by itself; click @sidebar.new straight after."
   - "Chat mode and Code mode have different new-session screens: @chat.prompt vs @code.prompt."
   - "Plugins under Customize is a TabItem (action select), not a Button."
   - "The repository card's label carries its description too, so match it by prefix."
