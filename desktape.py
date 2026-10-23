@@ -248,7 +248,8 @@ def ocr_lines(host):
         raw = t.sh(f"type %USERPROFILE%\\{remote}\\ocr-out.json").stdout.lstrip("\ufeff")
     finally:
         # Nothing stays scheduled, and no screenshot of the desktop is left behind.
-        t.sh(f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png 2>nul")
+        t.sh(f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png "
+             f"%USERPROFILE%\\{remote}\\ocr-out.json %USERPROFILE%\\{remote}\\ocr-done.txt 2>nul")
     d = json.loads(raw)
     if "error" in d:
         raise RuntimeError(f"OCR: {d['error']}")
@@ -491,8 +492,11 @@ def cmd_run(a):
         try:
             Target(a.host).get(f"{rec_rel}/recording.mp4", local_raw)
             summary["video"] = burn_captions_remote(a.host, rec_rel, r.captions, total, run_dir, tape["name"])
+            # The recordings show the whole screen: once both are here, none stays on the target.
+            Target(a.host).sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+            logger.info("removed the target's copy of the recording: %s", rec_rel)
         except Exception as e:
-            logger.warning("video post-processing failed: %s", e)
+            logger.warning("video post-processing failed, the recording stays on the target in %s: %s", rec_rel, e)
             summary["video"] = f"failed: {e}"
     json.dump(summary, open(os.path.join(run_dir, "summary.json"), "w"), ensure_ascii=False, indent=2)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

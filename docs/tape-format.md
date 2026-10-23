@@ -89,3 +89,6 @@ fails on a map entry, the repair bundle names the entry, so the fix lands in the
 - `repair.md` — on a failure: the step as written and as resolved, the map entry, and the window's
   elements, open dialogs and texts, without the map's ignore regions.
 - video mode: `recording.mp4` (raw), `<name>.mp4` (captions burned in), `<name>.srt`.
+
+On the target, nothing that shows the screen is left behind: the recordings are deleted once they have
+been copied, and `look --ocr` deletes its screenshot and its text output after reading them.
