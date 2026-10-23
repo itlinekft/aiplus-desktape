@@ -1,0 +1,54 @@
+# Claude Desktop (Windows, Store build): the public demo video. Visits only screens that show none of the
+# user's own content, and covers the sidebar's pinned and recent items and the account for the whole video.
+# Changes nothing and sends nothing. The boxes are in screen pixels of a maximised window at 1920x1080.
+# Check the frames before publishing a recording: a box placed by hand can miss something.
+name: claude-desktop-demo
+app: Claude Desktop 3.6556 (Windows)
+map: claude-desktop-win
+video_pause: 1.2
+redact:
+  - { x: 0, y: 282, w: 286, h: 750 }        # sidebar below the navigation: pinned, recents, account
+steps:
+  - redact: [{ x: 286, y: 0, w: 1634, h: 1032 }]   # whatever screen was left open, until Customize is up
+  - focus: "@window"
+  - caption: "desktape: a YAML tape drives Claude Desktop through UI Automation, with no model calls"
+  - click: "@mode.chat"
+  - expect: "@sidebar.scheduled"                   # Chat mode only: Code mode has a Customize of its own
+  - click: "@sidebar.customize"
+  - click: "@customize.skills_tab"
+  - expect: "@skills.add_skill"
+  - redact: []
+  - caption: "Every step names an element by role and label, from a per-app map"
+  - click: "@customize.connectors_tab"
+  - expect: "@connectors.add_connector"
+  - click: "@customize.plugins_tab"
+  - expect: "@plugins.add_plugin"
+  - caption: "Add plugin, then Add marketplace"
+  - click: "@plugins.add_plugin"
+  - expect: "@plugins.add_marketplace"
+  - click: "@plugins.add_marketplace"
+  - expect: "@marketplace.from_repository"
+  - click: "@marketplace.from_repository"
+  - expect: "@marketplace.url"
+  - caption: "Typing works the same way; every step waits for its element and checks it"
+  - redact: [{ x: 560, y: 60, w: 800, h: 485 }]    # the field opens a list of the account's own repositories
+  - click: "@marketplace.url"
+  - type: "https://github.com/example/plugins.git"
+  - expect: "@marketplace.use_url"
+  - redact: []
+  - click: "@marketplace.use_url"
+  - expect: "@marketplace.sync"
+  - pause: 1.5
+  - caption: "Cancel: the tape changes nothing"
+  - click: "@marketplace.cancel"
+  - expect: "@plugins.add_plugin"
+  - caption: "Scheduled tasks"
+  - click: "@sidebar.scheduled"
+  - expect: "@scheduled.templates_tab"
+  - caption: "Code mode"
+  - click: "@mode.code"
+  - click: "@sidebar.new"
+  - expect: "@code.prompt"
+  - expect: "@code.terminal"
+  - caption: "The same tape runs as a test in seconds, or as this video"
+  - pause: 2.5

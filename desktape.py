@@ -136,6 +136,8 @@ def resolve(step, amap):
     """Expand `@name` selectors from the map. Returns (step, the map entry name or None).
     Raises KeyError for a name the map lacks, so a misspelt tape fails before any tool call."""
     kind, arg = next(iter(step.items()))
+    if kind == "redact":
+        return {kind: boxes(arg, "step redact")}, None
     if isinstance(arg, str) and arg.startswith("@"):
         name = arg[1:]
         if amap is None:
@@ -150,6 +152,34 @@ def resolve(step, amap):
 
 def resolve_all(steps, amap):
     return [resolve(s, amap) for s in steps]
+
+
+def boxes(arg, where):
+    """Redaction rectangles in recording pixels (video-redaction D2); raises ValueError on a malformed one,
+    so a bad tape stops before any tool call."""
+    if not isinstance(arg, list):
+        raise ValueError(f"{where}: give a list of {{x, y, w, h}}, not {arg!r}")
+    out = []
+    for b in arg:
+        if not (isinstance(b, dict) and all(isinstance(b.get(k), int) for k in "xywh")
+                and b["x"] >= 0 and b["y"] >= 0 and b["w"] > 0 and b["h"] > 0):
+            raise ValueError(f"{where}: {b!r} is not a rectangle {{x, y, w, h}} with a positive size")
+        out.append({k: b[k] for k in "xywh"})
+    return out
+
+
+REDACT_MARGIN = 0.5   # seconds a step-scoped box is widened on both ends (video-redaction D2)
+
+
+def redact_spans(tape_boxes, steps_boxes):
+    """(start, end, box) for every box: tape-level ones for the whole video, step-scoped ones from
+    (seconds, boxes) changes, each widened by the margin. End None: to the video's last frame, which comes
+    after the runner's last clock reading (measured: the sidebar showed in the last 2 s otherwise)."""
+    spans = [(0.0, None, b) for b in tape_boxes]
+    for i, (t, bs) in enumerate(steps_boxes):
+        end = steps_boxes[i + 1][0] + REDACT_MARGIN if i + 1 < len(steps_boxes) else None
+        spans += [(max(0.0, t - REDACT_MARGIN), end, b) for b in bs]
+    return spans
 
 
 # ---- the cheap look (design D2) ---------------------------------------------------------------
@@ -267,6 +297,7 @@ class Runner:
         self.tree = ""           # last snapshot's text, for the compact list
         self.snapshots = 0
         self.captions = []       # (seconds since recording start, text)
+        self.redactions = []     # (seconds since recording start, boxes from then on)
         self.t_rec = None
 
     def snapshot(self):
@@ -369,6 +400,9 @@ class Runner:
         elif kind == "caption":
             if self.t_rec is not None:
                 self.captions.append((time.time() - self.t_rec, arg))
+        elif kind == "redact":
+            if self.mode == "video":
+                self.redactions.append((time.time() - self.t_rec if self.t_rec is not None else 0.0, arg))
         elif kind == "pause":
             if self.mode == "video":
                 time.sleep(float(arg))
@@ -400,25 +434,37 @@ FFMPEG_WIN = r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Wi
 def srt(captions, total):
     def ts(t):
         ms = int(round(t * 1000)); return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}"
-    out = []
-    for i, (t, txt) in enumerate(captions):
-        end = captions[i + 1][0] if i + 1 < len(captions) else total
-        out.append(f"{i + 1}\n{ts(t)} --> {ts(end)}\n{txt}\n")
-    return "\n".join(out)
+    return "\n".join(f"{i + 1}\n{ts(t)} --> {ts(end)}\n{txt}\n"
+                     for i, (t, end, txt) in enumerate(caption_spans(captions, total)))
 
 
-def burn_captions_remote(host, rec_rel, captions, total, local_dir, name):
-    """Burn captions with the Windows host's ffmpeg (full build has drawtext; the local one may not).
-    The filter goes in a script file, so no caption text passes through cmd quoting."""
-    parts = []
-    for i, (t, txt) in enumerate(captions):
-        end = captions[i + 1][0] if i + 1 < len(captions) else total
+def caption_spans(captions, total):
+    """(start, end, text) per caption; an empty caption only ends the one before it."""
+    return [(t, captions[i + 1][0] if i + 1 < len(captions) else total, txt)
+            for i, (t, txt) in enumerate(captions) if txt]
+
+
+def video_filters(captions, spans, total):
+    """The ffmpeg filter chain: redaction boxes first, so a caption stays readable over one."""
+    def when(t0, t1):
+        if t1 is None:
+            return "" if t0 == 0 else f":enable='gte(t\\,{t0:.2f})'"
+        return f":enable='between(t\\,{t0:.2f}\\,{t1:.2f})'"
+    parts = [f"drawbox=x={b['x']}:y={b['y']}:w={b['w']}:h={b['h']}:color=0x9a9a9a:t=fill{when(t0, t1)}"
+             for t0, t1, b in spans]
+    for t, end, txt in caption_spans(captions, total):
         safe = txt.replace("\\", "\\\\").replace(":", "\\:").replace("'", "’").replace(",", "\\,")
         parts.append(f"drawtext=fontfile='C\\:/Windows/Fonts/segoeui.ttf':text='{safe}':"
                      f"enable='between(t\\,{t:.2f}\\,{end:.2f})':x=(w-text_w)/2:y=h-110:"
                      f"fontsize=40:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=16")
+    return ",\n".join(parts) or "null"
+
+
+def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name):
+    """Burn boxes and captions with the Windows host's ffmpeg (full build has drawtext; the local one may
+    not). The filter goes in a script file, so no caption text passes through cmd quoting."""
     flt = os.path.join(local_dir, "captions.ffscript")
-    open(flt, "w", encoding="utf-8").write(",\n".join(parts) or "null")
+    open(flt, "w", encoding="utf-8").write(video_filters(captions, spans, total))
     open(os.path.join(local_dir, f"{name}.srt"), "w", encoding="utf-8").write(srt(captions, total))
     t = Target(host)
     t.put(flt, f"{rec_rel}/captions.ffscript")
@@ -440,6 +486,8 @@ def cmd_run(a):
     tape = yaml.safe_load(open(a.tape, encoding="utf-8"))
     amap = load_map(tape.get("map"))
     plan = resolve_all(tape["steps"], amap)          # a misspelt @name stops here, before any tool call
+    tape_boxes = boxes(tape.get("redact", []), "tape redact")
+    redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
     run_dir = new_run_dir(tape["name"], a.mode)
     stamp = os.path.basename(run_dir).split("-")[0] + "-" + os.path.basename(run_dir).split("-")[1]
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
@@ -474,7 +522,7 @@ def cmd_run(a):
                 break
             done += 1
             logger.info("step %d ok: %s", i, json.dumps(tape["steps"][i], ensure_ascii=False)[:100])
-            if a.mode == "video" and "pause" not in s and "caption" not in s:
+            if a.mode == "video" and not {"pause", "redact"} & s.keys():
                 time.sleep(tape.get("video_pause", 1.2))
     finally:
         total = time.time() - (r.t_rec or t0)
@@ -490,8 +538,13 @@ def cmd_run(a):
     if r.t_rec is not None:
         local_raw = os.path.join(run_dir, "recording.mp4")
         try:
-            Target(a.host).get(f"{rec_rel}/recording.mp4", local_raw)
-            summary["video"] = burn_captions_remote(a.host, rec_rel, r.captions, total, run_dir, tape["name"])
+            if redacting:   # video-redaction D3: the raw file is what the tape hides, so it stays out
+                logger.info("tape redacts: the unredacted recording is not downloaded")
+            else:
+                Target(a.host).get(f"{rec_rel}/recording.mp4", local_raw)
+            spans = redact_spans(tape_boxes, r.redactions)
+            summary["video"] = burn_captions_remote(a.host, rec_rel, r.captions, spans, total, run_dir,
+                                                    tape["name"])
             # The recordings show the whole screen: once both are here, none stays on the target.
             Target(a.host).sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
             logger.info("removed the target's copy of the recording: %s", rec_rel)
@@ -624,6 +677,24 @@ def selftest():
             '  - [11] Text "A long description" [actions=[text]]')
     assert compact(tree) == ['Button "Kis méret" (invoke)', 'TabItem "Plugins" (select)'], compact(tree)
     assert srt([(0.0, "a"), (2.5, "b")], 4.0).splitlines()[1] == "00:00:00,000 --> 00:00:02,500"
+    # video-redaction: an empty caption ends the one before; rectangles; spans with margins; boxes first.
+    assert [l for l in srt([(0.0, "A"), (2.0, ""), (5.0, "B")], 6.0).splitlines() if "-->" in l] == \
+        ["00:00:00,000 --> 00:00:02,000", "00:00:05,000 --> 00:00:06,000"]
+    box = {"x": 0, "y": 270, "w": 290, "h": 762}
+    assert resolve({"redact": [box]}, None) == ({"redact": [box]}, None)
+    assert resolve({"redact": []}, None) == ({"redact": []}, None)
+    for bad in ([{"x": 0, "y": 0, "w": 10}], [{"x": 0, "y": 0, "w": -1, "h": 5}], {"x": 0}):
+        try:
+            resolve({"redact": bad}, None); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "redact" in str(e)
+    spans = redact_spans([box], [(5.0, [box]), (9.0, []), (12.0, [box])])
+    assert spans == [(0.0, None, box), (4.5, 9.5, box), (11.5, None, box)], spans
+    flt = video_filters([(1.0, "Hi: there"), (3.0, "")], spans, 20.0)
+    assert flt.index("drawbox") < flt.index("drawtext") and flt.count("drawbox") == 3, flt
+    assert flt.split(",\n")[0].endswith("t=fill"), flt          # the tape-level box has no end
+    assert "between(t\\,4.50\\,9.50)" in flt and "gte(t\\,11.50)" in flt and "Hi\\: there" in flt
+    assert "between(t\\,1.00\\,3.00)" in flt
     with tempfile.TemporaryDirectory() as d:
         t = os.path.join(d, "t.yaml")
         open(t, "w", encoding="utf-8").write("# keep me\nname: t\nmap: x\nsteps:\n  - focus: Claude\n")
