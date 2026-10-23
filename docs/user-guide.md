@@ -32,15 +32,31 @@ TabItem "Plugins" (select)
 Button "Add plugin" (expand)
 ```
 
-That list is about 700 tokens for a busy screen, which is why it is the default. Two richer forms, when the
-list is not enough:
+An open dialog shows up as `Dialog "<title>"`. Narrower and cheaper forms, which all filter on your side,
+so only what is printed costs tokens:
 
-- `look --ocr` adds the target's built-in OCR, one line per text line with its x,y position (≈420 tokens).
-  Use it for text that is not in the accessibility tree, such as a toast or a fading dialog.
-- `look --full` prints the whole accessibility tree. It costs more than a screenshot, so use it to find a
-  menu's items or a value, then go back to the compact list.
+- `look --new` prints only the lines that changed since the previous look at the same window, and how many
+  it left out. After a click, this is usually the right look.
+- `look --text` adds the window's text nodes (a version number, a dialog's message), cut to 120 characters.
+- `look --grep PATTERN` keeps only the lines matching a regex, with any form of look:
+  `look --text --grep '^Text "\d+\.\d'` finds a version number.
+- `look --ocr` adds the target's built-in OCR, one line per text line with its x,y position. Use it only
+  for text the tree does not have (an image, a canvas); OCR can show a frame that is no longer current,
+  so never use it to decide what state the app is in.
+- `look --full` prints the whole tree. It is the most expensive form; prefer `--text --grep`.
 
-With a map, `--map claude-desktop-win` sets the window title for you.
+With a map, `--map claude-desktop-win` sets the window title and hides the map's `ignore:` regions (for
+Claude Desktop: the user's own chats, projects and sessions in the sidebar). `--all` shows them.
+
+What a look cost on Claude Desktop's plugin catalogue (measured 2026-10-23, characters ÷ 3.5):
+
+| Form | Tokens |
+|---|---|
+| `look --full --all` | ≈7 580 |
+| `look --all` | ≈1 200 |
+| `look` (with the map's ignore regions) | ≈860 |
+| `look --new` after one click | ≈120 |
+| `look --text --grep '…'` | ≈50 |
 
 ## 3. Author a tape one step at a time
 
@@ -97,6 +113,9 @@ Add captions and pauses where a viewer needs them:
 python3 desktape.py run tapes/open-plugins.yaml --mode video
 ```
 
+Run a new or changed tape in test mode first (seconds), and switch to video mode only once it passes: a
+failed video run costs a full recording.
+
 Video mode records the target's screen, waits `video_pause` seconds (default 1.2) after each step, and
 burns each caption in from its step until the next one. The run folder gets `recording.mp4` (raw),
 `<name>.mp4` (captioned) and `<name>.srt`. `pause` steps only wait in video mode, so the same tape stays
@@ -105,7 +124,8 @@ fast as a test.
 ## 6. When a step fails
 
 The run stops at the failing step and writes `repair.md` in the run folder: the error, the step as written
-and as resolved, the map entry it used, and the window's compact element list at that moment. That is
+and as resolved, the map entry it used, and the window at that moment: its elements, any open dialog and
+its text nodes, without the map's ignore regions. That is
 everything needed to fix the map entry (when the step used one) or the tape. desktape itself never calls a
 model; the fix is made by you or by the agent driving desktape, in a file under git.
 

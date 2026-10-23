@@ -110,18 +110,72 @@ def resolve_all(steps, amap):
 
 # ---- the cheap look (design D2) ---------------------------------------------------------------
 
-LINE = re.compile(r'^\s*- \[(\d+)\] (\w+) "(.*?)"(?: \[actions=\[(.*?)\]\])?')
+# A tree line: `- [12] Button "Add" [id=… actions=[invoke]]`, or unindexed: `- Window "Title"`.
+NODE = re.compile(r'^(\s*)- (?:\[\d+\] )?(\w+)(?: "(.*?)")?(?: \[(.*)\])?\]?\s*$')
+ACTIONS = re.compile(r'actions=\[(.*?)\]')
 
 
-def compact(tree_text):
-    """One line per labelled element that has actions: `Role "label" (actions)`. ≈700 tokens a screen
-    where the full tree is ≈2400 (spike §2)."""
+def parse(line):
+    """(indent, role, label, actions) of a tree line, or None."""
+    m = NODE.match(line)
+    if not m:
+        return None
+    a = ACTIONS.search(m.group(4) or "")
+    return len(m.group(1)), m.group(2), m.group(3) or "", a.group(1) if a else ""
+
+
+def matches(node, sel):
+    """A node against a selector `{label, role, prefix}`, the way a step resolves an element."""
+    _, role, label, _ = node
+    want = sel.get("label", "")
+    return (role == sel["role"] if sel.get("role") else True) and \
+        (label.startswith(want) if sel.get("prefix") else label == want)
+
+
+def apply_ignore(lines, ignore):
+    """Drop a map's ignore regions (design D4 of look-refinements): `subtree` hides an element and the
+    lines indented under it; `from`/`until` hides a range up to, not including, the `until` line.
+    Returns (kept lines, number of labelled lines hidden)."""
+    if not ignore:
+        return lines, 0
+    kept, hidden, i = [], 0, 0
+    while i < len(lines):
+        n = parse(lines[i])
+        rule = next((r for r in ignore if n and matches(n, r.get("subtree") or r.get("from") or {})), None)
+        if not rule:
+            kept.append(lines[i]); i += 1
+            continue
+        j = i + 1
+        if "subtree" in rule:
+            while j < len(lines) and (parse(lines[j]) or (n[0] + 1,))[0] > n[0]:
+                j += 1
+        else:
+            while j < len(lines) and not ((p := parse(lines[j])) and matches(p, rule.get("until", {}))):
+                j += 1
+        hidden += sum(1 for l in lines[i:j] if (p := parse(l)) and p[2])
+        i = j
+    return kept, hidden
+
+
+def compact(tree_text, texts=False):
+    """One line per labelled element that has actions: `Role "label" (actions)` (≈330 tokens a busy
+    screen, the full tree ≈2400), plus `Dialog "title"` for a window inside the top one, plus, with
+    `texts`, `Text "…"` for each text node, cut to 120 characters."""
+    lines = tree_text.splitlines() if isinstance(tree_text, str) else tree_text
     out = []
-    for line in tree_text.splitlines():
-        m = LINE.match(line)
-        # A Text whose only action is `text` is a description, not a target: leave it out.
-        if m and m.group(3) and m.group(4) and m.group(4) != "text":
-            out.append(f'{m.group(2)} "{m.group(3)}" ({m.group(4)})')
+    for line in lines:
+        n = parse(line)
+        if not n or not n[2]:
+            continue
+        indent, role, label, actions = n
+        if role == "Window":
+            if indent > 0:
+                out.append(f'Dialog "{label}"')
+        elif actions and actions != "text":
+            out.append(f'{role} "{label}" ({actions})')
+        # A Text whose only action is `text` is a description, not a target: only with `texts`.
+        elif texts and role == "Text":
+            out.append(f'Text "{label[:117] + "…" if len(label) > 120 else label}"')
     return out
 
 
@@ -237,15 +291,18 @@ class Runner:
             raise ValueError(f"unknown step {kind!r}")
 
 
-def repair_bundle(path, tape_name, index, written, resolved, map_entry, error, tree_text):
-    """What the agent needs to fix a failed step (design D1), and nothing it does not."""
-    lines = compact(tree_text)
+def repair_bundle(path, tape_name, index, written, resolved, map_entry, error, tree_text, ignore=None):
+    """What the agent needs to fix a failed step (design D1), and nothing it does not: the elements,
+    any open dialog and the texts, without the map's ignore regions."""
+    kept, hidden = apply_ignore(tree_text.splitlines(), ignore)
+    lines = compact(kept, texts=True)
+    note = f", {hidden} hidden by the map's ignore regions" if hidden else ""
     body = [f"# Repair: {tape_name}, step {index}", "",
             f"- error: {error}",
             f"- step as written: `{json.dumps(written, ensure_ascii=False)}`",
             f"- step resolved: `{json.dumps(resolved, ensure_ascii=False)}`",
             f"- map entry: `{map_entry}`" if map_entry else "- map entry: none (inline selector)", "",
-            f"## The window now: {len(lines)} labelled actionable elements", "",
+            f"## The window now: {len(lines)} elements, dialogs and texts{note}", "",
             *[f"- {l}" for l in lines], "",
             "Fix the map entry when the step used one, otherwise the tape. More: `desktape.py look --ocr`."]
     open(path, "w", encoding="utf-8").write("\n".join(body) + "\n")
@@ -327,7 +384,7 @@ def cmd_run(a):
                     except Exception as e2:
                         logger.warning("no snapshot for the repair bundle: %s", e2)
                 repair = repair_bundle(os.path.join(run_dir, "repair.md"), tape["name"], i, tape["steps"][i],
-                                       s, entry, e, r.tree)
+                                       s, entry, e, r.tree, (amap or {}).get("ignore"))
                 break
             done += 1
             logger.info("step %d ok: %s", i, json.dumps(tape["steps"][i], ensure_ascii=False)[:100])
@@ -364,6 +421,26 @@ def window_title(a):
     return amap["window"] if amap else "Claude"
 
 
+def look_lines(tree_text, ignore, full=False, texts=False, new=False, grep=None, state=None):
+    """What `look` prints: ignore regions, then elements / dialogs / texts, then `--new`, then `--grep`
+    (design D1 of look-refinements). The compact lines are saved to `state` for the next `--new`.
+    Returns (lines, labelled lines hidden by ignore, unchanged lines left out or None)."""
+    kept, hidden = apply_ignore(tree_text.splitlines(), ignore)
+    lines = kept if full else compact(kept, texts=texts)
+    unchanged = None
+    if state and not full:
+        before = set(open(state, encoding="utf-8").read().splitlines()) if os.path.exists(state) else set()
+        os.makedirs(os.path.dirname(state), exist_ok=True)
+        open(state, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+        if new:
+            unchanged = sum(1 for l in lines if l in before)
+            lines = [l for l in lines if l not in before]
+    if grep:
+        rx = re.compile(grep, re.IGNORECASE)
+        lines = [l for l in lines if rx.search(l)]
+    return lines, hidden, unchanged
+
+
 def cmd_look(a):
     run_dir = new_run_dir("look", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
@@ -373,8 +450,16 @@ def cmd_look(a):
         r.snapshot()
     finally:
         cua.close()
-    lines = r.tree.splitlines() if a.full else compact(r.tree)
-    print(f"# {window_title(a)}: {len(lines)} {'tree lines' if a.full else 'labelled actionable elements'}")
+    title = window_title(a)
+    amap = load_map(a.map)
+    state = os.path.join(HERE, "runs", ".look", re.sub(r"[^\w.-]+", "_", title) + ".txt")
+    lines, hidden, unchanged = look_lines(r.tree, None if a.all else (amap or {}).get("ignore"), full=a.full,
+                                          texts=a.text, new=a.new, grep=a.grep, state=state)
+    what = "tree lines" if a.full else "elements and dialogs" + (" and texts" if a.text else "")
+    extra = (f", {hidden} hidden by the map's ignore regions (--all shows them)" if hidden else "") + \
+            (f", {unchanged} unchanged since the last look left out" if unchanged is not None else "")
+    logger.debug("look %s: %d lines printed, %d hidden, unchanged %s", title, len(lines), hidden, unchanged)
+    print(f"# {title}: {len(lines)} {what}{extra}")
     print("\n".join(lines))
     if a.ocr:
         o = ocr_lines(a.host)
@@ -415,7 +500,8 @@ def cmd_act(a):
                 r.snapshot()
             except Exception as e2:
                 logger.warning("no snapshot for the repair bundle: %s", e2)
-        p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", 0, step, s, entry, e, r.tree)
+        p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", 0, step, s, entry, e, r.tree,
+                          (amap or {}).get("ignore"))
         print(f"FAILED: {e}\nrepair bundle: {p}")
         return 1
     finally:
@@ -460,6 +546,36 @@ def selftest():
                           {"expect": {"label": "Add"}}, "a.b", AssertionError("did not appear"), tree)
         body = open(p, encoding="utf-8").read()
         assert "step 3" in body and "`a.b`" in body and 'TabItem "Plugins"' in body and "Kis méret" in body
+    # look-refinements: ids before actions, dialogs, texts, both ignore regions, the bundle's dialog line.
+    t2 = ('- Window "App"\n  - Group "Sidebar"\n    - [1] Button "New" [actions=[invoke]]\n'
+          '    - Text "Pinned"\n      - [2] Button "my chat" [actions=[invoke]]\n    - [3] Button "a project" [actions=[invoke]]\n'
+          '    - Group "Primary pane"\n      - [4] Button "Filter, 1 on" [id=base-ui-_r_6c8_ actions=[expand]]\n'
+          '      - [5] Text "0.1.0" [actions=[text]]\n  - Window "Update will overwrite local changes"\n'
+          '    - [6] Text "1 file has been modified locally." [actions=[text]]\n    - [7] Button "Update anyway" [actions=[invoke]]\n'
+          '  - [8] Group "Notifications" [actions=[invoke]]\n    - [9] Button "Dismiss" [actions=[invoke]]')
+    c = compact(t2)
+    assert 'Button "Filter, 1 on" (expand)' in c and 'Dialog "Update will overwrite local changes"' in c, c
+    assert 'Text "0.1.0"' not in c and 'Text "0.1.0"' in compact(t2, texts=True)
+    assert compact('- [1] Text "' + "x" * 200 + '" [actions=[text]]', texts=True)[0].endswith('…"')
+    ign = [{"from": {"role": "Text", "label": "Pinned"}, "until": {"role": "Group", "label": "Primary pane"}},
+           {"subtree": {"role": "Group", "label": "Notifications"}}]
+    kept, hidden = apply_ignore(t2.splitlines(), ign)
+    ck = compact(kept)
+    assert hidden == 5 and not any(x in " ".join(ck) for x in ("my chat", "a project", "Dismiss", "Notifications")), (hidden, ck)
+    assert 'Button "New" (invoke)' in ck and 'Button "Filter, 1 on" (expand)' in ck, ck
+    with tempfile.TemporaryDirectory() as d:
+        body = open(repair_bundle(os.path.join(d, "r.md"), "t", 1, {"click": "x"}, {"click": "x"}, None,
+                                  AssertionError("no"), t2, ign), encoding="utf-8").read()
+        assert 'Dialog "Update will overwrite local changes"' in body and "modified locally" in body, body
+        assert "my chat" not in body and "5 hidden" in body, body
+    with tempfile.TemporaryDirectory() as d:
+        st = os.path.join(d, "look", "App.txt")
+        look_lines(t2, ign, state=st)
+        t3 = t2.replace("[7] Button \"Update anyway\"", "[7] Button \"Done\"")
+        new, _, unchanged = look_lines(t3, ign, new=True, state=st)
+        assert new == ['Button "Done" (invoke)'] and unchanged == 3, (new, unchanged)
+        g, _, _ = look_lines(t2, ign, texts=True, grep=r'^Text "\d+\.\d', state=st)
+        assert g == ['Text "0.1.0"'], g
     # The allowlist and the audit log, with a stand-in for the MCP session (no ssh).
     with tempfile.TemporaryDirectory() as d:
         cua = Cua.__new__(Cua)
@@ -490,6 +606,10 @@ def main():
     p = sub.add_parser("run"); p.add_argument("tape"); p.add_argument("--mode", default="test", choices=["test", "video"])
     p = sub.add_parser("look"); p.add_argument("--window"); p.add_argument("--map")
     p.add_argument("--ocr", action="store_true"); p.add_argument("--full", action="store_true")
+    p.add_argument("--text", action="store_true", help="add the window's text nodes")
+    p.add_argument("--new", action="store_true", help="only lines that changed since the last look")
+    p.add_argument("--grep", metavar="PATTERN", help="only lines matching this regex (case-insensitive)")
+    p.add_argument("--all", action="store_true", help="ignore the map's ignore regions")
     p = sub.add_parser("act"); p.add_argument("step"); p.add_argument("--map"); p.add_argument("--window")
     p.add_argument("--append")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.

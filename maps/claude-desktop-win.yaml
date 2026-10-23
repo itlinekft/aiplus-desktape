@@ -4,6 +4,12 @@
 app: Claude Desktop
 version: "3.6556.2.0 (Microsoft Store build)"
 window: Claude
+# Hidden from `look` and repair bundles (`look --all` shows them): the user's own pinned chats, projects
+# and sessions, and the account button, which sit between the sidebar's fixed buttons and the main pane;
+# and the notifications region. Named by fixed elements only, so the map never names a user's items.
+ignore:
+  - { from: { role: Text, label: "Pinned" }, until: { role: Group, label: "Primary pane" } }
+  - { subtree: { role: Group, label: "Notifications" } }
 elements:
   sidebar.customize:          { label: "Customize", role: Button }
   customize.plugins_tab:      { label: "Plugins", role: TabItem, action: select }

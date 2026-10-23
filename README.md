@@ -14,8 +14,9 @@ Status: **early**. The tape format and the commands may still change.
 - **Driver:** [Cua Driver](https://github.com/trycua/cua) (MIT) runs on the target and exposes UI
   Automation over MCP. desktape reaches it with `ssh … cua-driver mcp`, so the target needs no inbound port
   beyond SSH.
-- **Perception, cheapest first:** a compact list of labelled actionable elements (≈700 tokens a screen),
-  then the target's built-in OCR (≈420), and only then an image. The full accessibility tree costs more
+- **Perception, cheapest first:** a compact list of labelled actionable elements and open dialogs
+  (≈860 tokens for a busy screen, ≈120 for what changed after a click), filtered further with `--text` and
+  `--grep`; then the target's built-in OCR; and only then an image. The full accessibility tree costs more
   than a screenshot, so it is never the default. Numbers: [`docs/spike-2026-10-23.md`](docs/spike-2026-10-23.md).
 - **Tapes and maps:** a tape addresses elements by role and label, waits for them and checks them. Facts
   about an app (a label that carries a description, a tab that is a `TabItem`) go into a per-app **map**,
@@ -44,6 +45,7 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 export DESKTAPE_HOST=user@windows-host                     # or pass --host; there is no default
 python3 desktape.py --selftest                             # offline checks, no host needed
 python3 desktape.py look --map claude-desktop-win          # the window's labelled actionable elements
+python3 desktape.py look --map claude-desktop-win --new    # … only what changed since the last look
 python3 desktape.py look --map claude-desktop-win --ocr    # … plus OCR lines with x,y
 python3 desktape.py act 'click: "@plugins.add_plugin"' --append tapes/my-flow.yaml   # one step, kept if it passed
 python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml             # test mode

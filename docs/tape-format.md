@@ -55,7 +55,20 @@ notes:
   - "Plugins under Customize is a TabItem (action select), not a Button."
 ```
 
-Add an entry when a tape that repeats needs it; keep one-off selectors inline in the tape. When a run
+Add an entry when a tape that repeats needs it; keep one-off selectors inline in the tape.
+
+A map may also hide regions of the window from `look` and from repair bundles (`look --all` shows them),
+for noise that repeats on every screen or for the user's own items:
+
+```yaml
+ignore:
+  - { from: { role: Text, label: "Pinned" }, until: { role: Group, label: "Primary pane" } }
+  - { subtree: { role: Group, label: "Notifications" } }
+```
+
+`subtree` hides an element and everything indented under it; `from` / `until` hides from the first line
+matching `from` up to, not including, the next line matching `until`. Name regions by fixed elements, never
+by a user's chat or project names. Steps can still address elements inside a region. When a run
 fails on a map entry, the repair bundle names the entry, so the fix lands in the map, not in every tape.
 
 ## What a run leaves behind
@@ -65,5 +78,5 @@ fails on a map entry, the repair bundle names the entry, so the fix lands in the
 - `audit.jsonl` — every tool call: time, tool, arguments (secrets redacted), result, duration.
 - `summary.json` — steps, passed, the failure if any, seconds, snapshots, `model_calls`.
 - `repair.md` — on a failure: the step as written and as resolved, the map entry, and the window's
-  compact element list.
+  elements, open dialogs and texts, without the map's ignore regions.
 - video mode: `recording.mp4` (raw), `<name>.mp4` (captions burned in), `<name>.srt`.
