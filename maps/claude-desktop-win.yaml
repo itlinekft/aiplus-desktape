@@ -59,6 +59,38 @@ elements:
   chat.incognito:             { label: "Use incognito", role: Button }
   chat.recent_artifacts:      { label: "Recent artifacts", role: Button }
 
+  chat.exit_incognito:        { label: "Exit incognito", role: Button }   # no confirmation; also brings the sidebar back
+  chat.send:                  { label: "Send message", role: Button }     # appears once the prompt has text
+  chat.stop:                  { label: "Stop response", role: Button }    # only while Claude is answering
+
+  # --- inside a chat (first match wins: with several messages these hit the first one)
+  message.retry:              { label: "Retry", role: Button }
+  message.edit:               { label: "Edit", role: Button }             # your own message
+  message.copy:               { label: "Copy", role: Button }
+  message.read_aloud:         { label: "Read aloud", role: Button }       # Claude's message; present once it finished
+  panel.activity:             { label: "Activity panel", role: Button, action: toggle }
+  panel.activity_close:       { label: "Close activity panel", role: Button }
+  panel.browser:              { label: "Browser", role: Button, action: toggle }
+  browser.url:                { label: "Page URL", role: Edit }
+  browser.new_tab:            { label: "New tab", role: Button }
+  browser.settings:           { label: "Browser settings", role: Button, action: expand }
+  browser.expand:             { label: "Expand", role: Button, action: expand }
+
+  # --- New task (Chat mode sidebar) and the scheduled-task dialog
+  task.create_with_claude:    { label: "Create with Claude", role: MenuItem }
+  task.set_up_manually:       { label: "Set up manually", role: MenuItem }
+  task.name:                  { label: "Name", role: Edit }
+  task.instructions:          { label: "Instructions", role: Edit }
+  task.permissions:           { label: "Permissions:", role: Button, prefix: true, action: expand }
+  task.model:                 { label: "Model:", role: Button, prefix: true, action: expand }
+  task.trigger_type:          { label: "Trigger type:", role: Button, prefix: true, action: expand }
+  task.frequency:             { label: "Frequency:", role: ComboBox, prefix: true, action: expand }
+  task.add_trigger:           { label: "Add another trigger", role: Button, action: expand }
+  task.advanced:              { label: "Advanced settings", role: Button, action: expand }
+  task.set_up_with_claude:    { label: "Set up with Claude instead", role: Button }
+  task.create:                { label: "Create", role: Button }
+  task.cancel:                { label: "Cancel", role: Button }
+
   # --- model picker (both modes); its label carries the current model ("Model: Opus 5.5 Medium")
   model.picker:               { label: "Model:", role: Button, prefix: true }
   model.fable:                { label: "Fable", role: RadioButton, prefix: true, action: select }
@@ -165,6 +197,9 @@ notes:
   - "The account menu's items (Settings, Usage, Language, Get help, View changelog, Get API keys, Log out) render inside the hidden sidebar region too: `look --all --grep MenuItem` shows them."
   - "The app menu's top items (File, Edit, View, Go, Help) cannot be expanded through UI Automation (ExpandCollapse fails with 0x80040201). Do not drive them with arrow keys: Down moved focus into the sidebar's chat list and opened a chat."
   - "Labels are matched by role and label only, first match in tree order: the Artifacts page's own Button \"New\" cannot be told apart from the sidebar's, so it is not mapped."
+  - "Cowork: the UI never says Cowork (only plugin descriptions do: \"Claude Desktop / Cowork\"). Its agentic session is Chat mode's new session, with @chat.project_or_folder and the Manual / Auto permission modes; @sidebar.new_task opens the scheduled-task dialog instead."
+  - "An answer is finished when @message.read_aloud is present and @chat.stop is gone: `expect: \"@message.read_aloud\"` after @chat.send."
+  - "An incognito chat (@chat.incognito) stays out of history and search; inside it the sidebar is hidden, so @sidebar.new is absent until @chat.exit_incognito."
   - "Chat mode and Code mode have different new-session screens: @chat.prompt vs @code.prompt."
   - "Plugins under Customize is a TabItem (action select), not a Button."
   - "The repository card's label carries its description too, so match it by prefix."

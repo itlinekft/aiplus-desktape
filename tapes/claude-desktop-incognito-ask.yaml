@@ -1,0 +1,23 @@
+# Claude Desktop (Windows, Store build): ask one question in an incognito chat and wait for the answer.
+# Incognito chats stay out of the history; this tape sends one short message (it uses a little usage).
+name: claude-desktop-incognito-ask
+app: Claude Desktop 3.6556 (Windows)
+map: claude-desktop-win
+video_pause: 1.0
+steps:
+  - focus: "@window"
+  - click: "@mode.chat"
+  - click: "@sidebar.new"
+  - click: "@chat.incognito"
+  - expect: "@chat.exit_incognito"
+  - caption: "An incognito chat: it stays out of the history"
+  - click: "@chat.prompt"
+  - type: "Reply with just the word OK."
+  - expect: "@chat.send"
+  - click: "@chat.send"
+  - caption: "desktape waits until the answer is complete"
+  - expect: { label: "Read aloud", role: Button, timeout: 60 }
+  - expect: { label: "Claude responded:", role: Text, prefix: true }
+  - pause: 1.5
+  - click: "@chat.exit_incognito"
+  - expect: "@sidebar.new"
