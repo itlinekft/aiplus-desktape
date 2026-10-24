@@ -21,7 +21,7 @@ row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a b
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, contextlib, csv, json, logging, os, queue, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, base64, contextlib, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
 
 import yaml
 
@@ -985,7 +985,35 @@ def sendkeys_text(text):
     return "".join("{" + c + "}" if c in "+^%~(){}[]" else c for c in text)
 
 
-def os_input(host, title, keys, audit=None, secret=False, at=None, file=None):
+def remote_file_state(host, path):
+    """(size, last write ticks) of a file on the target, or None (file-outcome-and-typing D1). Environment
+    variables in the path are expanded there."""
+    ps = ("$p=[Environment]::ExpandEnvironmentVariables('" + path.replace("'", "''") + "');"
+          "$f=Get-Item -LiteralPath $p -ErrorAction SilentlyContinue;"
+          "if($f -and -not $f.PSIsContainer){'' + $f.Length + ' ' + $f.LastWriteTimeUtc.Ticks}")
+    enc = base64.b64encode(ps.encode("utf-16-le")).decode()
+    out = Target(host).sh(f"powershell -NoProfile -EncodedCommand {enc}").stdout.strip().split()
+    return (int(out[0]), int(out[1])) if len(out) == 2 and all(x.isdigit() for x in out) else None
+
+
+def os_clipboard(host, text, audit=None):
+    """The target's clipboard, in the desktop session (file-outcome-and-typing D3)."""
+    out = os_input(host, "", "", audit, clip=text)
+    if not out.get("clip"):
+        raise AssertionError(f"paste: the clipboard did not take the text ({out.get('error') or 'no reason given'})")
+    return out
+
+
+def os_click(host, hwnd, x, y, audit=None):
+    """One real mouse click at screen point x,y, only if it lands on window `hwnd` (two windows may share a
+    title). For permission prompts that ignore UI Automation clicks (measured on Claude Desktop)."""
+    out = os_input(host, "", "", audit, hwnd=hwnd, xy=[x, y])
+    if not out.get("sent"):
+        raise AssertionError(f"real click at {x},{y}: the point is not on window {hwnd} (front: {out.get('front')!r})")
+    return out
+
+
+def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hwnd=None, xy=None, clip=None):
     """Send keys through Windows itself to the window titled `title` (data-driven-import), for dialogs whose
     UI Automation does not answer: a one-off task in the desktop session activates the window, checks that it
     is in front, and only then sends. Raises when the window could not be brought to the front."""
@@ -994,7 +1022,8 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None):
     t.put(os.path.join(HERE, "windows", "os-input.ps1"), f"{remote}/os-input.ps1")
     with tempfile.TemporaryDirectory() as d:
         req = os.path.join(d, "os-input.json")
-        json.dump({"title": title, "keys": keys, "at": at, "file": file}, open(req, "w", encoding="utf-8"), ensure_ascii=False)
+        json.dump({"title": title, "keys": keys, "at": at, "file": file, "hwnd": hwnd, "xy": xy, "clip": clip},
+                  open(req, "w", encoding="utf-8"), ensure_ascii=False)
         t.put(req, f"{remote}/os-input.json")
     tr = f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\os-input.ps1"
     t0 = time.time()
@@ -1014,12 +1043,14 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None):
              f"%USERPROFILE%\\{remote}\\os-input-out.json 2>nul")
     if audit:
         audit.write(json.dumps({"ts": round(t0, 3), "tool": "os_input", "args": {"title": title, "keys": "<redacted>" if secret else keys,
-                                "file": file},
-                                "ok": bool(out and (out.get("closed") if file else out.get("sent"))), "ms": int((time.time() - t0) * 1000),
+                                "file": file, "clip": None if clip is None else f"{len(clip)} characters"},
+                                "ok": bool(out and (out.get("closed") if file else out.get("clip") if clip is not None else out.get("sent"))), "ms": int((time.time() - t0) * 1000),
                                 "summary": json.dumps(out, ensure_ascii=False)[:160]}, ensure_ascii=False) + "\n")
         audit.flush()
     if out is None:
         raise RuntimeError("os input: the task did not finish in 20 s")
+    if hwnd or clip is not None:
+        return out
     if file:
         if not out.get("found"):
             raise AssertionError(f"open_file: no file dialog titled {title!r} is open")
@@ -1128,6 +1159,7 @@ class Runner:
         self.failure_words, self.failure_ignore = list(FAILURE_WORDS), []
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
+        self.typing, self.typing_cps = "fast", 12.0   # file-outcome-and-typing: the tape's typing mode
 
     def snapshot(self):
         sc, text = self.cua.call("get_window_state", dict(self.win))
@@ -1240,6 +1272,21 @@ class Runner:
         sc, _ = self.cua.call("list_windows", {})
         return {(w.get("window_id"), w.get("title"), w.get("is_on_screen"), w.get("minimized"))
                 for w in sc.get("windows", []) if w.get("pid") == self.win["pid"]}
+
+    def type_like_a_person(self, text, cps, secret=False):
+        """At about `cps` characters a second by the clock (file-outcome-and-typing D2): each call sends what is
+        due by then, so a slow driver call (0.3 s measured) sends a few characters at once instead of slowing
+        the pace; a little jitter keeps it from looking mechanical."""
+        t0, sent = time.time(), 0
+        while sent < len(text):
+            due = int((time.time() - t0) * cps) + 1
+            n = max(1, min(due - sent, len(text) - sent))
+            self.cua.call("type_text", {**self.win, "text": text[sent:sent + n], "delivery_mode": "foreground"},
+                          secret=secret)
+            sent += n
+            ahead = sent / cps - (time.time() - t0)
+            if ahead > 0:
+                time.sleep(ahead * random.uniform(0.8, 1.2))
 
     def signature(self):
         """What an action may change (D2): the window's tree without element indices, and its process's
@@ -1411,7 +1458,9 @@ class Runner:
             if self.dirty:
                 self.snapshot()
             lines = set(shape(self.tree).splitlines())
-        return {"ids": {w.get("window_id") for w in wins}, "pid": pid, "lines": lines, "all": wins}
+        f = ((arg.get("expect") or {}) if isinstance(arg, dict) else {}).get("file")
+        return {"ids": {w.get("window_id") for w in wins}, "pid": pid, "lines": lines, "all": wins,
+                "file": remote_file_state(self.cua.host, f) if f else None}
 
     def describe_front(self, before):
         """The window in front, from the window list (it answers when a dialog's UI Automation does not)."""
@@ -1504,7 +1553,7 @@ class Runner:
             # a named window counts in any process: Electron shows its file picker from another one (measured)
             named = [w for w in every if w.get("title") in (exp.get("opens"), exp.get("closes"))
                      and w.get("pid") != before["pid"]]
-            missing = self.outcome_missing(exp, wins + named, tree, read)
+            missing = self.outcome_missing(exp, wins + named, tree, read, before.get("file"))
             if not missing:
                 if exp:
                     logger.info("%s: outcome reached (%s)", what, ", ".join(k for k in exp if k != "timeout"))
@@ -1513,7 +1562,7 @@ class Runner:
                 raise OutcomeFailed(f"after {what}: " + "; ".join(missing))
             time.sleep(0.4)
 
-    def outcome_missing(self, exp, wins, tree, read):
+    def outcome_missing(self, exp, wins, tree, read, file_before=None):
         """The parts of `expect:` not reached yet, each as a plain sentence (D3)."""
         titles = {w.get("title") for w in wins if w.get("is_on_screen", True) is not False}
         titles |= {n[2] for n in map(parse, tree.splitlines()) if n and n[1] == "Window" and n[0] > 0}
@@ -1524,6 +1573,12 @@ class Runner:
             miss.append(f"the window {exp['closes']!r} is still open")
         if "shows" in exp and exp["shows"] not in tree and not any(exp["shows"] in t for t, _ in read.values()):
             miss.append(f"{exp['shows']!r} did not appear in the program's windows")
+        if "file" in exp:            # file-outcome-and-typing: checked last, it costs a round trip
+            now = remote_file_state(self.cua.host, exp["file"]) if not miss else None
+            if now is None:
+                miss.append(f"the file {exp['file']!r} did not appear")
+            elif now == file_before:
+                miss.append(f"the file {exp['file']!r} did not change")
         for key in ("value", "filled", "enabled"):
             if key not in exp:
                 continue
@@ -1630,6 +1685,13 @@ class Runner:
             else:
                 dialog = self.in_dialog(e) if label in CLOSE_LABELS else None
                 self.check_effect(before, what, close=dialog)
+        elif kind == "expect" and isinstance(arg, dict) and "file" in arg:
+            end = time.time() + float(arg.get("timeout", 8.0))   # file-outcome-and-typing: another program's file
+            while (state := remote_file_state(self.cua.host, arg["file"])) is None and time.time() < end:
+                time.sleep(2.0)
+            if state is None:
+                raise OutcomeFailed(f"the file {arg['file']!r} did not appear within {float(arg.get('timeout', 8.0)):g} s")
+            logger.info("file found on the target: %s (%d bytes)", arg["file"], state[0])
         elif kind == "expect" and isinstance(arg, dict) and "text" in arg:
             end = time.time() + arg.get("timeout", 8.0)      # data-driven-import: a message the program shows
             while True:
@@ -1665,12 +1727,23 @@ class Runner:
                               secret=a.get("secret", False))
                 self.dirty = True
                 return
+            mode = a.get("typing", self.typing)
+            if mode not in ("fast", "human", "paste"):
+                raise ValueError(f"type: typing must be fast, human or paste, not {mode!r}")
+            if mode == "paste" and a.get("secret"):
+                raise ValueError("type: a secret is never pasted (it would stay on the clipboard); use typing: fast")
             check = a.get("effect") != "none" and not a.get("secret") and not a.get("expect") and a["text"].strip()
             if check:
                 self.snapshot()
                 before = self.signature()
-            self.cua.call("type_text", {**self.win, "text": a["text"], "delivery_mode": "foreground"},
-                          secret=a.get("secret", False))
+            if mode == "paste":
+                os_clipboard(self.cua.host, a["text"], self.cua.audit)
+                self.cua.call("hotkey", {**self.win, "keys": ["ctrl", "v"], "delivery_mode": "foreground"})
+            elif mode == "human" and self.mode == "video":
+                self.type_like_a_person(a["text"], float(a.get("typing_cps", self.typing_cps)), a.get("secret", False))
+            else:
+                self.cua.call("type_text", {**self.win, "text": a["text"], "delivery_mode": "foreground"},
+                              secret=a.get("secret", False))
             if check:   # D3: the text must show, or the window at least change; a secret is never read back
                 self.check_effect(before, f"type {a['text'][:30]!r}", text=a["text"])
         elif kind == "hotkey":
@@ -1825,6 +1898,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     r = Runner(cua, a.mode)
     r.deny, r.expected = deny, expected_dialogs(tape, amap, plan)
     r.planned = r.expected                            # step-outcome-check D4: the same names, right after a step
+    r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
     r.failure_words += (amap or {}).get("failure_words") or []
     r.failure_ignore = (amap or {}).get("failure_ignore") or []
     rec_dir = rec_rel = None
@@ -2432,6 +2506,52 @@ def selftest():
         r.step({"type": {"env": "DESKTAPE_SELFTEST_PW"}}); raise AssertionError("expected ValueError")
     except ValueError as e:
         assert "secret: true" in str(e)
+    # file-outcome-and-typing: typing modes
+    calls = []
+    sc.on_click = lambda w, tool, args: (calls.append(args["text"]), setattr(w, "tree", w.tree + f'\n  - Text "{args["text"]}"'))
+    r.step({"type": {"text": "ab", "typing": "human"}}); assert calls == ["ab"], calls       # test mode: fast
+    r.mode, calls[:] = "video", []
+    r.step({"type": {"text": "ab", "typing": "human", "typing_cps": 1000}}); assert calls == ["a", "b"], calls
+    r.mode = "test"
+    for bad, word in (({"text": "x", "typing": "slow"}, "fast, human or paste"),
+                      ({"text": "pw", "typing": "paste", "secret": True}, "never pasted")):
+        try:
+            r.step({"type": bad}); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert word in str(e), e
+    sc.host, sc.audit = "fake", None
+    global os_clipboard
+    real_clip, pasted = os_clipboard, []
+    os_clipboard = lambda host, text, audit=None: pasted.append(text) or {"clip": True}
+    keys = []
+    real_call = sc.call
+    def call(tool, args, **kw):
+        if tool == "hotkey":
+            keys.append(args["keys"]); sc.tree += '\n  - Text "long text"'
+        return real_call(tool, args, **kw)
+    sc.call = call
+    try:
+        r.step({"type": {"text": "long text", "typing": "paste"}})
+    finally:
+        os_clipboard = real_clip; sc.call = real_call
+    assert pasted == ["long text"] and keys == [["ctrl", "v"]], (pasted, keys)
+    # file-outcome-and-typing: a file as an outcome
+    global remote_file_state
+    real_state, states = remote_file_state, {}
+    remote_file_state = lambda host, path: states.get(path)
+    try:
+        assert r.outcome_missing({"file": "out.xlsx"}, [], "", {}) == ["the file 'out.xlsx' did not appear"]
+        states["out.xlsx"] = (10, 5)
+        assert r.outcome_missing({"file": "out.xlsx"}, [], "", {}, (10, 5)) == ["the file 'out.xlsx' did not change"]
+        assert r.outcome_missing({"file": "out.xlsx"}, [], "", {}, (9, 4)) == []
+        assert r.outcome_missing({"file": "out.xlsx"}, [], "", {}, None) == []
+        r.step({"expect": {"file": "out.xlsx", "timeout": 0}})
+        try:
+            r.step({"expect": {"file": "none.xlsx", "timeout": 0}}); raise AssertionError("expected OutcomeFailed")
+        except OutcomeFailed as e:
+            assert "'none.xlsx' did not appear" in str(e), e
+    finally:
+        remote_file_state = real_state
     dlg = base + '\n  - Window "Delete?"\n    - [3] Button "OK" [actions=[invoke]]'
     sc = Screen(dlg, on_click=lambda w, tool, args: setattr(w, "tree", w.tree + '\n  - Text "busy"'))
     r = Runner(sc, "test"); r.focus("Main")

@@ -34,6 +34,10 @@ public class W {
   [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr h);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
@@ -68,6 +72,8 @@ if ($req.file) {
     # Vista-style dialog, so GetDlgItem on the dialog does not see it: search every descendant.
     $all = [W]::Descendants($h)
     $box = $all | Where-Object { [W]::GetDlgCtrlID($_) -eq 1148 } | Select-Object -First 1
+    # a folder picker (FOS_PICKFOLDERS) has a plain Edit, control 1152, instead (measured)
+    if (-not $box) { $box = $all | Where-Object { [W]::GetDlgCtrlID($_) -eq 1152 -and (ClassOf $_) -eq 'Edit' } | Select-Object -First 1 }
     $edit = [IntPtr]::Zero
     if ($box) {
       if ((ClassOf $box) -eq 'Edit') { $edit = $box }
@@ -99,6 +105,44 @@ if ($req.file) {
       }
     }
   }
+  $r | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $out
+  exit 0
+}
+
+# Clipboard mode, {"clip": "<text>"}: puts the text on this session's clipboard, for a paste (Ctrl+V is sent
+# by the driver). Writes {"clip": true} or {"clip": false, "error": "..."}.
+if ($null -ne $req.clip) {
+  $r = @{ clip = $false }
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    for ($i = 0; $i -lt 5 -and -not $r.clip; $i++) {     # another program may hold the clipboard a moment (measured)
+      try { [System.Windows.Forms.Clipboard]::SetText([string]$req.clip) } catch { Start-Sleep -Milliseconds 200; continue }
+      $got = [System.Windows.Forms.Clipboard]::GetText()
+      $r.clip = ($got -eq [string]$req.clip)
+      if (-not $r.clip) { Start-Sleep -Milliseconds 200 }
+    }
+    if (-not $r.clip) { $r.error = 'read back ' + $got.Length + ' characters of ' + ([string]$req.clip).Length + '; apartment ' + [Threading.Thread]::CurrentThread.ApartmentState }
+  } catch { $r.error = $_.Exception.Message }
+  $r | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $out
+  exit 0
+}
+
+# Click mode, {"hwnd": <window handle>, "xy": [x, y]}: one real click at screen point x,y (physical pixels),
+# only when that point belongs to that exact window (two windows may share a title). For permission prompts
+# that ignore UI Automation clicks.
+if ($req.hwnd) {
+  $h = [IntPtr][int64]$req.hwnd
+  $r = @{ sent = $false; front = ''; at = '' }
+  if ([W]::GetForegroundWindow() -ne $h) { [void][W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 300 }
+  $pt = New-Object W+POINT; $pt.X = [int]$req.xy[0]; $pt.Y = [int]$req.xy[1]
+  $hit = [W]::GetAncestor([W]::WindowFromPoint($pt), 2)        # GA_ROOT
+  $r.front = Front; $r.at = "$($pt.X),$($pt.Y)"
+  if ($hit -eq $h) {
+    [void][W]::SetCursorPos($pt.X, $pt.Y); Start-Sleep -Milliseconds 150
+    [W]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 60
+    [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    $r.sent = $true
+  } else { $r.hit = [int64]$hit }
   $r | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $out
   exit 0
 }

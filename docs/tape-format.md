@@ -10,6 +10,8 @@ name: add-marketplace-dialog          # used in run folder and video names
 app: Claude Desktop 3.6556 (Windows)  # free text, for the reader
 map: claude-desktop-win               # optional: maps/<name>.yaml, or a path
 video_pause: 1.2                      # optional: seconds after each step in video mode (default 1.2)
+typing: fast                          # optional: fast (default), human (a person's pace, video mode only) or paste
+typing_cps: 7                         # optional: characters a second for `human` (default 12)
 window: { width: 1280, height: 800 }  # optional: pin the window's frame (x, y default 0) after the first focus
 redact:                               # optional: boxes covered for the whole video, in screen pixels
   - { x: 0, y: 282, w: 286, h: 750 }
@@ -30,7 +32,7 @@ steps:
 | `click` | label, or `{label, role, prefix, nth, action}` | waits for an enabled element (up to 8 s), then clicks it through UI Automation; `action` picks e.g. `expand` or `select` |
 | `expect` | label, or `{label, role, prefix, nth, timeout}` | waits for the element; fails the run if it does not appear |
 | `absent` | label, or `{label, role, prefix, nth, timeout}` | waits until no such element is left; fails if one still is |
-| `type` | text, or `{text, secret}` | types into the focused window; `secret: true` keeps the text out of the audit log |
+| `type` | text, or `{text, secret, typing}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
 | `key` | a key name, as Cua Driver's `press_key` takes it | presses one key |
 | `hotkey` | a list of key names, as Cua Driver's `hotkey` takes them | presses a key combination |
 | `caption` | text | in video mode, shown from this step until the next caption, and written to the `.srt`; `""` ends the previous caption |
@@ -156,7 +158,28 @@ within `timeout` (10 s by default), or the step fails with a sentence naming wha
 | `value: {label, role?, id?, contains}` | that element's value contains the text | 'label' shows 'a', not 'b' |
 | `filled: {label, role?, id?}` | that element has a row or an item (a list, a grid, a combo's items) | 'label' stayed empty |
 | `enabled: {label, role?, id?}` | that control is enabled (it has actions) | 'label' is still disabled |
+| `file: <path>` | the file exists on the target and is new or changed since just before the action | the file 'p' did not appear / did not change |
 | `in: <title>` | (where `shows`, `value` and `filled` read, when the step has no window) | |
+
+`file:` takes a path on the target; environment variables are expanded there (`%USERPROFILE%\demo\out.xlsx`).
+As a step of its own, `expect: { file: …, timeout: 300 }` waits until the file exists: the way to wait for
+another program, such as Claude writing a file, by its result rather than by its screen.
+
+### Typing for a recording
+
+`typing: human` types at about `typing_cps` characters a second, by the clock, so a slow driver call sends a
+few characters at once instead of slowing the pace. It applies in video mode only; a test types fast.
+`typing: paste` puts the text on the target's clipboard and pastes it with Ctrl+V: long text goes in at once,
+the way a person pastes it. A secret is never pasted, because it would stay on the clipboard. A step's own
+`typing:` overrides the tape's:
+
+```yaml
+typing: human
+typing_cps: 7
+steps:
+  - type: "Itt a beszállító novemberi árlistája. Vidd fel az új árakat a programba."
+  - type: { text: "https://github.com/…/plugins.git", typing: paste }
+```
 
 A map entry can carry `expect:` too. It is the default for every step that uses the entry, and a step's own
 `expect:` replaces it whole. With `expect:`, the effect check above gives way to the outcome.
