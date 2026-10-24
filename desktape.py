@@ -639,10 +639,16 @@ def substitute(obj, values):
 
 
 def upload_vars(host, uploads, values):
-    """Copy each @file to %USERPROFILE%\\desktape\\in on the target; its variable becomes that path."""
+    """Copy each @file to %USERPROFILE%\\desktape\\in on the target; its variable becomes that path. On a local
+    target the file is used where it is."""
     if not uploads:
         return values
     t = Target(host)
+    if t.local:          # claude-plugin: the file is already here; its own path, not a copy under the profile
+        for name, path in uploads.items():
+            values[name] = os.path.abspath(path)
+            logger.info("local target: ${%s} is %s, used in place", name, values[name])
+        return values
     t.sh(r"if not exist %USERPROFILE%\desktape\in mkdir %USERPROFILE%\desktape\in")
     profile = t.sh("echo %USERPROFILE%").stdout.strip() if not t.local else os.environ.get("USERPROFILE", "")
     for name, path in uploads.items():

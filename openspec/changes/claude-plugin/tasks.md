@@ -7,6 +7,7 @@
 ## 2. desktape.py
 - [x] 2.1 Inline script metadata (PEP 723) [REQ: no-hand-installed-python]
 - [x] 2.2 `doctor [--local] [--video]` with per-OS install commands [REQ: prerequisites-checked-and-named]
+- [x] 2.4 A `@file` input on a local target is used in place, not copied under the user's profile (its path shows in file dialogs, and in a recording) [REQ: runs-outside-the-plugin-s-folder]
 - [x] 2.3 `DESKTAPE_RUNS` [REQ: runs-outside-the-plugin-s-folder]
 
 ## 3. Tests, docs, measurement
