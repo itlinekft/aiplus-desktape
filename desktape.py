@@ -4,16 +4,18 @@
   desktape.py run TAPE [--mode test|video]       a tape, as a test or as a captioned video
   desktape.py look [--window T] [--ocr] [--full]  what the window shows, cheapest form first
   desktape.py act 'STEP' [--map M] [--append TAPE] one step; appended to the tape only if it passed
+  desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py --selftest                          offline checks, no host needed
 
 Host: --host, else DESKTAPE_HOST (user@host of the Windows machine).
 Test mode runs as fast as the UI allows. Video mode records the screen (Cua start_recording), pauses
 between steps, and burns the tape's captions into the video afterwards.
 Every tool call is appended to runs/<stamp>/audit.jsonl. Only tools on ALLOWED can be called.
+One session drives a target at a time: run, look and act wait for, or stop on, another session's lock.
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, json, logging, os, re, shutil, subprocess, sys, tempfile, time
+import argparse, contextlib, json, logging, os, re, shutil, subprocess, sys, tempfile, time
 
 import yaml
 
@@ -159,6 +161,177 @@ class Cua:
 
     def close(self):
         self.p.stdin.close(); self.p.terminate(); self.audit.close(); self.err.close()
+
+
+# ---- one driver session per target (box-lock) ---------------------------------------------------
+
+LEASE = 180.0         # seconds a holder keeps the target after its command ends (box-lock D2)
+LOCK_WAIT = 60.0      # seconds a second session waits before it stops (box-lock D3)
+
+
+class TargetBusy(RuntimeError):
+    """Another session holds the target (box-lock D3)."""
+
+
+def lock_dir():
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else \
+        (os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"))
+    return os.path.join(base, "desktape", "locks")
+
+
+def pid_alive(pid):
+    """Is this process still running? On Windows os.kill would terminate it, so ask the kernel instead."""
+    if not pid:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, int(pid))          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        k.GetExitCodeProcess(h, ctypes.byref(code)); k.CloseHandle(h)
+        return code.value == 259                             # STILL_ACTIVE
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def describe_lock(cur):
+    """`project (command, since 10:27:25, running as pid N)`, or `…, lease until …` once it ended."""
+    hm = lambda t: time.strftime("%H:%M:%S", time.localtime(t or 0))
+    state = f"running as pid {cur['pid']}" if cur.get("pid") else f"lease until {hm(cur.get('until'))}"
+    return f"{cur.get('label') or cur.get('holder')} ({cur.get('command')}, since {hm(cur.get('since'))}, {state})"
+
+
+class BoxLock:
+    """The lock file of one target on this controller (box-lock D1). The holder is the agent's session
+    (D2): DESKTAPE_HOLDER, else CLAUDE_CODE_SESSION_ID, else this process, which then keeps no lease."""
+
+    def __init__(self, host, directory=None, alive=pid_alive, now=time.time):
+        self.dir, self.host, self.alive, self.now = directory or lock_dir(), host, alive, now
+        self.path = os.path.join(self.dir, re.sub(r"[^\w.@-]+", "_", host) + ".json")
+        self.mutex = self.path[:-len(".json")] + ".mutex"
+        h = os.environ.get("DESKTAPE_HOLDER") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        self.holder, self.keeps = (h, True) if h else (f"pid{os.getpid()}", False)
+        self.label = os.environ.get("DESKTAPE_LABEL") or os.path.basename(os.getcwd())
+
+    def _under_mutex(self, fn):
+        os.makedirs(self.dir, exist_ok=True)
+        end = time.time() + 5
+        while True:
+            try:
+                os.close(os.open(self.mutex, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(self.mutex) > 10:
+                        logger.warning("removing a leftover lock mutex %s", self.mutex)
+                        os.remove(self.mutex)
+                        continue
+                except FileNotFoundError:
+                    continue
+                if time.time() > end:
+                    raise TargetBusy(f"the lock mutex {self.mutex} stays taken")
+                time.sleep(0.05)
+        try:
+            return fn()
+        finally:
+            try:
+                os.remove(self.mutex)
+            except FileNotFoundError:
+                logger.warning("lock mutex %s was already gone", self.mutex)
+
+    def read(self):
+        try:
+            return json.load(open(self.path, encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            logger.warning("unreadable lock file %s: treating %s as free", self.path, self.host)
+            return None
+
+    def _write(self, cur):
+        json.dump(cur, open(self.path, "w", encoding="utf-8"))
+
+    def held_by(self, cur):
+        """The lock that keeps this holder out, or None: free, ours, or a holder gone with its lease over."""
+        if not cur or cur.get("holder") == self.holder:
+            return None
+        if self.alive(cur.get("pid")) or (cur.get("until") or 0) > self.now():
+            return cur
+        return None
+
+    def try_acquire(self, command):
+        def take():
+            cur = self.read()
+            other = self.held_by(cur)
+            if other:
+                return other
+            mine = cur and cur.get("holder") == self.holder
+            if cur and not mine:
+                logger.info("taking %s over from %s: its process is gone and its lease is over",
+                            self.host, describe_lock(cur))
+            t = self.now()
+            self._write({"holder": self.holder, "label": self.label, "pid": os.getpid(), "command": command,
+                         "since": cur["since"] if mine else t, "until": t + (LEASE if self.keeps else 0)})
+            return None
+        return self._under_mutex(take)
+
+    def acquire(self, command, wait=LOCK_WAIT):
+        end, told = time.time() + wait, False
+        while True:
+            other = self.try_acquire(command)
+            if not other:
+                logger.debug("lock on %s taken by %s (pid %s) for %r", self.host, self.label, os.getpid(), command)
+                return
+            if time.time() >= end:
+                raise TargetBusy(f"{self.host} is held by {describe_lock(other)}; try again later")
+            if not told:
+                logger.info("%s is held by %s; waiting up to %d s", self.host, describe_lock(other), wait)
+                told = True
+            time.sleep(2.0)
+
+    def release(self):
+        """End of a command: an agent session keeps a lease for its next step; a bare process lets go."""
+        def give():
+            cur = self.read()
+            if not cur or cur.get("holder") != self.holder:
+                logger.warning("lock on %s is not ours any more at release: %s", self.host, cur and describe_lock(cur))
+                return
+            if self.keeps:
+                cur.update(pid=None, until=self.now() + LEASE)
+                self._write(cur)
+            else:
+                os.remove(self.path)
+        self._under_mutex(give)
+
+    def unlock(self):
+        """Give back our own lock now. Returns None when done, else why not."""
+        def drop():
+            cur = self.read()
+            if not cur:
+                return "not held"
+            if cur.get("holder") != self.holder:
+                return f"held by another session, {describe_lock(cur)}; only the holder can unlock"
+            os.remove(self.path)
+            logger.info("lock on %s given back by %s", self.host, self.label)
+            return None
+        return self._under_mutex(drop)
+
+
+@contextlib.contextmanager
+def box_lock(host, command):
+    lk = BoxLock(host)
+    lk.acquire(command)
+    try:
+        yield lk
+    finally:
+        lk.release()
 
 
 # ---- the app map (design D3) -------------------------------------------------------------------
@@ -630,6 +803,11 @@ def cmd_run(a):
     check_tape_deny(plan, deny)                      # … and so does a click the map denies
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
+    with box_lock(a.host, f"run {a.tape}"):          # box-lock: after the offline checks, so a broken tape never waits
+        return run_tape(a, tape, amap, plan, deny, tape_boxes, redacting)
+
+
+def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting):
     run_dir = new_run_dir(tape["name"], a.mode)
     stamp = os.path.basename(run_dir).split("-")[0] + "-" + os.path.basename(run_dir).split("-")[1]
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
@@ -738,6 +916,11 @@ def look_lines(tree_text, ignore, full=False, texts=False, new=False, grep=None,
 
 
 def cmd_look(a):
+    with box_lock(a.host, "look"):
+        return look(a)
+
+
+def look(a):
     run_dir = new_run_dir("look", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     try:
@@ -783,10 +966,16 @@ def cmd_act(a):
     map_name = a.map or (yaml.safe_load(open(a.append, encoding="utf-8")).get("map") if a.append else None)
     amap = load_map(map_name)
     s, entry = resolve(step, amap)
+    deny = deny_entries(amap)
+    with box_lock(a.host, f"act {a.step}"):
+        return act_step(a, step, amap, s, entry, deny)
+
+
+def act_step(a, step, amap, s, entry, deny):
     run_dir = new_run_dir("act", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     r = Runner(cua, "test")
-    r.deny = deny_entries(amap)          # replay-guards D1: an agent learning a flow cannot click it either
+    r.deny = deny                        # replay-guards D1: an agent learning a flow cannot click it either
     try:
         if "focus" not in s:
             r.focus(a.window or (amap["window"] if amap else "Claude"))
@@ -808,6 +997,22 @@ def cmd_act(a):
         append_step(a.append, step)
         print(f"appended to {a.append}")
     return 0
+
+
+def cmd_lock(a):
+    lk = BoxLock(a.host)
+    cur = lk.read()
+    other = lk.held_by(cur)
+    print(f"{a.host}: " + ("held by " + describe_lock(other) if other else
+                           ("held by this session, " + describe_lock(cur) if cur and cur.get("holder") == lk.holder
+                            else "free")))
+    return 0
+
+
+def cmd_unlock(a):
+    why = BoxLock(a.host).unlock()
+    print(f"{a.host}: " + (why or "given back"))
+    return 0 if why in (None, "not held") else 1
 
 
 # ---- offline selftest --------------------------------------------------------------------------
@@ -1017,6 +1222,44 @@ def selftest():
         assert 'dialog "Are you sure?"' in str(e), e
     r.expected = None; r.check_dialogs()                     # act and look: no dialog check
     logger.setLevel(level)
+    # box-lock: free, held by a live process, by a lease, a crashed holder, the same holder, unlock.
+    with tempfile.TemporaryDirectory() as d:
+        clock, live = [1000.0], set()
+        env = {k: os.environ.pop(k, None) for k in ("DESKTAPE_HOLDER", "CLAUDE_CODE_SESSION_ID", "DESKTAPE_LABEL")}
+        try:
+            def as_(holder, label):
+                os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = holder, label
+                return BoxLock("user@box", d, alive=lambda p: p in live, now=lambda: clock[0])
+            a, b = as_("A", "proj-a"), as_("B", "proj-b")
+            assert a.try_acquire("run x.yaml") is None
+            live.add(os.getpid())                            # A's command is running
+            other = b.try_acquire("look")
+            assert other and other["holder"] == "A" and "running as pid" in describe_lock(other), other
+            a.release(); live.clear()                        # A's command ended: its lease keeps the target
+            assert b.try_acquire("look")["holder"] == "A" and a.try_acquire("act y") is None
+            a.release(); clock[0] += LEASE + 1               # the lease ran out
+            assert b.try_acquire("look") is None and b.read()["holder"] == "B"
+            assert a.unlock().startswith("held by another session") and b.read()["holder"] == "B"
+            assert b.unlock() is None and a.read() is None and a.unlock() == "not held"
+            clock[0] += 5; assert a.try_acquire("run z") is None   # crashed: pid gone, its own until set at start
+            clock[0] += LEASE + 1; assert b.try_acquire("look") is None
+            t0 = time.time()
+            try:
+                a.acquire("look", wait=0); raise AssertionError("expected TargetBusy")
+            except TargetBusy as e:
+                assert "user@box is held by proj-b (look, since" in str(e) and time.time() - t0 < 1, e
+            open(a.mutex, "w").close(); os.utime(a.mutex, (time.time() - 60,) * 2)
+            logger.setLevel(logging.ERROR)
+            assert b.try_acquire("look") is None and not os.path.exists(a.mutex)   # a leftover mutex is cleared
+            logger.setLevel(level)
+            del os.environ["DESKTAPE_HOLDER"]
+            p = BoxLock("user@box", d, alive=lambda p: False, now=lambda: clock[0])
+            assert not p.keeps and p.holder == f"pid{os.getpid()}"
+        finally:
+            for k, v in env.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
     real = load_map("claude-desktop-win")
     for name in sorted(os.listdir(os.path.join(HERE, "tapes"))):   # every bundled tape resolves on its map
         if name.endswith((".yaml", ".yml")):
@@ -1043,6 +1286,8 @@ def main():
     p.add_argument("--all", action="store_true", help="ignore the map's ignore regions")
     p = sub.add_parser("act"); p.add_argument("step"); p.add_argument("--map"); p.add_argument("--window")
     p.add_argument("--append")
+    sub.add_parser("lock", help="who holds the target (box-lock)")
+    sub.add_parser("unlock", help="give back this session's lock on the target now")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
     argv = sys.argv[1:]
     if argv and argv[0].endswith((".yaml", ".yml")):
@@ -1055,7 +1300,10 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")   # labels are UTF-8, whatever the console's code page
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        return {"run": cmd_run, "look": cmd_look, "act": cmd_act}[a.cmd](a)
+        return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock}[a.cmd](a)
+    except TargetBusy as e:        # box-lock D3: another session drives this target
+        print(f"desktape: {e}", file=sys.stderr)
+        return 3
     except KeyError as e:          # a map name the map lacks: say which, no traceback
         print(f"desktape: {e.args[0]}", file=sys.stderr)
         return 2

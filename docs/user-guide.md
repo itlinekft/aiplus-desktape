@@ -139,6 +139,16 @@ authors or repairs a tape, and a replay spends none. A prompt that works:
 > after every click that opens something. When it is done, run it in test mode, then in video mode with
 > captions.
 
+**One session drives a target at a time.** `run`, `look` and `act` take a lock on the target; there is
+nothing to switch on. The lock belongs to the agent's session (Claude Code's session id, or
+`DESKTAPE_HOLDER`), not to one command, and after each command the session keeps the target for 180 s, so
+its next `look` or `act` gets it first. Another session waits up to 60 s, then stops with exit code 3 and a
+line naming the holder: its project (the working directory, or `DESKTAPE_LABEL`), its command, since when,
+and whether it still runs. `desktape.py lock` shows who holds the target; `desktape.py unlock` gives back
+your own lock early, for example at the end of a flow. A holder that crashed frees the target once its
+lease runs out. The lock lives on the controller, so two controllers on different machines do not see each
+other's locks.
+
 ## 8. Troubleshooting
 
 | Message | Cause and fix |

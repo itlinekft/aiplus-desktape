@@ -29,7 +29,10 @@ Status: **early**. The tape format and the commands may still change.
   the tape from it.
 - **Safety:** a default-deny tool allowlist, an audit log of every call with secrets redacted, and the
   driver's telemetry, update check and script runner switched off. A video can cover the user's own
-  content with redaction boxes, and then keeps no unredacted copy.
+  content with redaction boxes, and then keeps no unredacted copy. A map can deny clicks on dangerous
+  controls, and a replay stops on a dialog the tape did not plan.
+- **One session per target:** `run`, `look` and `act` lock the target, so two agents cannot drive one
+  desktop at once; the second waits, then stops naming the holder (`desktape.py lock` shows it).
 
 Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with the model.
 
