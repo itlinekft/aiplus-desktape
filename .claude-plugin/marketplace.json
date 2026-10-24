@@ -1,0 +1,16 @@
+{
+  "name": "desktape",
+  "owner": { "name": "desktape authors" },
+  "metadata": {
+    "description": "desktape: Claude drives Windows desktop programs through recorded tapes."
+  },
+  "plugins": [
+    {
+      "name": "desktape",
+      "source": "./",
+      "version": "0.1.0",
+      "description": "Drive a Windows desktop program that has no API through recorded tapes, checked step by step.",
+      "category": "productivity"
+    }
+  ]
+}

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pyyaml>=6.0"]
+# ///
 """desktape — drive a remote desktop through Cua Driver over SSH: run a YAML tape, look, act.
 
   desktape.py run TAPE [--mode test|video]       a tape, as a test or as a captioned video
@@ -7,6 +11,7 @@
   desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py targets                             the named targets, with lock and status
+  desktape.py doctor [--local] [--video]          what this machine still needs, with the command for each
   desktape.py --selftest                          offline checks, no host needed
 
 Target: --host user@host or --target NAME, else DESKTAPE_TARGET, else DESKTAPE_HOST, else the default in
@@ -27,6 +32,8 @@ import yaml
 
 logger = logging.getLogger("desktape")
 HERE = os.path.dirname(os.path.abspath(__file__))
+# claude-plugin: a plugin's copy of the repository is not written to; DESKTAPE_RUNS names the run folder
+RUNS = os.path.expandvars(os.path.expanduser(os.environ.get("DESKTAPE_RUNS") or os.path.join(HERE, "runs")))
 EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
 ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_text", "press_key",
            "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state",
@@ -1864,7 +1871,7 @@ def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name)
 
 
 def new_run_dir(name, mode):
-    d = os.path.join(HERE, "runs", f"{time.strftime('%Y%m%d-%H%M%S')}-{name}-{mode}")
+    d = os.path.join(RUNS, f"{time.strftime('%Y%m%d-%H%M%S')}-{name}-{mode}")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -2033,7 +2040,7 @@ def look(a):
         cua.close()
     title = window_title(a)
     amap = load_map(a.map)
-    state = os.path.join(HERE, "runs", ".look", re.sub(r"[^\w.-]+", "_", title) + ("-text" if a.text else "") + ".txt")
+    state = os.path.join(RUNS, ".look", re.sub(r"[^\w.-]+", "_", title) + ("-text" if a.text else "") + ".txt")
     lines, hidden, unchanged = look_lines(r.tree, None if a.all else (amap or {}).get("ignore"), full=a.full,
                                           texts=a.text, new=a.new, grep=a.grep, state=state)
     what = "tree lines" if a.full else "elements and dialogs" + (" and texts" if a.text else "")
@@ -2164,6 +2171,51 @@ def cmd_status(a):
     cur = BoxLock(a.host).read()
     print(json.dumps(cur, ensure_ascii=False, indent=2) if a.json else status_line(a.host, cur))
     return 0
+
+
+# claude-plugin D1: the one command per OS that installs each piece; doctor prints them, it never runs them (D2)
+INSTALL = {
+    "uv": {"win32": "winget install --id astral-sh.uv -e", "darwin": "brew install uv",
+           "linux": "curl -LsSf https://astral.sh/uv/install.sh | sh"},
+    "pyyaml": {"any": "uv run desktape.py …  (uv brings PyYAML; without uv: python -m pip install --user pyyaml)"},
+    "ssh": {"win32": "Settings › System › Optional features › OpenSSH Client", "darwin": "(built in)",
+            "linux": "sudo apt install openssh-client  (or your distribution's package)"},
+    "driver": {"win32": "the pinned Cua Driver install, in the desktop session, not over SSH: docs/windows-setup.md §2"},
+    "ffmpeg": {"win32": "winget install --id Gyan.FFmpeg -e"},
+}
+
+
+def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.exists, platform=sys.platform):
+    """[(ok, piece, detail)] for what this machine needs (claude-plugin): the controller always; a Windows
+    target on this machine with `local`; recording with `video`."""
+    osname = "win32" if platform.startswith("win") else "darwin" if platform == "darwin" else "linux"
+    how = lambda piece: INSTALL[piece].get(osname) or INSTALL[piece].get("any") or "see docs/install.md"
+    rows = [(sys.version_info >= (3, 9), "Python 3.9+", f"{sys.version.split()[0]}" if sys.version_info >= (3, 9)
+             else how("uv")), (True, "PyYAML", yaml.__version__)]
+    rows.append((bool(which("uv")), "uv", "found" if which("uv") else how("uv")))
+    if local:
+        if osname != "win32":
+            rows.append((False, "Windows", "--local drives the driver on this machine, which must be Windows"))
+        else:
+            rows.append((exists(os.path.expandvars(EXE)), "Cua Driver 0.34.1", os.path.expandvars(EXE)
+                         if exists(os.path.expandvars(EXE)) else how("driver")))
+            if video:
+                rows.append((exists(os.path.expandvars(FFMPEG_WIN)), "ffmpeg (video)",
+                             "found" if exists(os.path.expandvars(FFMPEG_WIN)) else how("ffmpeg")))
+    else:
+        rows.append((bool(which("ssh")), "ssh client", "found" if which("ssh") else how("ssh")))
+    return rows
+
+
+def cmd_doctor(a):
+    rows = doctor_report(a.local, a.video)
+    for ok, piece, detail in rows:
+        print(f"{'ok     ' if ok else 'MISSING'}  {piece}: {detail}")
+    missing = [p for ok, p, _ in rows if not ok]
+    print("everything is in place" if not missing else
+          f"{len(missing)} missing: install each with the command shown, then run doctor again")
+    logger.info("doctor: %d checked, %d missing%s", len(rows), len(missing), f" ({', '.join(missing)})" if missing else "")
+    return 0 if not missing else 1
 
 
 def cmd_targets(a):
@@ -2805,6 +2857,17 @@ def selftest():
             m = load_map(tape.get("map"))
             check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
     assert real["window"] == "Claude"
+    assert RUNS == os.path.expandvars(os.path.expanduser(os.environ.get("DESKTAPE_RUNS") or os.path.join(HERE, "runs")))
+    # claude-plugin: doctor names what is missing with the command for this OS, and installs nothing
+    rows = doctor_report(local=True, video=True, which=lambda x: None, exists=lambda p: False, platform="win32")
+    bad = {p: d for ok, p, d in rows if not ok}
+    assert set(bad) == {"uv", "Cua Driver 0.34.1", "ffmpeg (video)"}, bad
+    assert bad["uv"].startswith("winget install --id astral-sh.uv") and "windows-setup.md" in bad["Cua Driver 0.34.1"]
+    rows = doctor_report(local=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: True, platform="linux")
+    assert [p for ok, p, _ in rows if not ok] == ["Windows"], rows
+    rows = doctor_report(which=lambda x: "/bin/" + x, platform="darwin")
+    assert all(ok for ok, _, _ in rows) and {p for _, p, _ in rows} == {"Python 3.9+", "PyYAML", "uv", "ssh client"}, rows
+    assert doctor_report(which=lambda x: None, platform="darwin")[2][2] == "brew install uv"
     print("selftest ok")
     return 0
 
@@ -2834,6 +2897,9 @@ def main():
     sub.add_parser("lock", help="who holds the target (box-lock)")
     sub.add_parser("unlock", help="give back this session's lock on the target now")
     sub.add_parser("targets", help="the named targets, with lock and status")
+    p = sub.add_parser("doctor", help="what this machine still needs, with the command that installs each")
+    p.add_argument("--local", action="store_true", help="a Windows target on this machine")
+    p.add_argument("--video", action="store_true", help="recording videos too")
     p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
     p.add_argument("--json", action="store_true")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
@@ -2849,6 +2915,8 @@ def main():
     try:
         if a.cmd == "targets":
             return cmd_targets(a)
+        if a.cmd == "doctor":
+            return cmd_doctor(a)
         a.host, a.target = choose_target(a.host, a.target)     # target-profiles
         if not a.host:
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "

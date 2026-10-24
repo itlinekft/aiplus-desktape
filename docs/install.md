@@ -7,6 +7,11 @@ is in [`windows-setup.md`](windows-setup.md); this page is the inventory. Versio
 **Controller** is the machine desktape runs on (Linux, or the Windows target itself in local mode).
 **Target** is the Windows machine it drives.
 
+`desktape.py doctor [--local] [--video]` checks this inventory on the machine it runs on and prints, for each
+missing piece, the command that installs it; as a Claude plugin, Claude runs those commands with the person's
+approval. With [uv](https://docs.astral.sh/uv/) (`winget install --id astral-sh.uv -e`, `brew install uv`), `uv
+run desktape.py …` needs no Python or PyYAML installed: the script declares them (PEP 723).
+
 ## Controller
 
 | What | Needed for | Measured | Admin | Source | Check |
