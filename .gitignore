@@ -19,3 +19,7 @@ set/
 .claude/.set-version
 CLAUDE.local.md
 !site/demo.mp4
+.claude/hooks/
+.claude/skills/handoff/
+.claude/skills/auto-clear/
+.claude/handoff.profile.md
