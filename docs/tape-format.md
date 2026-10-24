@@ -190,7 +190,9 @@ While a step waits, **the program's own failure fails it at once**. That is a wi
 step, or a line that was not in the window before it, containing a failure word: *hiba, hibát, nem található,
 nem sikerült, sikertelen, érvénytelen, nincs telepítve, nem lehet, error, invalid, failed, not found,
 cannot, …* (whole words, so "0 db hibás" is not one). The step quotes the window's title and text. A map adds
-words with `failure_words:`, and removes harmless phrases with `failure_ignore:`.
+words with `failure_words:`, and removes harmless phrases with `failure_ignore:`. A map for a program whose
+window shows free text, such as a chat, sets `failure_lines: false`: then only a new window or dialog counts,
+not a new line in the window.
 
 **A window nobody planned** fails the step right after it, in `act` as in `run`. That is a new window of the
 program that the step's `expect.opens` doesn't name and the tape's `dialogs:` doesn't list (for `act`, the

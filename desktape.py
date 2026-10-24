@@ -1170,6 +1170,7 @@ class Runner:
         self.planned = None      # dialog titles a step may open without naming them (step-outcome-check D4)
         self.blocked_by = None   # what held the window when focus could not bring it to the front
         self.failure_words, self.failure_ignore = list(FAILURE_WORDS), []
+        self.failure_lines = True  # map `failure_lines: false`: a chat's text is content, only new windows count
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
         self.typing, self.typing_cps = "fast", 12.0   # file-outcome-and-typing: the tape's typing mode
@@ -1555,7 +1556,7 @@ class Runner:
             elif needs_tree and exp.get("in"):
                 w = next((w for w in wins if w.get("title") == exp["in"]), None)
                 tree = self.read_window(w)[0] if w else ""
-            if before["lines"] is not None and alive:
+            if before["lines"] is not None and alive and self.failure_lines:
                 for line in shape(tree).splitlines():
                     if line in before["lines"]:
                         continue
@@ -1914,6 +1915,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
     r.failure_words += (amap or {}).get("failure_words") or []
     r.failure_ignore = (amap or {}).get("failure_ignore") or []
+    r.failure_lines = (amap or {}).get("failure_lines", True) is not False
     rec_dir = rec_rel = None
     if a.mode == "video":
         # The daemon has no HOME on Windows, so the recording directory must be absolute.
@@ -2117,6 +2119,7 @@ def act_step(a, step, amap, s, entry, deny, lk=None, tape=None):
     r.planned = expected_dialogs(tape or {}, amap, [(s, None)] + ([({"focus": a.window}, None)] if a.window else []))
     r.failure_words += (amap or {}).get("failure_words") or []
     r.failure_ignore = (amap or {}).get("failure_ignore") or []
+    r.failure_lines = (amap or {}).get("failure_lines", True) is not False
     try:
         kind, arg = next(iter(s.items()))
         if "focus" not in s and kind != "open_file" and not (isinstance(arg, dict) and arg.get("into")):
@@ -2603,6 +2606,11 @@ def selftest():
     finally:
         os_clipboard = real_clip; sc.call = real_call
     assert pasted == ["long text"] and keys == [["ctrl", "v"]], (pasted, keys)
+    # a map's failure_lines: false — a new line saying "failed" is content, not a failure
+    sc.tree = base + '\n  - Text "x"'; r.failure_lines = False; sc.on_click = lambda w, tool, args: setattr(
+        w, "tree", w.tree + '\n  - Text "a failed step leaves a repair note"')
+    r.step({"click": {"label": "Apply", "expect": {"shows": "repair note"}}})
+    r.failure_lines = True
     # file-outcome-and-typing: a file as an outcome
     global remote_file_state
     real_state, states = remote_file_state, {}

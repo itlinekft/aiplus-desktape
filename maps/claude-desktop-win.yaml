@@ -5,6 +5,10 @@
 app: Claude Desktop
 version: "3.6556.2.0 (Microsoft Store build)"
 window: Claude
+# A chat's text is content: a reply or a plugin description that says "failed" is not Claude reporting an
+# error. Only a new window or dialog with a failure word fails a step (measured 2026-10-24: the plugin page's
+# "a failed step leaves a repair note" stopped a click).
+failure_lines: false
 
 # Hidden from `look` and repair bundles (`look --all` shows them), named by fixed elements only.
 ignore:
