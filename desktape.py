@@ -709,6 +709,16 @@ def shape(tree_text):
     return "\n".join(INDEX.sub("", l) for l in tree_text.splitlines() if l.lstrip().startswith("- "))
 
 
+# covered-window-guard: windows that are always on top and cover nothing a person would close
+SHELL_WINDOWS = {("cua-driver.exe", None), ("TextInputHost.exe", None), ("explorer.exe", "Program Manager"),
+                 ("explorer.exe", "PopupHost")}
+
+
+def overlap(a, b):
+    return (a and b and min(a["x"] + a["width"], b["x"] + b["width"]) > max(a["x"], b["x"])
+            and min(a["y"] + a["height"], b["y"] + b["height"]) > max(a["y"], b["y"]))
+
+
 class NoEffect(AssertionError):
     """A step the driver accepted that changed nothing it should have (step-effect-check D2, D3)."""
 
@@ -751,9 +761,30 @@ class Runner:
                   if w.get("pid") == self.win["pid"] and w.get("window_id") != self.win["window_id"]
                   and w.get("window_id") not in self.baseline and w.get("title")]
         bad = [f'{kind} "{title}"' for title, kind in found if not self.expected(title)]
+        self.check_covered(sc.get("windows", []))
         if bad:
             logger.warning("unexpected %s in %r (pid %s)", ", ".join(bad), self.title, self.win["pid"])
             raise AssertionError(f"unexpected {', '.join(bad)}: name it in the tape's `dialogs:` if it is planned")
+
+    def covering(self, windows):
+        """Other programs' windows on screen above the focused one and overlapping it (covered-window-guard)."""
+        me = next((w for w in windows if w.get("window_id") == self.win["window_id"]), None)
+        if not me or me.get("z_index") is None:
+            return []
+        return [f'"{w.get("title")}" ({w.get("app_name")})' for w in windows
+                if w.get("pid") != self.win["pid"] and w.get("is_on_screen") and not w.get("minimized")
+                and (w.get("z_index") or -1) > me["z_index"] and overlap(me.get("bounds"), w.get("bounds"))
+                and (w.get("app_name"), None) not in SHELL_WINDOWS and (w.get("app_name"), w.get("title")) not in SHELL_WINDOWS]
+
+    def check_covered(self, windows):
+        """A run stops when another program covers its window; act and look only warn."""
+        cover = self.covering(windows)
+        if not cover:
+            return
+        logger.warning("window %r is covered by %s", self.title, ", ".join(cover))
+        if self.expected is not None:
+            raise AssertionError(f"window {self.title!r} is covered by another program's window: {', '.join(cover)}; "
+                                 "close it, then run again")
 
     def process_windows(self):
         sc, _ = self.cua.call("list_windows", {})
@@ -864,6 +895,7 @@ class Runner:
             # driver-autostart: UI Automation still reaches the window; a step that needs the focus fails itself
             logger.warning("window %r (pid %s) is raised but Windows kept the foreground elsewhere; continuing",
                            title, w["pid"])
+        self.check_covered(self.cua.call("list_windows", {})[0].get("windows", []))   # after bring_to_front
         if w.get("minimized"):
             # runner-robustness D1: bring_to_front restores it at its previous frame
             logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
@@ -1668,6 +1700,32 @@ def selftest():
         os.environ.pop("DESKTAPE_CALL_DEADLINE", None)
     else:
         os.environ["DESKTAPE_CALL_DEADLINE"] = scale0
+    logger.setLevel(level)
+    # covered-window-guard: another program's window on top stops a run and warns in act.
+    class Stack:
+        def __init__(self, extra):
+            self.extra = extra
+        def call(self, tool, args, secret=False):
+            if tool == "list_windows":
+                return {"windows": [{"title": "Claude", "pid": 1, "window_id": 10, "z_index": 5, "is_on_screen": True,
+                                     "app_name": "claude.exe", "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1032}},
+                                    {"title": "Cua.AgentCursorOverlay.default", "pid": 2, "window_id": 11, "z_index": 9,
+                                     "is_on_screen": True, "app_name": "cua-driver.exe",
+                                     "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1080}}] + self.extra}, ""
+            return {}, "ok"
+    q = {"title": "Kérdés", "pid": 3, "window_id": 12, "z_index": 7, "is_on_screen": True, "app_name": "app.exe",
+         "bounds": {"x": 746, "y": 390, "width": 300, "height": 160}}
+    level = logger.level; logger.setLevel(logging.CRITICAL)
+    r = Runner(Stack([q]), "test"); r.expected = lambda t: True
+    try:
+        r.focus("Claude"); raise AssertionError("expected AssertionError")
+    except AssertionError as e:
+        assert '"Kérdés" (app.exe)' in str(e), e
+    r = Runner(Stack([q]), "test"); r.focus("Claude")                      # act and look: a warning only
+    assert r.covering(Stack([q]).call("list_windows", {})[0]["windows"]) == ['"Kérdés" (app.exe)']
+    for other in ({**q, "z_index": 3}, {**q, "bounds": {"x": 2000, "y": 0, "width": 10, "height": 10}},
+                  {**q, "is_on_screen": False}):
+        r = Runner(Stack([other]), "test"); r.expected = lambda t: True; r.focus("Claude")   # below, apart, hidden
     logger.setLevel(level)
     real = load_map("claude-desktop-win")
     for name in sorted(os.listdir(os.path.join(HERE, "tapes"))):   # every bundled tape resolves on its map

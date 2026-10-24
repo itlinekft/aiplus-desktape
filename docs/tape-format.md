@@ -86,6 +86,13 @@ A replay asks nobody before it clicks, so two checks keep it from doing what the
   the titles in the tape's or the map's `dialogs:` (a title, or `{title, prefix: true}`), the window of a
   `focus` step, and an `expect` or `absent` step with `role: Window`. A dialog already open when the tape
   starts counts too. `act` and `look` do not check: they are how an agent explores.
+- **Another program's window on top stops the run.** After a `focus` and before every action, a window of
+  another program that is on screen, above the tape's window and overlapping it, stops the run with its
+  title and program named. UI Automation would reach the window anyway, but a video would record the
+  covering window, and typed text could land in it. Measured on 2026-10-24: a "Biztosan bezárja az
+  ablakot?" question from another program stayed on top of Claude Desktop through two passing runs until
+  this guard. The driver's cursor overlay and the shell's own windows do not count. `act` and `look` only
+  warn.
 - **A map's `deny:` list refuses clicks**, in `run` and in `act`, on the element the selector resolved to:
 
 ```yaml
