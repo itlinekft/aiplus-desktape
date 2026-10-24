@@ -75,12 +75,13 @@ Get-AuthenticodeSignature .\AccessDatabaseEngine.exe | Format-List Status, Signe
   user cannot install it.
 - **Clash to know about:** Microsoft's installer refuses a 32-bit engine next to a 64-bit Microsoft Office.
   The reference target has no Microsoft Office.
-- **Check:** the provider is registered in the 32-bit registry view, and its DLL exists (the 2016 engine
-  registers `Microsoft.ACE.OLEDB.16.0` and installs under `OFFICE16`; the 2010 one used `12.0` and `OFFICE14`):
+- **Check:** the provider's name is registered and the 32-bit DLL exists. Measured after installing the 2016
+  engine on the reference target: the uninstall list shows "Microsoft Access database engine 2016 (English)"
+  16.0.5044.1000, `Microsoft.ACE.OLEDB.16.0` is under `HKLM\SOFTWARE\Classes` (`12.0` is not registered), and
+  the DLL is under `Program Files (x86)`:
 
 ```powershell
-Test-Path 'HKLM:\SOFTWARE\WOW6432Node\Classes\Microsoft.ACE.OLEDB.16.0'
-Test-Path 'HKLM:\SOFTWARE\WOW6432Node\Classes\Microsoft.ACE.OLEDB.12.0'
+Test-Path 'HKLM:\SOFTWARE\Classes\Microsoft.ACE.OLEDB.16.0'
 Test-Path 'C:\Program Files (x86)\Common Files\microsoft shared\OFFICE16\ACEOLEDB.DLL'
 ```
 
