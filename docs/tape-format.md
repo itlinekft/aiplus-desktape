@@ -132,7 +132,82 @@ write the step as a mapping with `effect: none`:
 Every driver call also has a deadline (6 s for an action, plus 30 ms per typed character; 15 s for a
 snapshot; `DESKTAPE_CALL_DEADLINE=2` doubles them all). A call past it is written to `audit.jsonl` at that
 moment as `blocked`, and the step fails; but a click that blocked because it opened a modal window of its
-program (a file dialog) counts as done, and the run goes on.
+program (a file dialog) counts as done, if the step names that window in `expect: {opens: …}` or the
+tape lists it in `dialogs:`.
+
+### Outcomes: what a step is for
+
+"Something changed" is not "it worked". A step can name its purpose with `expect:`. Every part must hold
+within `timeout` (10 s by default), or the step fails with a sentence naming what did not happen:
+
+```yaml
+  - click: { label: Glyph, role: Button, expect: { opens: Megnyitás } }
+  - open_file: { path: "${import_file}", dialog: Megnyitás,
+                 expect: { value: { label: "Import fájl", contains: "${import_file}" } } }
+  - click: { label: "Importálás indítása", expect: { shows: "sikeresen befejeződött", timeout: 60 } }
+  - click: { label: "Megnyitás", role: Button, expect: { filled: { label: "Azonosító oszlop" } } }
+```
+
+| part | holds when | the sentence when it does not |
+|---|---|---|
+| `opens: <title>` | a window or dialog of the program has that title | the window 'X' did not open |
+| `closes: <title>` | no window or dialog of the program has it | the window 'X' is still open |
+| `shows: <text>` | the text is in the window, or in a window the step opened | 'text' did not appear in the program's windows |
+| `value: {label, role?, contains}` | that element's value contains the text | 'label' shows 'a', not 'b' |
+| `filled: {label, role?}` | that element has an item or a value | 'label' stayed empty |
+| `in: <title>` | (where `shows`, `value` and `filled` read, when the step has no window) | |
+
+A map entry can carry `expect:` too. It is the default for every step that uses the entry, and a step's own
+`expect:` replaces it whole. With `expect:`, the effect check above gives way to the outcome.
+
+While a step waits, **the program's own failure fails it at once**. That is a window that appeared after the
+step, or a line that was not in the window before it, containing a failure word: *hiba, hibát, nem található,
+nem sikerült, sikertelen, érvénytelen, nincs telepítve, nem lehet, error, invalid, failed, not found,
+cannot, …* (whole words, so "0 db hibás" is not one). The step quotes the window's title and text. A map adds
+words with `failure_words:`, and removes harmless phrases with `failure_ignore:`.
+
+**A window nobody planned** fails the step right after it, in `act` as in `run`. That is a new window of the
+program that the step's `expect.opens` doesn't name and the tape's `dialogs:` doesn't list (for `act`, the
+tape given with `--append`). The report lists its text and buttons. **A call that hangs** is reported by the
+window in front: *'Megnyitás' (its program) is in front and does not answer; it was already open before this
+step*. A run that stops sends its sentence through `DESKTAPE_ALERT_CMD`; `act` sends one when the program
+reported a failure.
+
+### Input the driver cannot deliver, data, and checking results by value
+
+Some programs ignore input posted in the background, and some dialogs have no working UI Automation. The
+Windows file dialog is one. Measured with a desktop accounting program: its path field ignored typing, a
+drop-down did not open on a driver click, and the driver's typing into the file dialog hung.
+
+```yaml
+vars:
+  import_file: { description: "the month's price file" }        # a default: `import_file: "C:\x.xlsx"`
+steps:
+  - click: { label: Close, role: Button, foreground: true }      # the driver's foreground delivery
+  - open_file: { path: "${import_file}", dialog: Megnyitás }     # the standard file dialog, any language
+  - type: { text: "x", into: "Some dialog", os: true }           # Windows' own input to the window in front
+  - type: { env: DEMO_PASSWORD, secret: true }                   # or { file: ~/.config/…, secret: true }
+  - check_table: { file: "${import_file.local}", key: "Termék kód", columns: ["Bruttó ár"] }
+```
+
+- **`${name}`** is replaced in every step before the run starts. `--var name=value` sets it, and
+  `--var name=@local/file` copies the file to the target (`%USERPROFILE%\desktape\in\`) and passes the
+  target's path; `${name.local}` is the controller's path. A variable with no value stops the run before any
+  tool call. `act` takes `--var` too, and appends the step with `${name}` kept.
+- **`foreground: true`** on a click uses the driver's foreground delivery.
+- **`open_file`** fills the standard Windows file dialog's file name box through the dialog's own controls,
+  reads it back and presses OK, with no focus and no keyboard, so it works in any language. It fails when
+  the dialog stays open, quoting a message box that came up instead.
+- **`into: <title>`** on `type` and `key` goes to the window in front, after checking that it is the one named.
+  With **`os: true`**, it goes through Windows itself (SendKeys, from a one-off task in the desktop session).
+  The keys reach whatever control has the keyboard focus in that window.
+- **`env` / `file`** on `type` read the text on the controller when the step runs. `secret: true` is required,
+  so a password is never in the tape, the audit, a report or a caption.
+- **`check_table`** reads a grid's headers and rows (each cell by its column's name) and compares the named
+  columns with an `.xlsx` or `.csv` file, row by row, matched by `key` (`file_key:` when the file names it
+  differently; `columns:` as a mapping `grid column: file column`). Numbers compare as numbers, so
+  `"1 173,23 Ft"` equals `1173.23`. It fails listing every mismatch and every row the grid lacks; a passing
+  check goes into the summary's `checks`. Only the rows the grid has loaded can be compared.
 
 ## Map
 

@@ -129,6 +129,23 @@ its text nodes, without the map's ignore regions. That is
 everything needed to fix the map entry (when the step used one) or the tape. desktape itself never calls a
 model; the fix is made by you or by the agent driving desktape, in a file under git.
 
+Say what each important step is for, and the failure says it in plain words. A step with `expect:` (see
+[tape-format.md](tape-format.md#outcomes-what-a-step-is-for)) fails with *the window 'Megnyitás' is still
+open*, or *'Azonosító oszlop' stayed empty*, instead of a driver timeout. When the program shows its own
+error (*Hiba*, *nem található*, *not found*, …) the step stops at once, quoting it. A window nobody planned
+stops `act` as well as `run`, with its text and buttons, so the agent can name it or press the right button.
+
+**A data-driven run.** A monthly import takes its file as a variable, opens it through the file dialog,
+and ends by comparing the program's grid with the file:
+
+```bash
+python3 desktape.py run tapes/<import>.yaml --var import_file=@./2026-11.xlsx
+```
+
+`--var name=@file` uploads the file first; `check_table` lists every row whose value differs and every row
+the grid lacks, and the run fails if there is one. The summary records how many rows were compared and that
+no model was called.
+
 ## 7. Driving desktape from an AI agent
 
 desktape is meant to be driven by a coding agent such as Claude Code: the agent spends tokens while it
