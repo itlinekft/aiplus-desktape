@@ -2,6 +2,8 @@
 
 What desktape expects on the machine it drives, and how the reference target was set up. Tested on
 Windows 11 with a standard (non-admin) user and Cua Driver 0.34.1.
+Every install on both machines, with versions, admin needs and checks, is listed in [`install.md`](install.md),
+including prerequisites of the programs a tape drives.
 
 ## 1. SSH with key login
 

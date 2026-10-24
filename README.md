@@ -41,7 +41,8 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 - **Controller (where desktape runs):** Linux, or Windows from the user's desktop session; Python 3.9+,
   PyYAML (`pip install -r requirements.txt`), and an OpenSSH client with key login to the target.
 - **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
-  session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
+  session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md);
+  every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
 - An RDP client must stay connected and visible on the target during a run, because Windows stops
   rendering a minimised or disconnected session. Holding the session headless from Linux is the next change
   (`openspec/changes/headless-session`).
