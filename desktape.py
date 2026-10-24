@@ -1223,9 +1223,16 @@ class Runner:
             self.snapshot()
             t = [t for t in read_tables(self.tree) if key in t["headers"] and all(c in t["headers"] for c in columns)]
             return t[0] if t else None
-        table = grid()
+        # a grid that is reloading (right after an import, measured) shows its headers and rows without values
+        # for a moment: wait until a row carries its key
+        end = time.time() + float(arg.get("timeout", 15))
+        while not ((table := grid()) and any(r.get(key) for r in table["rows"])) and time.time() < end:
+            time.sleep(1.0)
         if not table:
             raise AssertionError(f"check_table: no table in {self.title!r} has the columns {[key, *columns]}")
+        if not any(r.get(key) for r in table["rows"]):
+            raise AssertionError(f"check_table: the table in {self.title!r} shows no {key!r} values within "
+                                 f"{float(arg.get('timeout', 15)):g} s (still loading?)")
         # A grid reports only the rows it has loaded (about a screenful, measured): page down through it,
         # keeping every row by its key, until the file's rows are all seen or a page brings nothing new.
         rows = {r[key].strip(): r for r in table["rows"] if r.get(key)}
