@@ -5,8 +5,9 @@
 ### Requirement: Expected outcome of a step
 
 An action step SHALL accept `expect:` naming its outcome: `opens` (a window title), `closes` (a window title),
-`shows` (a text), `value` (an element whose value contains a text) and `filled` (an element with at least one
-item), with `timeout`. All named parts SHALL hold within the timeout, default 10 s, or the step SHALL fail
+`shows` (a text), `value` (an element whose value contains a text), `filled` (an element with at least one
+row or item) and `enabled` (a control that is enabled), with `timeout`; an element is named by label, role or
+automation id. All named parts SHALL hold within the timeout, default 10 s, or the step SHALL fail
 with a sentence naming what did not happen. A map entry's `expect:` SHALL be the default for steps that use it.
 
 #### Scenario: the file dialog left open

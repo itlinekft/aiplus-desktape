@@ -30,7 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
 ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_text", "press_key",
            "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state",
-           "set_window_frame"}   # geometry only, for a tape's `window:` (runner-robustness D2)
+           "set_window_frame",   # geometry only, for a tape's `window:` (runner-robustness D2)
+           "set_value"}          # a field's value, like typing, where a control hides its items (data-driven-import D1)
 DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
@@ -262,7 +263,7 @@ class Cua:
         if tool not in ALLOWED:
             raise PermissionError(f"tool {tool!r} is not on the allowlist")
         t0 = time.time()
-        logged = {**args, "text": "<redacted>"} if secret and "text" in args else args
+        logged = {**args, **{k: "<redacted>" for k in ("text", "value") if k in args}} if secret else args
         try:
             r = self._rpc("tools/call", {"name": tool, "arguments": args}, timeout=timeout or deadline(tool, args))
         except TimeoutError:
@@ -696,7 +697,7 @@ def expected_dialogs(tape, amap, plan):
     for s, _ in plan:
         kind, arg = next(iter(s.items()))
         if kind == "focus":
-            pats.append({"title": arg})
+            pats.append(arg if isinstance(arg, dict) else {"title": arg})
         elif kind in ("expect", "absent") and isinstance(arg, dict) and arg.get("role") == "Window":
             pats.append({"title": arg["label"], "prefix": arg.get("prefix", False)})
     return lambda t: any(t.startswith(p["title"]) if p.get("prefix") else t == p["title"] for p in pats)
@@ -946,6 +947,8 @@ def ocr_lines(host):
 def describe_step(kind, arg):
     """A step as a person would name it, for the plain sentences (step-outcome-check D3)."""
     a = arg if isinstance(arg, dict) else {}
+    if kind == "set":
+        return f"setting {a.get('label')!r} to " + ("a secret" if a.get("secret") else repr(a.get("value")))
     if kind == "click":
         return f"clicking {a.get('label', arg)!r}"
     if kind == "type":
@@ -1021,13 +1024,12 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None):
         if not out.get("found"):
             raise AssertionError(f"open_file: no file dialog titled {title!r} is open")
         if not out.get("set"):
-            raise AssertionError(f"open_file: the file name box of {title!r} did not take the path")
-        if out.get("message"):
-            raise AssertionError(f"open_file: {title!r} answered: {out['message']!r}")
-        if not out.get("closed"):
-            raise AssertionError(f"open_file: the file dialog {title!r} is still open after OK; the file was not opened")
-        logger.info("open_file: %r opened %s", title, file)
-        return out
+            raise AssertionError(f"open_file: the file name box of {title!r} did not take the path"
+                                 + (f" (it reads back {out['readback']!r})" if out.get("readback") is not None else
+                                    f" (no file name box found; its controls: {out.get('controls', '?')[:300]})"))
+        if out.get("closed"):
+            logger.info("open_file: %r opened %s", title, file)
+        return out                           # a box that came up instead: the runner reads and quotes it
     if not out.get("sent"):
         raise AssertionError(f"os input into {title!r}: the window in front is {out.get('front')!r}; nothing was sent")
     logger.info("os input into %r: sent", title)
@@ -1061,8 +1063,8 @@ def overlap(a, b):
 OUTCOME_WAIT = 10.0      # seconds a step waits for its `expect:` outcome (D1)
 READ_DEADLINE = 4.0      # reading a window that appeared: a dialog's UI Automation may not answer
 FAILURE_WORDS = ["hiba", "hibát", "hibaüzenet", "nem található", "nem találja", "nem sikerült", "sikertelen",
-                 "érvénytelen", "nincs telepítve", "nem lehet", "nem érhető el", "error", "invalid", "failed",
-                 "not found", "cannot", "could not", "unable to"]
+                 "érvénytelen", "nincs telepítve", "nem lehet", "nem létezik", "nem érhető el", "error", "invalid",
+                 "failed", "not found", "does not exist", "cannot", "could not", "unable to"]
 
 
 def failure_word(text, words, ignore=()):
@@ -1089,6 +1091,9 @@ def tree_words(tree_text):
             if t and t not in out:
                 out.append(t)
     return out
+
+
+ITEM_ROLES = {"ListItem", "DataItem", "TreeItem", "Row", "DataGridRow", "MenuItem", "TabItem"}
 
 
 class OutcomeFailed(AssertionError):
@@ -1119,6 +1124,7 @@ class Runner:
         self.secondary = False   # the focused window is not its process's biggest one (step-effect-check D2)
         self.checks = []         # check_table results, for the summary (data-driven-import)
         self.planned = None      # dialog titles a step may open without naming them (step-outcome-check D4)
+        self.blocked_by = None   # what held the window when focus could not bring it to the front
         self.failure_words, self.failure_ignore = list(FAILURE_WORDS), []
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
@@ -1167,16 +1173,47 @@ class Runner:
         missing = [c for c in [arg.get("file_key") or key, *columns.values()] if c not in headers]
         if missing:
             raise ValueError(f"check_table: {arg['file']} has no column {missing[0]!r}; it has {headers}")
-        self.snapshot()
-        tables = [t for t in read_tables(self.tree) if key in t["headers"] and all(c in t["headers"] for c in columns)]
-        if not tables:
+        def grid():
+            self.snapshot()
+            t = [t for t in read_tables(self.tree) if key in t["headers"] and all(c in t["headers"] for c in columns)]
+            return t[0] if t else None
+        table = grid()
+        if not table:
             raise AssertionError(f"check_table: no table in {self.title!r} has the columns {[key, *columns]}")
-        problems = compare_table(tables[0], want, key, columns, arg.get("file_key"))
+        # A grid reports only the rows it has loaded (about a screenful, measured): page down through it,
+        # keeping every row by its key, until the file's rows are all seen or a page brings nothing new.
+        rows = {r[key].strip(): r for r in table["rows"] if r.get(key)}
+        wanted = {str(r.get(arg.get("file_key") or key, "")).strip() for r in want}
+        pages = 0
+        while not wanted <= rows.keys() and pages < arg.get("max_pages", 40):
+            at = self.grid_point()
+            if at is None:
+                break
+            self.cua.call("scroll", {**self.win, "direction": "down", "by": "page", "amount": 1,
+                                     "delivery_mode": "foreground", "x": at[0], "y": at[1]})
+            pages += 1
+            t = grid()
+            new = {r[key].strip(): r for r in (t or {}).get("rows", []) if r.get(key)}
+            if not new.keys() - rows.keys():
+                break
+            rows.update(new)
+        table = {"headers": table["headers"], "rows": list(rows.values())}
+        problems = compare_table(table, want, key, columns, arg.get("file_key"))
         self.checks.append({"file": os.path.basename(arg["file"]), "rows": len(want), "columns": list(columns),
-                            "grid_rows": len(tables[0]["rows"]), "mismatches": problems})
+                            "grid_rows": len(rows), "pages": pages, "mismatches": problems})
         if problems:
             raise AssertionError(f"check_table: {len(problems)} problem(s) in {len(want)} rows: " + "; ".join(problems[:12]))
         logger.info("check_table: %d rows x %d columns match %s", len(want), len(columns), os.path.basename(arg["file"]))
+
+    def grid_point(self):
+        """A window-local point inside the grid's rows, for scrolling it (the middle of a row element)."""
+        rows = [e for e in self.elements if e.get("role") == "ListItem" and e.get("frame")]
+        if not rows:
+            return None
+        sc, _ = self.cua.call("list_windows", {})
+        w = next((w for w in sc.get("windows", []) if w.get("window_id") == self.win["window_id"]), None)
+        f, b = rows[len(rows) // 2]["frame"], (w or {}).get("bounds") or {"x": 0, "y": 0}
+        return int(f["x"] + f["w"] / 2 - b["x"]), int(f["y"] + f["h"] / 2 - b["y"])
 
     def check_front(self, title):
         """`into`: the topmost real window must be the named one (data-driven-import), so foreground input
@@ -1290,6 +1327,10 @@ class Runner:
 
     def focus(self, title):
         sc, _ = self.cua.call("list_windows", {})
+        if isinstance(title, dict):              # {title: "Accounting", prefix: true}: the rest of the title varies (an edition name)
+            pre = title["title"]
+            title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
+                          and w.get("is_on_screen", True)), pre)
         wins = [w for w in sc.get("windows", []) if w.get("title") == title]
         w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
         if not w:
@@ -1300,8 +1341,14 @@ class Runner:
         self.secondary = any(area(x) > area(w) for x in sc.get("windows", [])
                              if x.get("pid") == w["pid"] and x.get("window_id") != w["window_id"])
         self.dirty = True        # a new window: the next dialog check needs its own snapshot (measured)
+        self.blocked_by = None
         try:
             self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
+        except CallBlocked:
+            # step-outcome-check: a modal window of the program holds it; its tree is still readable, so `look`
+            # still works (it is what clears a stuck state), and an action names the window in front itself
+            self.blocked_by = self.describe_front({"ids": self.baseline})
+            logger.warning("window %r could not be brought to the front: %s", title, self.blocked_by)
         except RuntimeError as e:
             if FOREGROUND_REFUSED not in str(e):
                 raise
@@ -1335,7 +1382,7 @@ class Runner:
     def step(self, s):
         """One step; an action is followed by its outcome check (step-outcome-check)."""
         kind, arg = next(iter(s.items()))
-        if kind not in ("click", "type", "key", "hotkey", "open_file"):
+        if kind not in ("click", "type", "key", "hotkey", "open_file", "set"):
             return self._step(s)
         exp = arg.get("expect") if isinstance(arg, dict) else None
         what = describe_step(kind, arg)
@@ -1388,8 +1435,22 @@ class Runner:
                                     timeout=READ_DEADLINE)
         except (CallBlocked, RuntimeError) as e:
             logger.warning("window %r did not let itself be read: %s", w.get("title"), e)
-            return "", []
-        return text, tree_words(text)
+            text = ""
+        words = tree_words(text)
+        if not words and w.get("is_on_screen", True) and w.get("bounds") and self.cua.host:
+            # its UI Automation does not answer (a message box over a file dialog, measured): read the screen
+            # inside its frame with Windows' own OCR
+            b = w["bounds"]
+            try:
+                for line in ocr_lines(self.cua.host):
+                    xy, _, said = line.partition(" ")
+                    x, y = (float(v) for v in xy.split(","))
+                    if b["x"] <= x < b["x"] + b["width"] and b["y"] <= y < b["y"] + b["height"] and said.strip():
+                        words.append(said.strip())
+                logger.info("read %r by OCR: %d lines", w.get("title"), len(words))
+            except Exception as e:
+                logger.warning("OCR of %r failed: %s", w.get("title"), e)
+        return text, words
 
     def after_action(self, what, exp, before):
         """Wait for the step's outcome (D1), failing at once on the program's own failure (D2) or on a window
@@ -1416,7 +1477,7 @@ class Runner:
                                         + (f"; its buttons: {', '.join(buttons[:6])}" if buttons else "")
                                         + " (name it in the step's `expect: {opens: …}` or the tape's `dialogs:`)")
             alive = self.win is not None and any(w.get("window_id") == self.win["window_id"] for w in wins)
-            needs_tree = before["lines"] is not None or any(k in exp for k in ("shows", "value", "filled"))
+            needs_tree = before["lines"] is not None or any(k in exp for k in ("shows", "value", "filled", "enabled"))
             tree = ""
             if alive and needs_tree:
                 self.snapshot()
@@ -1452,14 +1513,15 @@ class Runner:
             miss.append(f"the window {exp['closes']!r} is still open")
         if "shows" in exp and exp["shows"] not in tree and not any(exp["shows"] in t for t, _ in read.values()):
             miss.append(f"{exp['shows']!r} did not appear in the program's windows")
-        for key in ("value", "filled"):
+        for key in ("value", "filled", "enabled"):
             if key not in exp:
                 continue
             sel = exp[key] if isinstance(exp[key], dict) else {"label": exp[key]}
             lines = tree.splitlines()
             at = next((i for i, l in enumerate(lines) if (n := parse(l)) and (sel.get("label") is None or n[2] == sel["label"])
-                       and (sel.get("role") is None or n[1] == sel["role"])), None)
-            name = sel.get("label") or sel.get("role")
+                       and (sel.get("role") is None or n[1] == sel["role"])
+                       and (sel.get("id") is None or re.search(r"\bid=" + re.escape(sel["id"]) + r"[ \]]", l))), None)
+            name = sel.get("label") or sel.get("id") or sel.get("role")
             if at is None:
                 miss.append(f"{name!r} is not in the window")
                 continue
@@ -1467,16 +1529,27 @@ class Runner:
             value = m.group(1) if m else ""
             if key == "value" and sel.get("contains", "") not in value:
                 miss.append(f"{name!r} shows {value!r}, not {sel.get('contains')!r}")
+            if key == "enabled" and "actions=[" not in lines[at]:      # a disabled control has no actions
+                miss.append(f"{name!r} is still disabled")
             if key == "filled":
                 depth = parse(lines[at])[0]
-                kids = at + 1 < len(lines) and (n := parse(lines[at + 1])) and n[0] > depth
+                kids = False
+                for l in lines[at + 1:]:
+                    n = parse(l)
+                    if not n:
+                        continue
+                    if n[0] <= depth:
+                        break
+                    if n[1] in ITEM_ROLES:   # rows and items; not a combo's arrow, not a grid's empty "Adat panel"
+                        kids = True
+                        break
                 if not (kids or value.strip()):
                     miss.append(f"{name!r} stayed empty")
         return miss
 
     def _step(self, s):
         kind, arg = next(iter(s.items()))
-        if kind in ("click", "type", "key", "hotkey"):
+        if kind in ("click", "type", "key", "hotkey", "set"):
             self.check_dialogs()
             self.dirty = True
         if kind == "focus":
@@ -1509,6 +1582,30 @@ class Runner:
                     raise
                 logger.warning("%s did not return within %.1f s; it opened %s, so it counts as done",
                                what, cb.waited, ", ".join(repr(t) for t in new))
+                self.dirty = True
+                return
+            except RuntimeError as fe:
+                # a foreground click that opened a modal: the driver expects its target in front afterwards and
+                # reports the program's new dialog as "foreground_unavailable" (measured); that click is done
+                m = re.search(r"foreground_unavailable.*?actual foreground HWND (0x[0-9a-fA-F]+)", str(fe), re.S)
+                if not m:
+                    raise
+                fg, end = int(m.group(1), 16), time.time() + 3.0
+                while True:                      # the new dialog reaches the window list a moment later
+                    now = {w[0] for w in self.process_windows()}
+                    new = now - {b[0] for b in before[1]}
+                    # done: the foreground is a new window of the program, or the clicked window closed (a
+                    # confirm whose answer opened a progress window that is already gone, measured)
+                    done = fg in new or self.win["window_id"] not in now
+                    if done or time.time() > end:
+                        break
+                    time.sleep(0.3)
+                if not done:
+                    logger.warning("%s: foreground went to %s, not to a new window of the program (new: %s)",
+                                   what, m.group(1), sorted(new))
+                    raise
+                logger.warning("%s: the driver reports the foreground moved; it moved to a new window of the program "
+                               "(%s), so the click counts as done", what, m.group(1))
                 self.dirty = True
                 return
             self.dirty = True
@@ -1573,11 +1670,30 @@ class Runner:
                 self.cua.call("press_key", {"key": a["key"], "scope": "desktop", "delivery_mode": "foreground"})
             else:
                 self.cua.call("press_key", {**self.win, "key": a["key"], "delivery_mode": "foreground"})
+        elif kind == "set":
+            # a control's value through UI Automation (data-driven-import D1): a DevExpress combo whose items only
+            # exist while its drop-down is open, and the drop-down ignores background clicks (measured)
+            e = self.wait_for(arg["label"], arg.get("role"), prefix=arg.get("prefix", False), enabled_only=True)
+            if not e:
+                raise RuntimeError(f"set: {arg['label']!r} not found (enabled)")
+            self.cua.call("set_value", {**self.win, "element_token": e["element_token"], "value": str(arg["value"])},
+                          secret=arg.get("secret", False))
         elif kind == "open_file":
             # the standard Windows file dialog through its own controls (data-driven-import): no UI Automation,
             # no keyboard focus, no locale-dependent accelerator
-            os_input(self.cua.host, arg.get("dialog", "Megnyitás"), "", self.cua.audit, file=arg["path"])
+            dialog = arg.get("dialog", "Megnyitás")
+            out = os_input(self.cua.host, dialog, "", self.cua.audit, file=arg["path"])
             self.dirty = True
+            if out.get("box"):               # the program answered with a message box: its own words (outcome D2)
+                sc, _ = self.cua.call("list_windows", {})
+                w = next((w for w in sc.get("windows", []) if w.get("window_id") == out["box"]), None)
+                words = self.read_window(w)[1] if w else []
+                said = " / ".join(x for x in words if x != dialog)[:300] or out.get("message") or "(its text is not readable)"
+                raise ProgramFailure(f"opening {arg['path']!r} in {dialog!r}: "
+                                     f"{(w or {}).get('app_name') or 'the program'} answered in {dialog!r}: {said}")
+            if not out.get("closed"):
+                raise OutcomeFailed(f"opening {arg['path']!r}: the file dialog {dialog!r} is still open after OK; "
+                                    "the file was not opened")
         elif kind == "check_table":
             self.check_table(arg)
         elif kind == "caption":
@@ -1836,6 +1952,8 @@ def look(a):
             (f", {unchanged} unchanged since the last look left out" if unchanged is not None else "")
     logger.debug("look %s: %d lines printed, %d hidden, unchanged %s", title, len(lines), hidden, unchanged)
     print(f"# {title}: {len(lines)} {what}{extra}")
+    if r.blocked_by:
+        print(f"# not in front: {r.blocked_by}")
     print("\n".join(lines))
     if a.ocr:
         o = ocr_lines(a.host)
@@ -2521,6 +2639,14 @@ def selftest():
     e, _ = run({"Browse": lambda p: p.wins.__setitem__(1, ("Main", main.replace('Edit "Import fájl"', 'Edit "Import fájl" [value="C:\\in\\a.xlsx"]')))},
                {"click": {"label": "Browse", "expect": {"value": {"label": "Import fájl", "contains": "a.xlsx"}}}})
     assert e is None, e
+    off = main.replace('[2] Button "Import" [actions=[invoke]]', 'Button "Import"')
+    r = Runner(Prog(off, {"Browse": lambda p: p.wins.__setitem__(1, ("Main", main))}), "test"); r.focus("Main")
+    r.step({"click": {"label": "Browse", "expect": {"enabled": {"label": "Import", "role": "Button"}}}})
+    r = Runner(Prog(off), "test"); r.focus("Main")
+    try:
+        r.step({"click": {"label": "Browse", "expect": {"enabled": "Import", "timeout": 0.4}}}); raise AssertionError("expected")
+    except OutcomeFailed as e:
+        assert "'Import' is still disabled" in str(e), e
     e, _ = run({}, {"click": {"label": "Browse", "expect": {"filled": {"label": "Azonosító oszlop"}, "timeout": 0.4}}})
     assert "'Azonosító oszlop' stayed empty" in str(e), e
     e, _ = run({"Browse": lambda p: p.wins.__setitem__(1, ("Main", main + '\n    - [6] ListItem "Termék kód" [actions=[select]]'))},

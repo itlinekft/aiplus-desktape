@@ -14,5 +14,5 @@
 
 ## 4. Tests and measurement
 - [x] 4.1 Selftest: each outcome kind passing and failing, a failure word on a new window, an old "Hiba" label ignored, a hung call's sentence, act failing on an unplanned dialog, the alert text [REQ: expected-outcome-of-a-step]
-- [ ] 4.2 Measure on the reference target: the file dialog left open, a wrong path, the empty Azonosító oszlop with the xlwt .xls, a click that opens nothing [REQ: the-program-s-own-failure-fails-the-step]
+- [x] 4.2 Measure on the reference target: the file dialog left open, a wrong path, the empty Azonosító oszlop with the xlwt .xls, a click that opens nothing [REQ: the-program-s-own-failure-fails-the-step]
 - [x] 4.3 docs/tape-format.md, docs/user-guide.md [REQ: expected-outcome-of-a-step]

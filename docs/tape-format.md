@@ -153,8 +153,9 @@ within `timeout` (10 s by default), or the step fails with a sentence naming wha
 | `opens: <title>` | a window or dialog of the program has that title | the window 'X' did not open |
 | `closes: <title>` | no window or dialog of the program has it | the window 'X' is still open |
 | `shows: <text>` | the text is in the window, or in a window the step opened | 'text' did not appear in the program's windows |
-| `value: {label, role?, contains}` | that element's value contains the text | 'label' shows 'a', not 'b' |
-| `filled: {label, role?}` | that element has an item or a value | 'label' stayed empty |
+| `value: {label, role?, id?, contains}` | that element's value contains the text | 'label' shows 'a', not 'b' |
+| `filled: {label, role?, id?}` | that element has a row or an item (a list, a grid, a combo's items) | 'label' stayed empty |
+| `enabled: {label, role?, id?}` | that control is enabled (it has actions) | 'label' is still disabled |
 | `in: <title>` | (where `shows`, `value` and `filled` read, when the step has no window) | |
 
 A map entry can carry `expect:` too. It is the default for every step that uses the entry, and a step's own
