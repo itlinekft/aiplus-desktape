@@ -13,5 +13,5 @@
 
 ## 4. Tests and measurement
 - [x] 4.1 Selftest: file appears, file unchanged, typing modes, a secret refused for paste [REQ: typing-modes]
-- [ ] 4.2 Measure on the reference target: paste of Hungarian text into Claude Desktop (done 22:05: accents intact, after a clipboard retry); human typing pace (done: 97 characters at 7/s, by the clock — one character per call gave 3.2/s); a file written by another program (pending: the video take) [REQ: a-file-as-an-outcome]
+- [x] 4.2 Measure on the reference target: paste of Hungarian text into Claude Desktop (done 22:05: accents intact, after a clipboard retry); human typing pace (done: 97 characters at 7/s, by the clock — one character per call gave 3.2/s); a file written by another program (done 2026-10-25 00:19: the demo take waited for Claude's xlsx and for the inner run's last.json; 5 takes) [REQ: a-file-as-an-outcome]
 - [x] 4.3 docs/tape-format.md [REQ: typing-modes]
