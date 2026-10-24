@@ -122,6 +122,10 @@ def choose_target(cli_host=None, cli_target=None, env=None, cfg=None):
 DRIVER_ENV = {"CUA_DRIVER_RS_TELEMETRY_ENABLED": "false", "DO_NOT_TRACK": "1",
               "CUA_DRIVER_RS_UPDATE_CHECK": "false", "CUA_DRIVER_DISABLE_RUN_SCRIPT": "1"}
 PIPE = r"\\.\pipe\cua-driver"
+# One-off tasks in the desktop session start PowerShell through a headless console host: with Windows Terminal as
+# the default terminal (Windows 11), `-WindowStyle Hidden` still flashed a terminal window on screen, and into a
+# recording (measured: 8 flashes in one take; one hosted the driver and could be closed by mistake).
+HIDDEN = "conhost.exe --headless "
 
 
 class Target:
@@ -195,7 +199,7 @@ def start_daemon(host):
     t = Target(host)
     t.sh("if not exist %USERPROFILE%\\desktape mkdir %USERPROFILE%\\desktape")
     t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
-    tr = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\desktape\\cua-serve.ps1"
+    tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\desktape\\cua-serve.ps1"
     t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-cua >nul',
          check=True)
     time.sleep(4)
@@ -935,7 +939,7 @@ def ocr_lines(host):
     t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & "
          f"del /q %USERPROFILE%\\{remote}\\ocr-done.txt %USERPROFILE%\\{remote}\\ocr-out.json 2>nul")
     t.put(os.path.join(HERE, "windows", "desktape-ocr.ps1"), f"{remote}/desktape-ocr.ps1")
-    tr = f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\desktape-ocr.ps1"
+    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\desktape-ocr.ps1"
     t.sh(f'schtasks /create /tn desktape-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-ocr >nul',
          check=True)
     try:
@@ -1038,7 +1042,7 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
         json.dump({"title": title, "keys": keys, "at": at, "file": file, "hwnd": hwnd, "xy": xy, "clip": clip},
                   open(req, "w", encoding="utf-8"), ensure_ascii=False)
         t.put(req, f"{remote}/os-input.json")
-    tr = f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\os-input.ps1"
+    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\os-input.ps1"
     t0 = time.time()
     t.sh(f'schtasks /create /tn desktape-os-input /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-os-input >nul',
          check=True)
