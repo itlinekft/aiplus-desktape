@@ -1459,7 +1459,9 @@ class Runner:
         end = time.time() + float(exp.get("timeout", OUTCOME_WAIT if exp else 0))
         read, opens = {}, exp.get("opens")
         while True:
-            wins = self.program_windows(before["pid"]) if before["pid"] is not None else []
+            sc, _ = self.cua.call("list_windows", {})
+            every = sc.get("windows", [])
+            wins = [w for w in every if w.get("pid") == before["pid"]] if before["pid"] is not None else []
             for w in wins:
                 if w.get("window_id") in before["ids"] or not w.get("title") or w["window_id"] in read:
                     continue
@@ -1493,7 +1495,10 @@ class Runner:
                     if n and failure_word(n[2] + " " + (VALUE.search(line).group(1) if VALUE.search(line) else ""),
                                           self.failure_words, self.failure_ignore):
                         raise ProgramFailure(f"after {what}: {self.title!r} now shows: {line.strip()[:200]}")
-            missing = self.outcome_missing(exp, wins, tree, read)
+            # a named window counts in any process: Electron shows its file picker from another one (measured)
+            named = [w for w in every if w.get("title") in (exp.get("opens"), exp.get("closes"))
+                     and w.get("pid") != before["pid"]]
+            missing = self.outcome_missing(exp, wins + named, tree, read)
             if not missing:
                 if exp:
                     logger.info("%s: outcome reached (%s)", what, ", ".join(k for k in exp if k != "timeout"))
@@ -1597,6 +1602,10 @@ class Runner:
                     # done: the foreground is a new window of the program, or the clicked window closed (a
                     # confirm whose answer opened a progress window that is already gone, measured)
                     done = fg in new or self.win["window_id"] not in now
+                    opens = (a.get("expect") or {}).get("opens")
+                    if not done and opens:   # a named dialog of another process (Electron's file picker, measured)
+                        done = any(w.get("window_id") == fg and w.get("title") == opens
+                                   for w in self.cua.call("list_windows", {})[0].get("windows", []))
                     if done or time.time() > end:
                         break
                     time.sleep(0.3)
@@ -2613,6 +2622,14 @@ def selftest():
     assert e is None, e
     e, t = run({}, {"click": {"label": "Browse", "expect": {"opens": "Megnyitás", "timeout": 0.5}}})
     assert isinstance(e, OutcomeFailed) and "after clicking 'Browse': the window 'Megnyitás' did not open" in str(e), e
+    class Elsewhere(Prog):                 # Electron: the file picker belongs to another process
+        def call(self, tool, args, secret=False, timeout=None):
+            sc, t = super().call(tool, args, secret, timeout)
+            if tool == "list_windows" and getattr(self, "picker", False):
+                sc["windows"].append({"title": "Megnyitás", "pid": 99, "window_id": 50, "is_on_screen": True})
+            return sc, t
+    r = Runner(Elsewhere(main, {"Browse": lambda p: setattr(p, "picker", True)}), "test"); r.focus("Main")
+    r.step({"click": {"label": "Browse", "expect": {"opens": "Megnyitás"}}})
     e, _ = run({"Browse": open_dlg}, {"click": "Browse"})                                    # D4, in act too
     assert "nobody planned opened: 'Megnyitás'" in str(e) and "its buttons: Mégse" in str(e), e
     e, _ = run({"Browse": open_dlg}, {"click": "Browse"}, planned=lambda t: t == "Megnyitás")
