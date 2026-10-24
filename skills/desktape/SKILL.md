@@ -19,7 +19,9 @@ export DESKTAPE_RUNS="$PWD/desktape-runs"                       # run folders go
 ```
 
 Shell state does not survive between tool calls: repeat both lines in each call. `uv` brings Python and
-PyYAML itself; nothing else is installed by hand.
+PyYAML itself; nothing else is installed by hand. If `uv` is not found, look in `~/.local/bin` (Windows:
+`%USERPROFILE%\.local\bin\uv.exe`) before installing it: uv's installers put it there, and a running shell
+may not have that folder on its PATH yet. Call it by its full path then.
 
 ## 1. Check first — every time on a new machine
 

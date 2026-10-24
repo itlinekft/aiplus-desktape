@@ -2192,7 +2192,14 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
     how = lambda piece: INSTALL[piece].get(osname) or INSTALL[piece].get("any") or "see docs/install.md"
     rows = [(sys.version_info >= (3, 9), "Python 3.9+", f"{sys.version.split()[0]}" if sys.version_info >= (3, 9)
              else how("uv")), (True, "PyYAML", yaml.__version__)]
-    rows.append((bool(which("uv")), "uv", "found" if which("uv") else how("uv")))
+    # uv's own installers put it in ~/.local/bin (or ~/.cargo/bin), which a running shell may not have on its
+    # PATH yet (measured: Claude Code's shell on Windows); found there, it is installed, not missing
+    home = [os.path.join(os.path.expanduser("~"), d, "uv" + (".exe" if osname == "win32" else ""))
+            for d in (".local/bin", ".cargo/bin")]
+    off_path = next((p for p in home if exists(p)), None)
+    rows.append((bool(which("uv") or off_path), "uv", "found" if which("uv") else
+                 f"{off_path} (not on this shell's PATH: call it by that path, or open a new terminal)" if off_path
+                 else how("uv")))
     if local:
         if osname != "win32":
             rows.append((False, "Windows", "--local drives the driver on this machine, which must be Windows"))
@@ -2867,7 +2874,10 @@ def selftest():
     assert [p for ok, p, _ in rows if not ok] == ["Windows"], rows
     rows = doctor_report(which=lambda x: "/bin/" + x, platform="darwin")
     assert all(ok for ok, _, _ in rows) and {p for _, p, _ in rows} == {"Python 3.9+", "PyYAML", "uv", "ssh client"}, rows
-    assert doctor_report(which=lambda x: None, platform="darwin")[2][2] == "brew install uv"
+    assert doctor_report(which=lambda x: None, exists=lambda p: False, platform="darwin")[2][2] == "brew install uv"
+    ok, _, said = doctor_report(which=lambda x: None, exists=lambda p: p.endswith(os.path.join(".local", "bin", "uv.exe")),
+                                platform="win32")[2]
+    assert ok and "not on this shell's PATH" in said, said
     print("selftest ok")
     return 0
 
