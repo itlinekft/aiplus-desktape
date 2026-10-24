@@ -1482,8 +1482,14 @@ class Runner:
             needs_tree = before["lines"] is not None or any(k in exp for k in ("shows", "value", "filled", "enabled"))
             tree = ""
             if alive and needs_tree:
-                self.snapshot()
-                tree = self.tree
+                try:
+                    self.snapshot()
+                    tree = self.tree
+                except RuntimeError as e:
+                    if "No window with window_id" not in str(e):
+                        raise
+                    alive = False            # it was closing while the window list still showed it (measured)
+                    logger.info("%s: the window %r closed", what, self.title)
             elif needs_tree and exp.get("in"):
                 w = next((w for w in wins if w.get("title") == exp["in"]), None)
                 tree = self.read_window(w)[0] if w else ""
