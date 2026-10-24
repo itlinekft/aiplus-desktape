@@ -10,6 +10,13 @@ desktape drives a remote desktop (Windows today, macOS next) from a Linux machin
 screen cheaply, acts one step at a time, and keeps the steps that worked as a YAML **tape**. The same tape
 then runs as a fast test or as a slow, captioned screen recording, without calling a model.
 
+**No computer use needed.** desktape is not an AI controlling your computer. It does not use Claude's (or
+any model's) computer use, and Claude Desktop's "Enable computer use" switch can stay off: the demo above
+was recorded with it off. A replay clicks through Windows UI Automation, step by step as the tape says, so
+there is no model call, no per-app permission prompt, and no AI taking over the screen. A model is only
+involved while an agent writes or repairs a tape, and even then it acts through desktape's `look` and
+`act`, which read the screen as text first, not through the model's own computer use.
+
 Status: **early**. The tape format and the commands may still change.
 
 ## How it works
