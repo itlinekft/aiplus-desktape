@@ -15,7 +15,8 @@ any model's) computer use, and Claude Desktop's "Enable computer use" switch can
 was recorded with it off. A replay clicks through Windows UI Automation, step by step as the tape says, so
 there is no model call, no per-app permission prompt, and no AI taking over the screen. A model is only
 involved while an agent writes or repairs a tape, and even then it acts through desktape's `look` and
-`act`, which read the screen as text first, not through the model's own computer use.
+`act`, which read the screen as text first, not through the model's own computer use. How the two compare (plans,
+which machine, permissions, cost): [`docs/related-work.md`](docs/related-work.md#desktape-and-claudes-own-computer-use).
 
 Status: **early**. The tape format and the commands may still change.
 

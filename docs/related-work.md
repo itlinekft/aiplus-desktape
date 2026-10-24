@@ -94,6 +94,39 @@ Several come close, and they are worth knowing:
 Scope: GitHub, Hacker News and the web, with a light pass over Reddit. Large commercial suites beyond the
 ones listed were not reviewed.
 
+## desktape and Claude's own computer use
+
+desktape does not use computer use, and does not need it switched on. The comparison, as Anthropic documents
+it on 2026-10-24 ([help: computer use in Cowork](https://support.claude.com/en/articles/14128542-let-claude-use-your-computer-in-cowork),
+[Claude Code desktop docs](https://code.claude.com/docs/en/desktop)) and as measured on the reference target:
+
+- **Since when:** computer use came out as a public API beta on 2024-10-22 with Claude 3.5 Sonnet
+  ([announcement](https://www.anthropic.com/news/3-5-models-and-computer-use)). In the Claude Desktop app it is
+  a beta / research preview in Cowork and Claude Code, on macOS (14 or later) and Windows. Its Windows date
+  is not on an official page; one news report says September 2026.
+- **Who can use it:** Pro and Max plans only. "Team and Enterprise plans don't have access to computer use at
+  this time." A desktape replay needs no Claude plan at all.
+- **Which machine:** the one the Claude Desktop app runs on. "Computer use has no sandbox between Claude and
+  your applications"; the computer must be awake and the app open; the Settings page says it is "not
+  available in cloud Code sessions, which don't run on this computer". desktape drives another machine over
+  SSH from a Linux controller, or the same machine in local mode.
+- **The screen:** on Windows it takes over the visible screen and hides the other windows (measured); working
+  in background windows is macOS 15+ only. A desktape replay clicks through UI Automation; it raises the tape's
+  window, and takes the keyboard focus only for typing steps.
+- **Permissions:** a prompt per app, the first time in each session ("Allow for this session"), with fixed
+  tiers: browsers view-only, terminals and IDEs click-only, other apps full control. A "Denied apps" list
+  rejects whole apps, though Claude "may still affect a denied app indirectly through actions in an allowed
+  app". Measured: a 20-minute task in an invoicing program raised 3 such prompts, and a person (or an OS-level
+  click) had to approve each. desktape asks nothing at replay time; its map's `deny:` list refuses single
+  buttons inside an app.
+- **Cost and reliability:** every step is a model call that reads screenshots, so Claude "can see any
+  information visible on your screen"; Anthropic notes that "complex tasks sometimes need a second try" and
+  that screen work is slower than a direct integration. A tape replays with no model call and checks each
+  step with `expect`.
+
+The two fit together: computer use can work out a new task once; desktape keeps the flow that worked and
+replays it without a model, a prompt or a person at the screen.
+
 ## Using desktape from Claude Desktop and Cowork
 
 As documented on 2026-10-23:
