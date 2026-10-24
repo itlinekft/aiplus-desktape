@@ -149,6 +149,14 @@ your own lock early, for example at the end of a flow. A holder that crashed fre
 lease runs out. The lock lives on the controller, so two controllers on different machines do not see each
 other's locks.
 
+**Several machines: name them.** Copy [`targets.example.yaml`](../targets.example.yaml) to
+`~/.config/desktape/targets.yaml` (on Windows `%APPDATA%\desktape\targets.yaml`) and give each machine a
+name, a host, the account, the SSH key, a label and a note for people. Then `--target NAME` (or
+`DESKTAPE_TARGET`) picks one, and `desktape.py targets` lists them all with their lock and status. The
+file stays outside the repository. `--host` and `DESKTAPE_HOST` still work for a one-off target; the order
+is `--host` or `--target`, then `DESKTAPE_TARGET`, then `DESKTAPE_HOST`, then the file's `default`. A
+profile can also set `alert_cmd` and `call_deadline` for its machine; the environment, when set, wins.
+
 **desktape notices a step that did nothing, and says so while it happens.** Every click and typed text
 gets an effect check (see [the tape format](tape-format.md#effect-checks-a-step-the-driver-accepted-must-also-do-something)),
 and every driver call a deadline. Three failed steps in a row on one target stop `act`: the fourth exits

@@ -1,0 +1,27 @@
+# Named targets for desktape. Copy to ~/.config/desktape/targets.yaml (on Windows
+# %APPDATA%\desktape\targets.yaml, or any file named in DESKTAPE_TARGETS) and fill in your own
+# machines. Keep the real file out of git: it names your hosts and accounts.
+#
+# Choose one with --target NAME or DESKTAPE_TARGET; --host / DESKTAPE_HOST still work for an ad-hoc
+# target. `desktape.py targets` lists them with their lock and status.
+
+default: test-box
+
+targets:
+  test-box:
+    host: test-box.example.lan          # an address, user@address, or local
+    user: desktape                      # the Windows account desktape logs in as (a standard user)
+    identity: ~/.ssh/id_ed25519         # optional: the SSH key for this machine
+    label: "Windows 11 test box"
+    note: "Keep an RDP window connected and visible during runs."
+
+  second-box:
+    host: second-box.example.lan
+    user: desktape
+    label: "Second Windows machine"
+    call_deadline: 2                    # optional: a slower machine; doubles every driver call's deadline
+    alert_cmd: 'notify-send desktape "$DESKTAPE_ALERT"'   # optional: runs when a session is blocked or stuck
+
+  this-machine:
+    host: local                         # desktape running on the Windows target itself
+    label: "This Windows machine"

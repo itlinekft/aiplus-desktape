@@ -62,6 +62,7 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 
 ```bash
 export DESKTAPE_HOST=user@windows-host                     # or --host; `local` on the Windows machine itself
+python3 desktape.py targets                                # or name your machines: targets.example.yaml, --target NAME
 python3 desktape.py --selftest                             # offline checks, no host needed
 python3 desktape.py look --map claude-desktop-win          # the window's labelled actionable elements
 python3 desktape.py look --map claude-desktop-win --new    # … only what changed since the last look

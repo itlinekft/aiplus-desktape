@@ -6,9 +6,12 @@
   desktape.py act 'STEP' [--map M] [--append TAPE] one step; appended to the tape only if it passed
   desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py status [--json]                     the session's state, last good step, strikes
+  desktape.py targets                             the named targets, with lock and status
   desktape.py --selftest                          offline checks, no host needed
 
-Host: --host, else DESKTAPE_HOST (user@host of the Windows machine).
+Target: --host user@host or --target NAME, else DESKTAPE_TARGET, else DESKTAPE_HOST, else the default in
+~/.config/desktape/targets.yaml (named targets with host, user, SSH key, label and note; see
+targets.example.yaml).
 Test mode runs as fast as the UI allows. Video mode records the screen (Cua start_recording), pauses
 between steps, and burns the tape's captions into the video afterwards.
 Every tool call is appended to runs/<stamp>/audit.jsonl. Only tools on ALLOWED can be called.
@@ -35,6 +38,75 @@ def host_default():
     return os.environ.get("DESKTAPE_HOST") or DEFAULT_HOST
 
 
+# ---- named targets (target-profiles) ----------------------------------------------------------------
+
+SSH_OPTS = {}         # host string -> extra ssh/scp options, from the target's profile (an identity file)
+TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline"}
+
+
+def targets_path():
+    if os.environ.get("DESKTAPE_TARGETS"):
+        return os.environ["DESKTAPE_TARGETS"]
+    base = os.environ.get("APPDATA") if os.name == "nt" else \
+        (os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"))
+    return os.path.join(base or "", "desktape", "targets.yaml")
+
+
+def load_targets(path=None):
+    """The targets file: {"default": name or None, "targets": {name: profile}}. No file: no targets."""
+    path = path or targets_path()
+    if not os.path.exists(path):
+        return {"default": None, "targets": {}, "path": path}
+    doc = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    targets = doc.get("targets") or {}
+    for name, t in targets.items():
+        if not isinstance(t, dict) or not t.get("host"):
+            raise ValueError(f"{path}: target {name!r} needs a host (an address, user@address, or local)")
+        extra = set(t) - TARGET_FIELDS
+        if extra:
+            raise ValueError(f"{path}: target {name!r} has unknown fields {sorted(extra)}; known: {sorted(TARGET_FIELDS)}")
+    if doc.get("default") and doc["default"] not in targets:
+        raise ValueError(f"{path}: default {doc['default']!r} is not a target; known: {sorted(targets)}")
+    return {"default": doc.get("default"), "targets": targets, "path": path}
+
+
+def ssh_host(t):
+    """The ssh destination of a profile: `local`, `user@address`, or the address as written."""
+    if t["host"] == "local" or "@" in t["host"] or not t.get("user"):
+        return t["host"]
+    return f"{t['user']}@{t['host']}"
+
+
+def choose_target(cli_host=None, cli_target=None, env=None, cfg=None):
+    """(host string, target name or None) in the order --host/--target, DESKTAPE_TARGET, DESKTAPE_HOST,
+    the file's default. Applies the profile: its identity file to SSH, alert_cmd and call_deadline to the
+    environment unless the environment sets them."""
+    env = os.environ if env is None else env
+    if cli_host and cli_target:
+        raise ValueError("give --host or --target, not both")
+    if cli_host:
+        return cli_host, None
+    cfg = cfg if cfg is not None else load_targets()
+    name = cli_target or env.get("DESKTAPE_TARGET")
+    if not name and env.get("DESKTAPE_HOST"):
+        return env["DESKTAPE_HOST"], None
+    name = name or cfg["default"]
+    if not name:
+        return DEFAULT_HOST, None
+    if name not in cfg["targets"]:
+        raise ValueError(f"no target {name!r} in {cfg['path']}; known: {', '.join(sorted(cfg['targets'])) or 'none'}")
+    t = cfg["targets"][name]
+    host = ssh_host(t)
+    if t.get("identity"):
+        SSH_OPTS[host] = ["-i", os.path.expanduser(t["identity"]), "-o", "IdentitiesOnly=yes"]
+    if t.get("alert_cmd"):
+        env.setdefault("DESKTAPE_ALERT_CMD", str(t["alert_cmd"]))
+    if t.get("call_deadline"):
+        env.setdefault("DESKTAPE_CALL_DEADLINE", str(t["call_deadline"]))
+    logger.debug("target %s: %s (%s)", name, host, t.get("label") or "no label")
+    return host, name
+
+
 # Telemetry, update check and run_script off for every driver process, not only for the daemon.
 DRIVER_ENV = {"CUA_DRIVER_RS_TELEMETRY_ENABLED": "false", "DO_NOT_TRACK": "1",
               "CUA_DRIVER_RS_UPDATE_CHECK": "false", "CUA_DRIVER_DISABLE_RUN_SCRIPT": "1"}
@@ -48,6 +120,7 @@ class Target:
 
     def __init__(self, host):
         self.host, self.local = host, host == "local"
+        self.opts = SSH_OPTS.get(host, [])      # target-profiles: the profile's identity file
         if self.local and os.name != "nt":
             raise SystemExit("desktape: --host local drives the driver on this machine, which must be Windows")
 
@@ -56,13 +129,13 @@ class Target:
         if self.local:
             return [os.path.expandvars(EXE), "mcp", "--socket", PIPE], {**os.environ, **DRIVER_ENV}
         sets = "".join(f"set {k}={v}&& " for k, v in DRIVER_ENV.items())
-        return ["ssh", "-o", "BatchMode=yes", self.host, sets + f'"{EXE}" mcp --socket {PIPE}'], None
+        return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f'"{EXE}" mcp --socket {PIPE}'], None
 
     def sh(self, cmd, check=False):
         kw = dict(check=check, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if self.local:
             return subprocess.run(cmd, shell=True, **kw)
-        return subprocess.run(["ssh", "-o", "BatchMode=yes", self.host, cmd], **kw)
+        return subprocess.run(["ssh", "-o", "BatchMode=yes", *self.opts, self.host, cmd], **kw)
 
     def path(self, rel):
         return os.path.join(os.environ.get("USERPROFILE", ""), *rel.split("/"))
@@ -71,13 +144,13 @@ class Target:
         if self.local:
             shutil.copyfile(local_path, self.path(rel))
         else:
-            subprocess.run(["scp", "-q", local_path, f"{self.host}:{rel}"], check=True)
+            subprocess.run(["scp", "-q", *self.opts, local_path, f"{self.host}:{rel}"], check=True)
 
     def get(self, rel, local_path):
         if self.local:
             shutil.copyfile(self.path(rel), local_path)
         else:
-            subprocess.run(["scp", "-q", f"{self.host}:{rel}", local_path], check=True)
+            subprocess.run(["scp", "-q", *self.opts, f"{self.host}:{rel}", local_path], check=True)
 
 
 # step-effect-check D1: every driver call has a deadline (seconds); DESKTAPE_CALL_DEADLINE scales them all.
@@ -1337,6 +1410,28 @@ def cmd_status(a):
     return 0
 
 
+def cmd_targets(a):
+    """Every named target with its label, host, note, lock and status (target-profiles)."""
+    cfg = load_targets()
+    try:
+        chosen, _ = choose_target(a.host, a.target, dict(os.environ), cfg)
+    except ValueError as e:
+        chosen = None
+        print(f"# {e}")
+    print(f"# targets: {cfg['path']}" + ("" if cfg["targets"] else " (no file, or no targets in it)"))
+    rows = [(n, ssh_host(t), t) for n, t in sorted(cfg["targets"].items())]
+    if chosen and chosen not in {h for _, h, _ in rows}:
+        rows.append(("(ad hoc)", chosen, {}))
+    for name, host, t in rows:
+        mark = "*" if host == chosen else " "
+        default = " (default)" if name == cfg["default"] else ""
+        print(f"{mark} {name}{default}: {t.get('label') or ''} [{host}]".replace(":  [", ": ["))
+        if t.get("note"):
+            print(f"    note: {t['note']}")
+        print("    " + status_line(host, BoxLock(host).read()))
+    return 0
+
+
 def cmd_unlock(a):
     why = BoxLock(a.host).unlock()
     print(f"{a.host}: " + (why or "given back"))
@@ -1727,6 +1822,36 @@ def selftest():
                   {**q, "is_on_screen": False}):
         r = Runner(Stack([other]), "test"); r.expected = lambda t: True; r.focus("Claude")   # below, apart, hidden
     logger.setLevel(level)
+    # target-profiles: the file, the order of choice, the identity file on ssh, a misspelt name.
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "targets.yaml")
+        open(f, "w", encoding="utf-8").write("default: box1\ntargets:\n  box1: {host: user@box-one, label: One}\n"
+                                              "  box2: {host: 10.0.0.2, user: tester, identity: ~/.ssh/k, call_deadline: 2,"
+                                              " alert_cmd: 'true', note: keep RDP open}\n")
+        cfg = load_targets(f)
+        assert choose_target(None, None, {}, cfg) == ("user@box-one", "box1")
+        assert choose_target(None, None, {"DESKTAPE_HOST": "u@adhoc"}, cfg) == ("u@adhoc", None)
+        env = {"DESKTAPE_HOST": "u@adhoc", "DESKTAPE_TARGET": "box2", "DESKTAPE_CALL_DEADLINE": "3"}
+        assert choose_target(None, None, env, cfg) == ("tester@10.0.0.2", "box2")
+        assert env["DESKTAPE_CALL_DEADLINE"] == "3" and env["DESKTAPE_ALERT_CMD"] == "true", env   # the environment wins
+        assert choose_target("u@x", None, env, cfg) == ("u@x", None)
+        ssh = Target("tester@10.0.0.2").mcp()[0]
+        assert ssh[3:7] == ["-i", os.path.expanduser("~/.ssh/k"), "-o", "IdentitiesOnly=yes"] and ssh[7] == "tester@10.0.0.2", ssh
+        SSH_OPTS.clear()
+        for bad in ((None, "box3"), ("u@x", "box1")):
+            try:
+                choose_target(*bad, {}, cfg); raise AssertionError("expected ValueError")
+            except ValueError as e:
+                assert "box1, box2" in str(e) or "not both" in str(e), e
+        open(f, "w", encoding="utf-8").write("targets:\n  b: {host: x, port: 22}\n")
+        try:
+            load_targets(f); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "port" in str(e), e
+        assert choose_target(None, None, {}, load_targets(os.path.join(d, "none.yaml"))) == (DEFAULT_HOST, None)
+    ex = load_targets(os.path.join(HERE, "targets.example.yaml"))
+    assert ex["default"] in ex["targets"] and all("example" in ssh_host(t) or t["host"] == "local"
+                                                  for t in ex["targets"].values()), ex
     real = load_map("claude-desktop-win")
     for name in sorted(os.listdir(os.path.join(HERE, "tapes"))):   # every bundled tape resolves on its map
         if name.endswith((".yaml", ".yml")):
@@ -1741,9 +1866,14 @@ def selftest():
 def main():
     if "--selftest" in sys.argv:
         return selftest()
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--host", default=host_default())
+    common = argparse.ArgumentParser(add_help=False)   # before or after the command, either works
+    common.add_argument("--host", default=argparse.SUPPRESS, help="user@host, or local; default DESKTAPE_HOST")
+    common.add_argument("--target", default=argparse.SUPPRESS,
+                        help="a named target from the targets file; default DESKTAPE_TARGET")
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], parents=[common])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    _add = sub.add_parser
+    sub.add_parser = lambda *x, **k: _add(*x, parents=[common], **k)
     p = sub.add_parser("run"); p.add_argument("tape"); p.add_argument("--mode", default="test", choices=["test", "video"])
     p = sub.add_parser("look"); p.add_argument("--window"); p.add_argument("--map")
     p.add_argument("--ocr", action="store_true"); p.add_argument("--full", action="store_true")
@@ -1755,6 +1885,7 @@ def main():
     p.add_argument("--append")
     sub.add_parser("lock", help="who holds the target (box-lock)")
     sub.add_parser("unlock", help="give back this session's lock on the target now")
+    sub.add_parser("targets", help="the named targets, with lock and status")
     p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
     p.add_argument("--json", action="store_true")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
@@ -1762,13 +1893,18 @@ def main():
     if argv and argv[0].endswith((".yaml", ".yml")):
         argv = ["run"] + argv
     a = ap.parse_args(argv)
-    if not a.host:
-        ap.error("no host: set DESKTAPE_HOST=user@host or pass --host")
+    a.host, a.target = getattr(a, "host", None), getattr(a, "target", None)
     for stream in (sys.stdout, sys.stderr):
         if (stream.encoding or "").lower().replace("-", "") != "utf8":
             stream.reconfigure(encoding="utf-8", errors="replace")   # labels are UTF-8, whatever the console's code page
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if a.cmd == "targets":
+            return cmd_targets(a)
+        a.host, a.target = choose_target(a.host, a.target)     # target-profiles
+        if not a.host:
+            ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "
+                     f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
                 "status": cmd_status}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
