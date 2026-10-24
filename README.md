@@ -41,6 +41,9 @@ Status: **early**. The tape format and the commands may still change.
   controls, and a replay stops on a dialog the tape did not plan.
 - **One session per target:** `run`, `look` and `act` lock the target, so two agents cannot drive one
   desktop at once; the second waits, then stops naming the holder (`desktape.py lock` shows it).
+- **A step must do something:** a click or typed text that changed nothing fails as `no effect`, every
+  driver call has a deadline, three failures in a row stop `act`, and `desktape.py status` (or
+  `DESKTAPE_ALERT_CMD`) tells a watcher at once.
 
 Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with the model.
 

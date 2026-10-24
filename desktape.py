@@ -5,6 +5,7 @@
   desktape.py look [--window T] [--ocr] [--full]  what the window shows, cheapest form first
   desktape.py act 'STEP' [--map M] [--append TAPE] one step; appended to the tape only if it passed
   desktape.py lock | unlock                       who holds the target; give this session's lock back
+  desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py --selftest                          offline checks, no host needed
 
 Host: --host, else DESKTAPE_HOST (user@host of the Windows machine).
@@ -12,10 +13,12 @@ Test mode runs as fast as the UI allows. Video mode records the screen (Cua star
 between steps, and burns the tape's captions into the video afterwards.
 Every tool call is appended to runs/<stamp>/audit.jsonl. Only tools on ALLOWED can be called.
 One session drives a target at a time: run, look and act wait for, or stop on, another session's lock.
+Every driver call has a deadline, and a click or typed text must show an effect; three failed steps in a
+row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a blocked or stuck session.
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, contextlib, json, logging, os, re, shutil, subprocess, sys, tempfile, time
+import argparse, contextlib, json, logging, os, queue, re, shutil, subprocess, sys, tempfile, threading, time
 
 import yaml
 
@@ -77,6 +80,27 @@ class Target:
             subprocess.run(["scp", "-q", f"{self.host}:{rel}", local_path], check=True)
 
 
+# step-effect-check D1: every driver call has a deadline (seconds); DESKTAPE_CALL_DEADLINE scales them all.
+DEADLINES = {"get_window_state": 15.0, "list_windows": 10.0, "start_recording": 30.0, "stop_recording": 10.0,
+             "get_recording_state": 10.0}
+ACTION_DEADLINE, PER_CHAR = 6.0, 0.03     # clicks and keys; typed text gets 30 ms more per character
+CONNECT_DEADLINE = 60.0
+
+
+def deadline(tool, args):
+    base = DEADLINES.get(tool, ACTION_DEADLINE) + (PER_CHAR * len(args.get("text") or "") if tool == "type_text" else 0)
+    return base * float(os.environ.get("DESKTAPE_CALL_DEADLINE") or 1)
+
+
+class CallBlocked(RuntimeError):
+    """A driver call that passed its deadline (step-effect-check D1)."""
+
+    def __init__(self, tool, args, waited):
+        self.tool, self.args, self.waited = tool, args, waited
+        super().__init__(f"blocked: {tool} did not answer within {waited:.1f} s "
+                         f"(window {args.get('window_id')}, pid {args.get('pid')})")
+
+
 NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
 FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
 
@@ -100,6 +124,7 @@ class Cua:
 
     def __init__(self, host, audit_path):
         self.audit = open(audit_path, "a", encoding="utf-8")
+        self.host, self.on_blocked = host, None     # on_blocked(tool, args, waited): the status hook (D5)
         try:
             self._connect(host)
         except RuntimeError as e:
@@ -120,17 +145,32 @@ class Cua:
         self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, text=True,
                                   bufsize=1, env=env, encoding="utf-8", errors="replace")   # the driver speaks UTF-8; Windows' ANSI code page may not be
         self.n = 0
+        self.lines = queue.Queue()             # D1: a reader thread, so a call can wait with a deadline
+        threading.Thread(target=self._read, args=(self.p.stdout, self.lines), daemon=True).start()
         self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                  "clientInfo": {"name": "desktape", "version": "0.1"}})
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
+    @staticmethod
+    def _read(stream, lines):
+        for line in stream:
+            lines.put(line)
+        lines.put(None)                        # end of output
+
     def _send(self, m):
         self.p.stdin.write(json.dumps(m) + "\n"); self.p.stdin.flush()
 
-    def _rpc(self, method, params):
+    def _rpc(self, method, params, timeout=CONNECT_DEADLINE):
         self.n += 1
         self._send({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params})
-        for line in self.p.stdout:
+        end = time.time() + timeout
+        while True:
+            try:
+                line = self.lines.get(timeout=max(0.0, end - time.time()))
+            except queue.Empty:
+                raise TimeoutError(method) from None
+            if line is None:
+                break
             if line.startswith("{"):
                 m = json.loads(line)
                 if m.get("id") == self.n:
@@ -146,18 +186,44 @@ class Cua:
         if tool not in ALLOWED:
             raise PermissionError(f"tool {tool!r} is not on the allowlist")
         t0 = time.time()
-        r = self._rpc("tools/call", {"name": tool, "arguments": args})
+        logged = {**args, "text": "<redacted>"} if secret and "text" in args else args
+        try:
+            r = self._rpc("tools/call", {"name": tool, "arguments": args}, timeout=deadline(tool, args))
+        except TimeoutError:
+            waited = time.time() - t0      # D1: written now, while the call still hangs, not when it returns
+            self.audit.write(json.dumps({"ts": round(t0, 3), "tool": tool, "args": logged, "ok": False,
+                                         "blocked": True, "ms": int(waited * 1000)}, ensure_ascii=False) + "\n")
+            self.audit.flush()
+            logger.error("%s did not answer within %.1f s (pid %s, window %s); opening a new driver connection",
+                         tool, waited, args.get("pid"), args.get("window_id"))
+            if self.on_blocked:
+                self.on_blocked(tool, args, waited)
+            self.reconnect()
+            raise CallBlocked(tool, args, waited) from None
         res = r.get("result", {})
         text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
         ok = "error" not in r and not res.get("isError")
-        logged = {**args, "text": "<redacted>"} if secret and "text" in args else args
-        self.audit.write(json.dumps({"ts": round(t0, 3), "tool": tool, "args": logged, "ok": ok,
-                                     "ms": int((time.time() - t0) * 1000), "summary": text[:160]},
-                                    ensure_ascii=False) + "\n")
+        entry = {"ts": round(t0, 3), "tool": tool, "args": logged, "ok": ok, "ms": int((time.time() - t0) * 1000),
+                 "summary": text[:160]}
+        if isinstance(res.get("structuredContent"), dict) and "effect" in res["structuredContent"]:
+            entry["effect"] = res["structuredContent"]["effect"]     # newer drivers judge the action themselves
+        self.audit.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self.audit.flush()
         if not ok:
             raise RuntimeError(f"{tool} failed: {text[:300] or r.get('error')}")
         return res.get("structuredContent") or {}, text
+
+    def reconnect(self):
+        """Drop a connection whose call hangs (the driver keeps serving other connections) and open a new one."""
+        old = self.p
+        try:
+            old.stdin.close()
+        except OSError as e:
+            logger.warning("closing the hung driver connection (pid %s): %s", old.pid, e)
+        old.terminate()
+        self.err.close()
+        self._connect(self.host)
+        logger.info("new driver connection to %s (the hung one, pid %s, was terminated)", self.host, old.pid)
 
     def close(self):
         self.p.stdin.close(); self.p.terminate(); self.audit.close(); self.err.close()
@@ -277,8 +343,11 @@ class BoxLock:
                 logger.info("taking %s over from %s: its process is gone and its lease is over",
                             self.host, describe_lock(cur))
             t = self.now()
-            self._write({"holder": self.holder, "label": self.label, "pid": os.getpid(), "command": command,
-                         "since": cur["since"] if mine else t, "until": t + (LEASE if self.keeps else 0)})
+            new = {"holder": self.holder, "label": self.label, "pid": os.getpid(), "command": command,
+                   "since": cur["since"] if mine else t, "until": t + (LEASE if self.keeps else 0)}
+            if mine:            # step-effect-check D5: the session's status outlives its commands
+                new.update({k: cur[k] for k in STATUS_FIELDS if k in cur})
+            self._write(new)
             return None
         return self._under_mutex(take)
 
@@ -310,6 +379,20 @@ class BoxLock:
                 os.remove(self.path)
         self._under_mutex(give)
 
+    def status(self, **fields):
+        """Update this session's status in the lock file (step-effect-check D5). Returns the state it had."""
+        def put():
+            cur = self.read()
+            if not cur or cur.get("holder") != self.holder:
+                logger.warning("status of %s not written: the lock is not ours (%s)", self.host, cur and describe_lock(cur))
+                return None
+            prev = cur.get("state")
+            cur.update(fields, updated=self.now())
+            self._write(cur)
+            logger.debug("status of %s: %s -> %s", self.host, prev, cur.get("state"))
+            return prev
+        return self._under_mutex(put)
+
     def unlock(self):
         """Give back our own lock now. Returns None when done, else why not."""
         def drop():
@@ -322,6 +405,62 @@ class BoxLock:
             logger.info("lock on %s given back by %s", self.host, self.label)
             return None
         return self._under_mutex(drop)
+
+
+STATUS_FIELDS = ("state", "step", "last_ok_at", "strikes", "error", "history", "stuck", "updated")
+STRIKES = 3             # step-effect-check D4: failed steps in a row before `act` stops
+
+
+def alert(text):
+    """Run DESKTAPE_ALERT_CMD with the alert text (D6): in $DESKTAPE_ALERT and on stdin, at most 10 s."""
+    cmd = os.environ.get("DESKTAPE_ALERT_CMD")
+    if not cmd:
+        logger.info("no DESKTAPE_ALERT_CMD; alert only logged: %s", text)
+        return
+    try:
+        r = subprocess.run(cmd, shell=True, input=text, text=True, capture_output=True, timeout=10,
+                           env={**os.environ, "DESKTAPE_ALERT": text})
+        if r.returncode:
+            logger.warning("alert command exited %s: %s", r.returncode, (r.stderr or r.stdout).strip()[:200])
+        else:
+            logger.info("alert sent: %s", text)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("alert command failed: %s", e)
+
+
+def stuck_report(path, host, history, last_ok_at, tree_text, ignore=None):
+    """runs/<stamp>/stuck.md (D4): the failed steps, how long since the last good one, the window."""
+    kept, _ = apply_ignore(tree_text.splitlines(), ignore)
+    since = f"{time.time() - last_ok_at:.0f} s ago" if last_ok_at else "not in this session"
+    body = [f"# Stuck on {host}", "", f"{len(history)} failed steps in a row; the last good step was {since}.",
+            "`act` refuses to act until a `look`. Look at the window, then change the step or the map.", "",
+            "## The failed steps", ""]
+    body += [f"- {time.strftime('%H:%M:%S', time.localtime(h['at']))} `{h['step']}`: {h['error']}" for h in history]
+    body += ["", "## The window's elements", "", "```", *compact(kept), "```", ""]
+    open(path, "w", encoding="utf-8").write("\n".join(body))
+    return path
+
+
+def strike(lk, host, step, err, run_dir, tree_text, ignore=None):
+    """Count a failed step (D4) and write the status (D5); at STRIKES, write stuck.md and alert (D6)."""
+    cur = lk.read() or {}
+    history = (cur.get("history") or [])[-(STRIKES - 1):] + [{"step": step, "error": str(err)[:300], "at": time.time()}]
+    n = (cur.get("strikes") or 0) + 1
+    fields = {"state": "blocked" if isinstance(err, CallBlocked) else "failed", "step": step, "strikes": n,
+              "error": str(err)[:300], "history": history}
+    if n >= STRIKES:
+        fields.update(state="stuck", stuck=stuck_report(os.path.join(run_dir, "stuck.md"), host, history,
+                                                       cur.get("last_ok_at"), tree_text, ignore))
+    prev = lk.status(**fields)
+    logger.warning("strike %d/%d on %s: %s", n, STRIKES, host, str(err)[:200])
+    if fields["state"] in ("stuck", "blocked") and (prev != fields["state"] or fields["state"] == "stuck"):
+        alert(f"desktape {host}: {fields['state']} ({lk.label}, strike {n}/{STRIKES}) at `{step}`: {str(err)[:200]}"
+              + (f" | report: {fields['stuck']}" if fields.get("stuck") else ""))
+    return fields
+
+
+def passed(lk, step):
+    lk.status(state="ok", step=step, strikes=0, error=None, history=[], stuck=None, last_ok_at=time.time())
 
 
 @contextlib.contextmanager
@@ -559,6 +698,21 @@ def ocr_lines(host):
 
 # ---- the runner ---------------------------------------------------------------------------------
 
+EFFECT_WAIT = 3.0       # step-effect-check D2: how long a click or typed text has to show an effect
+CLOSE_LABELS = {"OK", "Cancel", "Close", "Save", "Yes", "No", "Igen", "Nem", "Mégse", "Bezárás", "Mentés"}
+INDEX = re.compile(r"\[\d+\] ")      # element indices change between snapshots; they are not an effect
+
+
+def shape(tree_text):
+    """The tree's own lines without element indices (D2). The driver appends notes such as "Invalidated
+    snapshots …: their element_tokens are stale" that change on every snapshot (measured), so they are left out."""
+    return "\n".join(INDEX.sub("", l) for l in tree_text.splitlines() if l.lstrip().startswith("- "))
+
+
+class NoEffect(AssertionError):
+    """A step the driver accepted that changed nothing it should have (step-effect-check D2, D3)."""
+
+
 class Runner:
     def __init__(self, cua, mode):
         self.cua, self.mode = cua, mode
@@ -572,6 +726,7 @@ class Runner:
         self.title = None        # the focused window's title, for deny entries tied to a window
         self.deny = []           # the map's deny entries (replay-guards D1)
         self.expected = None     # a title predicate; None: no dialog check (replay-guards D3)
+        self.secondary = False   # the focused window is not its process's biggest one (step-effect-check D2)
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
 
@@ -599,6 +754,67 @@ class Runner:
         if bad:
             logger.warning("unexpected %s in %r (pid %s)", ", ".join(bad), self.title, self.win["pid"])
             raise AssertionError(f"unexpected {', '.join(bad)}: name it in the tape's `dialogs:` if it is planned")
+
+    def process_windows(self):
+        sc, _ = self.cua.call("list_windows", {})
+        return {(w.get("window_id"), w.get("title"), w.get("is_on_screen"), w.get("minimized"))
+                for w in sc.get("windows", []) if w.get("pid") == self.win["pid"]}
+
+    def signature(self):
+        """What an action may change (D2): the window's tree without element indices, and its process's
+        windows. Takes the windows now and the tree from the last snapshot."""
+        return shape(self.tree), frozenset(self.process_windows())
+
+    def in_dialog(self, e):
+        """The title of the dialog the element sits in (D2): a nested Window node of the tree, or the focused
+        window itself when a bigger window of its process was open when it was focused. None otherwise."""
+        lines = self.tree.splitlines()
+        at = next((i for i, l in enumerate(lines) if f"[{e.get('element_index')}] " in l), None)
+        if at is not None:
+            depth = len(lines[at]) - len(lines[at].lstrip())
+            for l in reversed(lines[:at]):
+                n = parse(l)
+                if n and n[0] < depth:
+                    depth = n[0]
+                    if n[1] == "Window" and n[0] > 0:
+                        return n[2] or "(untitled dialog)"
+        return self.title if self.secondary else None
+
+    def check_effect(self, before, what, close=None, text=None):
+        """Poll until the action shows (D2, D3): the focused window gone; for a close-type click, the dialog
+        `close` gone or a new window of the process (a confirmation); for typed `text`, the text in the window;
+        otherwise any change of the signature."""
+        end, changed = time.time() + EFFECT_WAIT, False
+        while True:
+            wins = self.process_windows()
+            if self.win["window_id"] not in {w[0] for w in wins}:
+                logger.info("%s: the window %r closed", what, self.title)
+                return
+            new = sorted(w[1] or "(untitled)" for w in wins if w[0] not in {b[0] for b in before[1]})
+            if close is not None and new:
+                logger.info("%s: %r is still open, and it opened %s", what, close, ", ".join(map(repr, new)))
+                return
+            self.snapshot()
+            changed = (shape(self.tree), frozenset(wins)) != before
+            if close is not None:
+                done = close != self.title and not any(
+                    n and n[1] == "Window" and n[0] > 0 and (n[2] or "(untitled dialog)") == close
+                    for n in map(parse, self.tree.splitlines()))
+            elif text is not None:
+                done = text[:40] in self.tree
+            else:
+                done = changed
+            if done:
+                return
+            if time.time() > end:
+                break
+            time.sleep(0.3)
+        if text is not None and changed:
+            logger.warning("%s: the window changed, but the typed text is not readable in it", what)
+            return
+        need = f"the dialog {close!r} is still open" if close is not None else \
+            "the text does not show and nothing changed" if text is not None else "nothing changed"
+        raise NoEffect(f"no effect: {what}: {need} after {EFFECT_WAIT:.1f} s (add `effect: none` if that is right)")
 
     def find(self, label, role=None, prefix=False, nth=1, enabled_only=False):
         """The `nth` element (1-based, negative from the end, in tree order) matching role and label."""
@@ -636,6 +852,9 @@ class Runner:
             raise RuntimeError(f"no window titled {title!r}")
         self.win, self.title = {"pid": w["pid"], "window_id": w["window_id"]}, title
         self.baseline = {x.get("window_id") for x in sc.get("windows", []) if x.get("pid") == w["pid"]}
+        area = lambda x: (x.get("bounds") or {}).get("width", 0) * (x.get("bounds") or {}).get("height", 0)
+        self.secondary = any(area(x) > area(w) for x in sc.get("windows", [])
+                             if x.get("pid") == w["pid"] and x.get("window_id") != w["window_id"])
         self.dirty = True        # a new window: the next dialog check needs its own snapshot (measured)
         try:
             self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
@@ -690,8 +909,26 @@ class Runner:
             args = {**self.win, "element_token": e["element_token"]}
             if a.get("action"):
                 args["action"] = a["action"]
-            self.cua.call("click", args)
+            what = f'click on {e.get("role")} "{label}"'
+            before = self.signature()
+            try:
+                self.cua.call("click", args)
+            except CallBlocked as cb:
+                # D1: a click that opened a modal window of its process does not return until it closes
+                new = sorted(w[1] or "(untitled)" for w in self.process_windows() if w[0] not in {b[0] for b in before[1]})
+                if not new:
+                    raise
+                logger.warning("%s did not return within %.1f s; it opened %s, so it counts as done",
+                               what, cb.waited, ", ".join(repr(t) for t in new))
+                self.dirty = True
+                return
             self.dirty = True
+            if a.get("effect") == "none" or e.get("selected"):
+                # D2: an already selected tab or radio button rightly changes nothing when clicked again
+                logger.debug("%s: no effect check (%s)", what, "effect: none" if a.get("effect") == "none" else "already selected")
+            else:
+                dialog = self.in_dialog(e) if label in CLOSE_LABELS else None
+                self.check_effect(before, what, close=dialog)
         elif kind == "expect":
             a = arg if isinstance(arg, dict) else {"label": arg}
             if not self.wait_for(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
@@ -704,8 +941,14 @@ class Runner:
                 raise AssertionError(f"{a.get('role') or 'element'} {a['label']!r} did not go away")
         elif kind == "type":
             a = arg if isinstance(arg, dict) else {"text": arg}
+            check = a.get("effect") != "none" and not a.get("secret") and a["text"].strip()
+            if check:
+                self.snapshot()
+                before = self.signature()
             self.cua.call("type_text", {**self.win, "text": a["text"], "delivery_mode": "foreground"},
                           secret=a.get("secret", False))
+            if check:   # D3: the text must show, or the window at least change; a secret is never read back
+                self.check_effect(before, f"type {a['text'][:30]!r}", text=a["text"])
         elif kind == "hotkey":
             self.cua.call("hotkey", {**self.win, "keys": list(arg), "delivery_mode": "foreground"})
         elif kind == "key":
@@ -803,14 +1046,17 @@ def cmd_run(a):
     check_tape_deny(plan, deny)                      # … and so does a click the map denies
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
-    with box_lock(a.host, f"run {a.tape}"):          # box-lock: after the offline checks, so a broken tape never waits
-        return run_tape(a, tape, amap, plan, deny, tape_boxes, redacting)
+    with box_lock(a.host, f"run {a.tape}") as lk:    # box-lock: after the offline checks, so a broken tape never waits
+        return run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk)
 
 
-def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting):
+def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     run_dir = new_run_dir(tape["name"], a.mode)
     stamp = os.path.basename(run_dir).split("-")[0] + "-" + os.path.basename(run_dir).split("-")[1]
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
+    if lk:
+        cua.on_blocked = lambda tool, args, waited: lk.status(state="blocked", error=f"{tool} did not answer "
+                                                              f"within {waited:.1f} s")
     r = Runner(cua, a.mode)
     r.deny, r.expected = deny, expected_dialogs(tape, amap, plan)
     rec_dir = rec_rel = None
@@ -826,6 +1072,9 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting):
             if a.mode == "video" and r.t_rec is None and r.win is not None:
                 cua.call("start_recording", {"output_dir": rec_dir, "record_video": True})
                 r.t_rec = time.time()
+            desc = f"{tape['name']} step {i}: " + json.dumps(tape["steps"][i], ensure_ascii=False)[:100]
+            if lk:
+                lk.status(state="running", step=desc)
             try:
                 r.step(s)
                 if "focus" in s and tape.get("window") and not frame_set:
@@ -840,7 +1089,11 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting):
                         logger.warning("no snapshot for the repair bundle: %s", e2)
                 repair = repair_bundle(os.path.join(run_dir, "repair.md"), tape["name"], i, tape["steps"][i],
                                        s, entry, e, r.tree, (amap or {}).get("ignore"))
+                if lk:
+                    strike(lk, a.host, desc, e, run_dir, r.tree, (amap or {}).get("ignore"))
                 break
+            if lk:
+                lk.status(last_ok_at=time.time())
             done += 1
             logger.info("step %d ok: %s", i, json.dumps(tape["steps"][i], ensure_ascii=False)[:100])
             if a.mode == "video" and not {"pause", "redact"} & s.keys():
@@ -862,6 +1115,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting):
             time.sleep(1.0)
             cua.call("stop_recording", {})
         cua.close()
+    if lk and failed is None:
+        passed(lk, f"{tape['name']}: all {len(plan)} steps")
     summary = {"tape": tape["name"], "mode": a.mode, "map": tape.get("map"), "steps": len(plan), "passed": done,
                "failed": failed, "seconds": round(time.time() - t0, 1), "snapshots": r.snapshots,
                "model_calls": 0}
@@ -916,8 +1171,10 @@ def look_lines(tree_text, ignore, full=False, texts=False, new=False, grep=None,
 
 
 def cmd_look(a):
-    with box_lock(a.host, "look"):
-        return look(a)
+    with box_lock(a.host, "look") as lk:
+        rc = look(a)
+        lk.status(state="ok", step="look", strikes=0, error=None, history=[], stuck=None)   # D4: looking clears strikes
+        return rc
 
 
 def look(a):
@@ -967,13 +1224,24 @@ def cmd_act(a):
     amap = load_map(map_name)
     s, entry = resolve(step, amap)
     deny = deny_entries(amap)
-    with box_lock(a.host, f"act {a.step}"):
-        return act_step(a, step, amap, s, entry, deny)
+    with box_lock(a.host, f"act {a.step}") as lk:
+        return act_step(a, step, amap, s, entry, deny, lk)
 
 
-def act_step(a, step, amap, s, entry, deny):
+def act_step(a, step, amap, s, entry, deny, lk=None):
+    desc = json.dumps(step, ensure_ascii=False)[:120]
+    if lk:
+        cur = lk.read() or {}
+        if (cur.get("strikes") or 0) >= STRIKES:     # step-effect-check D4: no fourth blind step
+            print(f"STUCK: {cur['strikes']} failed steps in a row on {a.host}; run `look` before the next `act`.\n"
+                  f"report: {cur.get('stuck')}")
+            return 4
+        lk.status(state="running", step=desc)
     run_dir = new_run_dir("act", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
+    if lk:
+        cua.on_blocked = lambda tool, args, waited: lk.status(state="blocked", error=f"{tool} did not answer "
+                                                              f"within {waited:.1f} s")
     r = Runner(cua, "test")
     r.deny = deny                        # replay-guards D1: an agent learning a flow cannot click it either
     try:
@@ -989,9 +1257,15 @@ def act_step(a, step, amap, s, entry, deny):
         p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", 0, step, s, entry, e, r.tree,
                           (amap or {}).get("ignore"))
         print(f"FAILED: {e}\nrepair bundle: {p}")
+        if lk:
+            st = strike(lk, a.host, desc, e, run_dir, r.tree, (amap or {}).get("ignore"))
+            if st["state"] == "stuck":
+                print(f"STUCK: {st['strikes']} failed steps in a row; report: {st['stuck']}")
         return 1
     finally:
         cua.close()
+    if lk:
+        passed(lk, desc)
     print(f"ok: {json.dumps(step, ensure_ascii=False)}")
     if a.append:
         append_step(a.append, step)
@@ -1006,6 +1280,28 @@ def cmd_lock(a):
     print(f"{a.host}: " + ("held by " + describe_lock(other) if other else
                            ("held by this session, " + describe_lock(cur) if cur and cur.get("holder") == lk.holder
                             else "free")))
+    return 0
+
+
+def status_line(host, cur, now=None):
+    """One line for a watcher (step-effect-check D5)."""
+    if not cur:
+        return f"{host}: free"
+    now = now or time.time()
+    age = lambda t: f"{now - t:.0f} s ago" if t else "never"
+    line = (f"{host}: {cur.get('label') or cur.get('holder')} {cur.get('state') or 'idle'}"
+            f" | step: {cur.get('step') or cur.get('command')} | last ok {age(cur.get('last_ok_at'))}"
+            f" | strikes {cur.get('strikes') or 0}/{STRIKES} | updated {age(cur.get('updated'))}")
+    if cur.get("error") and cur.get("state") != "ok":
+        line += f" | error: {cur['error'][:160]}"
+    if cur.get("stuck"):
+        line += f" | report: {cur['stuck']}"
+    return line
+
+
+def cmd_status(a):
+    cur = BoxLock(a.host).read()
+    print(json.dumps(cur, ensure_ascii=False, indent=2) if a.json else status_line(a.host, cur))
     return 0
 
 
@@ -1156,7 +1452,7 @@ def selftest():
     with tempfile.TemporaryDirectory() as d:
         cua = Cua.__new__(Cua)
         cua.audit = open(os.path.join(d, "audit.jsonl"), "a", encoding="utf-8")
-        cua._rpc = lambda method, params: {"result": {"content": [{"type": "text", "text": "ok"}]}}
+        cua._rpc = lambda method, params, timeout=None: {"result": {"content": [{"type": "text", "text": "ok"}]}}
         cua.call("type_text", {"text": "hunter2"}, secret=True)
         try:
             cua.call("run_script", {}); raise AssertionError("expected PermissionError")
@@ -1207,7 +1503,7 @@ def selftest():
     f = Fake(); r = Runner(f, "test"); r.expected = ok; r.focus("Main")
     f.wins = [{"title": "Import products", "pid": 7, "window_id": 2}, {"title": "", "pid": 7, "window_id": 3},
               {"title": "Error", "pid": 8, "window_id": 4}]
-    r.step({"click": "Delete selected"})                    # planned window, an untitled one, another process
+    r.step({"click": {"label": "Delete selected", "effect": "none"}})   # planned window, an untitled one, another process
     f.wins.append({"title": "Error", "pid": 7, "window_id": 5})
     try:
         r.step({"key": "Enter"}); raise AssertionError("expected AssertionError")
@@ -1260,6 +1556,119 @@ def selftest():
                 os.environ.pop(k, None)
                 if v is not None:
                     os.environ[k] = v
+    # step-effect-check: a call past its deadline, a click that opened a modal, no effect, strikes, status, alert.
+    global EFFECT_WAIT
+    wait0, scale0 = EFFECT_WAIT, os.environ.get("DESKTAPE_CALL_DEADLINE")
+    EFFECT_WAIT, os.environ["DESKTAPE_CALL_DEADLINE"] = 0.4, "0.05"         # 6 s → 0.3 s for an action
+    silent = ("import sys, json\n"
+              "for l in sys.stdin:\n"
+              "    m = json.loads(l)\n"
+              "    if m.get('method') == 'initialize': print(json.dumps({'jsonrpc': '2.0', 'id': m['id'], 'result': {}}), flush=True)\n")
+    real_mcp, level = Target.mcp, logger.level
+    logger.setLevel(logging.CRITICAL)
+    Target.mcp = lambda self: ([sys.executable, "-c", silent], None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            c, seen = Cua("user@box", os.path.join(d, "a.jsonl")), []
+            c.on_blocked = lambda tool, args, waited: seen.append(tool)
+            first, t0 = c.p.pid, time.time()
+            try:
+                c.call("click", {"pid": 7, "window_id": 1}); raise AssertionError("expected CallBlocked")
+            except CallBlocked as e:
+                assert 0.25 < e.waited < 2 and time.time() - t0 < 3 and seen == ["click"], (e.waited, seen)
+            assert c.p.pid != first, "a blocked call must leave a new connection"
+            c.close()
+            log = [json.loads(l) for l in open(os.path.join(d, "a.jsonl"), encoding="utf-8")]
+            assert log[-1]["blocked"] and log[-1]["tool"] == "click", log
+    finally:
+        Target.mcp = real_mcp
+
+    class Screen:                       # a window whose tree and windows the test changes per call
+        def __init__(self, tree, on_click=None, wins=()):
+            self.tree, self.on_click, self.wins, self.sent = tree, on_click, list(wins), []
+        def call(self, tool, args, secret=False):
+            self.sent.append(tool)
+            if tool == "list_windows":
+                return {"windows": [{"title": "Main", "pid": 7, "window_id": 1, "bounds": {"width": 900, "height": 700}}]
+                        + self.wins}, ""
+            if tool == "get_window_state":
+                els = [{"label": m.group(2), "role": m.group(1), "element_token": m.group(2), "element_index": int(i)}
+                       for i, m in ((re.search(r"\[(\d+)\]", l).group(1), re.search(r'\] (\w+) "([^"]*)"', l))
+                                    for l in self.tree.splitlines() if re.search(r"\[\d+\]", l))]
+                return {"elements": els}, self.tree
+            if tool in ("click", "type_text") and self.on_click:
+                self.on_click(self, tool, args)
+            return {}, "ok"
+    base = '- Window "Main"\n  - [1] Button "Apply" [actions=[invoke]]\n  - [2] Edit "Path" [actions=[set_value]]'
+    assert shape(base + "\n\nInvalidated snapshots s1: their element_tokens are stale.") == shape(base)
+    sc = Screen(base); r = Runner(sc, "test"); r.focus("Main")
+    t0 = time.time()
+    try:
+        r.step({"click": "Apply"}); raise AssertionError("expected NoEffect")
+    except NoEffect as e:
+        assert 'click on Button "Apply"' in str(e) and time.time() - t0 < 2, e
+    r.step({"click": {"label": "Apply", "effect": "none"}})
+    sc.on_click = lambda w, tool, args: setattr(w, "tree", w.tree + '\n  - Text "Applied"')
+    r.step({"click": "Apply"})                                              # the tree changed: an effect
+    sc = Screen(base); r = Runner(sc, "test"); r.focus("Main")
+    try:
+        r.step({"type": "C:\\x.xls"}); raise AssertionError("expected NoEffect")       # a field that ignores typing
+    except NoEffect as e:
+        assert "does not show" in str(e), e
+    sc.on_click = lambda w, tool, args: setattr(w, "tree", w.tree.replace('Edit "Path"', f'Edit "Path" [value="{args["text"]}"]'))
+    r.step({"type": "C:\\x.xls"}); r.step({"type": {"text": "hunter2", "secret": True}})
+    dlg = base + '\n  - Window "Delete?"\n    - [3] Button "OK" [actions=[invoke]]'
+    sc = Screen(dlg, on_click=lambda w, tool, args: setattr(w, "tree", w.tree + '\n  - Text "busy"'))
+    r = Runner(sc, "test"); r.focus("Main")
+    try:
+        r.step({"click": "OK"}); raise AssertionError("expected NoEffect")  # changed, but the dialog stayed
+    except NoEffect as e:
+        assert "'Delete?' is still open" in str(e), e
+    sc.on_click = lambda w, tool, args: setattr(w, "tree", base)
+    r.step({"click": "OK"})
+    modal = {"title": "Open", "pid": 7, "window_id": 9}
+    def opens_modal(w, tool, args):
+        w.wins.append(modal); raise CallBlocked("click", args, 6.0)
+    sc = Screen(base, on_click=opens_modal); r = Runner(sc, "test"); r.focus("Main")
+    r.step({"click": "Apply"})                                              # blocked, but it opened a window
+    sc = Screen(base, on_click=lambda w, tool, args: (_ for _ in ()).throw(CallBlocked("click", args, 6.0)))
+    r = Runner(sc, "test"); r.focus("Main")
+    try:
+        r.step({"click": "Apply"}); raise AssertionError("expected CallBlocked")
+    except CallBlocked:
+        pass
+    with tempfile.TemporaryDirectory() as d:
+        env = {k: os.environ.pop(k, None) for k in ("DESKTAPE_HOLDER", "CLAUDE_CODE_SESSION_ID", "DESKTAPE_LABEL",
+                                                    "DESKTAPE_ALERT_CMD")}
+        try:
+            os.environ.update(DESKTAPE_HOLDER="A", DESKTAPE_LABEL="proj-a",
+                              DESKTAPE_ALERT_CMD=f'cat >> "{os.path.join(d, "alerts.txt")}"')
+            lk = BoxLock("user@box", os.path.join(d, "locks"), alive=lambda p: False)
+            lk.try_acquire("act x"); passed(lk, "first")
+            for i in range(STRIKES):
+                st = strike(lk, "user@box", f"step {i}", NoEffect("no effect: nothing changed"), d, base)
+            assert st["state"] == "stuck" and st["strikes"] == STRIKES and os.path.exists(st["stuck"]), st
+            assert "step 0" in open(st["stuck"], encoding="utf-8").read()
+            lk.release(); lk.try_acquire("act y")                       # the status survives a new command
+            line = status_line("user@box", lk.read())
+            assert "proj-a stuck" in line and f"strikes {STRIKES}/{STRIKES}" in line and "stuck.md" in line, line
+            alerts = open(os.path.join(d, "alerts.txt"), encoding="utf-8").read()
+            assert alerts.count("desktape user@box: stuck") == 1 and "step 2" in alerts, alerts
+            a_ = argparse.Namespace(host="user@box", window="Main", map=None, append=None)
+            with open(os.devnull, "w") as null, contextlib.redirect_stdout(null):
+                assert act_step(a_, {"click": "Apply"}, None, {"click": {"label": "Apply"}}, None, [], lk) == 4
+            passed(lk, "look"); assert lk.read()["strikes"] == 0 and status_line("user@box", None) == "user@box: free"
+        finally:
+            for k, v in env.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+    EFFECT_WAIT = wait0
+    if scale0 is None:
+        os.environ.pop("DESKTAPE_CALL_DEADLINE", None)
+    else:
+        os.environ["DESKTAPE_CALL_DEADLINE"] = scale0
+    logger.setLevel(level)
     real = load_map("claude-desktop-win")
     for name in sorted(os.listdir(os.path.join(HERE, "tapes"))):   # every bundled tape resolves on its map
         if name.endswith((".yaml", ".yml")):
@@ -1288,6 +1697,8 @@ def main():
     p.add_argument("--append")
     sub.add_parser("lock", help="who holds the target (box-lock)")
     sub.add_parser("unlock", help="give back this session's lock on the target now")
+    p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
+    p.add_argument("--json", action="store_true")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
     argv = sys.argv[1:]
     if argv and argv[0].endswith((".yaml", ".yml")):
@@ -1300,7 +1711,8 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")   # labels are UTF-8, whatever the console's code page
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock}[a.cmd](a)
+        return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
+                "status": cmd_status}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
         return 3

@@ -149,6 +149,27 @@ your own lock early, for example at the end of a flow. A holder that crashed fre
 lease runs out. The lock lives on the controller, so two controllers on different machines do not see each
 other's locks.
 
+**desktape notices a step that did nothing, and says so while it happens.** Every click and typed text
+gets an effect check (see [the tape format](tape-format.md#effect-checks-a-step-the-driver-accepted-must-also-do-something)),
+and every driver call a deadline. Three failed steps in a row on one target stop `act`: the fourth exits
+with code 4 and names `runs/<stamp>/stuck.md` (the failed steps, their errors, the window's elements),
+until a `look` clears the count. That keeps an agent from retrying blind.
+
+A person or another agent can watch without reading logs:
+
+```bash
+python3 desktape.py status          # one line: holder, state, last step, last good step, strikes, error
+python3 desktape.py status --json   # the whole record
+```
+
+The state is `running`, `ok`, `failed`, `blocked` (a driver call is past its deadline right now) or
+`stuck`. To be told instead of polling, set `DESKTAPE_ALERT_CMD`: when a session gets stuck, or a step
+fails as blocked, desktape runs it through the shell with the alert text in `$DESKTAPE_ALERT` and on
+stdin, for example `DESKTAPE_ALERT_CMD='notify-send desktape "$DESKTAPE_ALERT"'`. A failing command is only
+logged. Measured on 2026-10-24: a click with no effect fails 4 s after it starts, the third strike's
+alert went out 4.0 s after that step started, and a browse button that opens a modal file dialog, which
+had kept a call hanging for 4 min 22 s, counted as done after 9.2 s.
+
 ## 8. Troubleshooting
 
 | Message | Cause and fix |

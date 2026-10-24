@@ -94,6 +94,49 @@ Several come close, and they are worth knowing:
 Scope: GitHub, Hacker News and the web, with a light pass over Reddit. Large commercial suites beyond the
 ones listed were not reviewed.
 
+## Checking that a step worked, and noticing a stuck run
+
+How other tools tell a step that did something from one that was only delivered, and how they surface a
+run that hangs. Researched on 2026-10-24 for desktape's effect checks (the `step-effect-check` change).
+
+- **A UI Automation Invoke that opens a modal blocks its caller.** Microsoft's guidance for providers says
+  Invoke "must return immediately without blocking", because a client "will remain blocked until the modal
+  dialog is closed" ([Implementing Invoke](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementinginvoke)).
+  Not every provider follows it, and while a call is blocked, `WindowOpened` may not fire
+  ([Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/409327/ui-automation-modal-dialog-prevents-automation)).
+  We measured the same on 2026-10-24: a click on a browse button hung for 4 min 22 s. desktape therefore
+  puts its own deadline on every call and polls the window list instead of waiting for events; Microsoft
+  also notes that clients cannot rely on every event being raised
+  ([UIA events for clients](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-eventsforclients)).
+- **Playwright** checks before acting (visible, stable, enabled, receives events) and retries `expect`
+  assertions until a timeout, 5 s by default
+  ([actionability](https://playwright.dev/docs/actionability), [assertions](https://playwright.dev/docs/test-assertions)).
+  desktape already waits for an enabled element before a click; the effect check is the "after" half.
+- **FlaUI and pywinauto** offer retry-with-timeout helpers (`Retry.WhileNull`, `wait`, `wait_until_passes`)
+  rather than a built-in "did it work" check ([FlaUI Retry](https://github.com/FlaUI/FlaUI/wiki/Retry),
+  [pywinauto waits](https://pywinauto.readthedocs.io/en/latest/wait_long_operations.html)).
+- **UiPath** activities have *Verify execution*: after Type Into, for example, it checks that the text
+  matches, or that an element appeared, disappeared or changed, and retries the action until the activity's
+  timeout ([Type Into](https://docs.uipath.com/activities/other/latest/ui-automation/n-type-into)).
+  Orchestrator can alert on a job that "has not completed" in time
+  ([managing jobs](https://docs.uipath.com/orchestrator/standalone/2024.10/user-guide/managing-jobs)).
+  **Power Automate Desktop** has "Wait for window" and "Wait for window content" actions, and per-action
+  retry on error ([UI automation actions](https://learn.microsoft.com/en-us/power-automate/desktop-flows/actions-reference/uiautomation),
+  [errors](https://learn.microsoft.com/en-us/power-automate/desktop-flows/errors)).
+  desktape takes the verify idea but not the automatic retry: a retried click can repeat a real action,
+  and the runner never guesses (it writes `repair.md`, and after three failures `stuck.md`).
+- **Cua Driver** gives every action an `effect` verdict (`confirmed`, `unverifiable`, `suspected_noop`, …)
+  and has a `verify_state` tool with predicates and a timeout
+  ([action result contract](https://github.com/trycua/cua/blob/main/libs/cua-driver/docs/action-result-contract.md)).
+  Measured with driver 0.34.1 on Windows 11: all 9 actions of a tape came back `unverifiable`, so desktape
+  logs the verdict in `audit.jsonl` but makes its own check from the accessibility tree.
+- **Research agents** verify an action by comparing the screen before and after, with a model:
+  BacktrackAgent ([arXiv 2505.20660](https://arxiv.org/abs/2505.20660)), GUI-Reflection
+  ([arXiv 2506.08012](https://arxiv.org/abs/2506.08012)), and Evidence-First Reflection, which first
+  extracts the visual difference an action caused ([arXiv 2608.24015](https://arxiv.org/abs/2608.24015)).
+  desktape makes the same before/after comparison from the accessibility tree and the window list,
+  without a model.
+
 ## desktape and Claude's own computer use
 
 desktape does not use computer use, and does not need it switched on. The comparison, as Anthropic documents

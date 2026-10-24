@@ -101,6 +101,32 @@ denied element at run time (a prefix selector, a renamed button) stops with a re
 --append` does not keep it. The list covers clicks only: a `key: Delete` or an Enter after `type` is not
 matched.
 
+### Effect checks: a step the driver accepted must also do something
+
+The driver answers ✅ when it delivered a click or typed text, not when the program reacted. So after every
+`click` and `type`, in `run` and in `act`, the runner waits up to 3 s for an effect:
+
+- **A click** must change the window's tree (elements, values, texts) or its program's windows. A click
+  on an element the driver reports as selected (a tab or radio button already chosen) is not checked.
+- **A close-type button in a dialog** (OK, Cancel, Close, Save, Yes, No, Igen, Nem, Mégse, Bezárás,
+  Mentés) must make that dialog go away, or open a confirmation window of the same program. "In a dialog"
+  means a nested window, or a window smaller than another window of its program.
+- **Typed text** must show in the window, or the window must at least change. `secret: true` text is not
+  read back.
+
+A step that fails this stops with `no effect: …`. For a click or text that may rightly change nothing,
+write the step as a mapping with `effect: none`:
+
+```yaml
+  - click: { label: "Refresh", role: Button, effect: none }
+  - type: { text: "x", effect: none }
+```
+
+Every driver call also has a deadline (6 s for an action, plus 30 ms per typed character; 15 s for a
+snapshot; `DESKTAPE_CALL_DEADLINE=2` doubles them all). A call past it is written to `audit.jsonl` at that
+moment as `blocked`, and the step fails; but a click that blocked because it opened a modal window of its
+program (a file dialog) counts as done, and the run goes on.
+
 ## Map
 
 `maps/<app>.yaml` holds what a tape should not have to rediscover about an app:
