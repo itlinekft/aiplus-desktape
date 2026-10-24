@@ -92,7 +92,8 @@
     <figure>
       <video src="demo.mp4" poster="demo-poster.jpg" controls muted playsinline preload="metadata"></video>
       <figcaption>Recorded by the tape it shows, <code>tapes/claude-desktop-demo.yaml</code>: 43 steps, no model
-        calls. The grey boxes are desktape's own redaction, covering the account's chats and repositories.</figcaption>
+        calls, with Claude Desktop's computer use switched off. The grey boxes are desktape's own redaction,
+        covering the account's chats and repositories.</figcaption>
     </figure>
   </div>
 
@@ -115,6 +116,27 @@
           and the window's elements, and the agent fixes the map or the tape from it.</p>
       </div>
     </div>
+  </section>
+
+  <section>
+    <h2>No computer use needed</h2>
+    <p>desktape is not an AI controlling your computer. It does not use Claude's (or any model's) computer use,
+      and Claude Desktop's "Enable computer use" switch can stay off. A replay clicks through Windows UI Automation,
+      step by step as the tape says. A model is involved only while an agent writes or repairs a tape, and even then
+      it acts through desktape's <code>look</code> and <code>act</code>, which read the screen as text first.</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th></th><th>desktape replay</th><th>Claude's computer use</th></tr>
+        <tr><td>Which machine</td><td>another one over SSH, or the same one</td><td>only the one the Claude app runs on</td></tr>
+        <tr><td>Per step</td><td>no model call</td><td>a screenshot and a model call</td></tr>
+        <tr><td>Claude plan</td><td>none needed</td><td>Pro or Max; not Team or Enterprise</td></tr>
+        <tr><td>Permission</td><td>the tape, and the map's deny list</td><td>a prompt per app, per session</td></tr>
+        <tr><td>Screen on Windows</td><td>the target app's window</td><td>takes over the screen</td></tr>
+      </table>
+    </div>
+    <p style="color: var(--muted); font-size: 15px;">Claude's side as of October 2026, from Anthropic's help pages;
+      sources and our measurements in
+      <a href="https://github.com/tatargabor/desktape/blob/main/docs/related-work.md#desktape-and-claudes-own-computer-use">related work</a>.</p>
   </section>
 
   <section>
