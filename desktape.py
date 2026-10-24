@@ -1235,6 +1235,9 @@ class Runner:
             at = self.grid_point()
             if at is None:
                 break
+            # the scroll lands at a screen point: the window must be on top there, or another program's window
+            # scrolls instead and the rows "are not in the grid" (measured: a chat window over the program)
+            self.raise_for_input()
             self.cua.call("scroll", {**self.win, "direction": "down", "by": "page", "amount": 1,
                                      "delivery_mode": "foreground", "x": at[0], "y": at[1]})
             pages += 1
@@ -1250,6 +1253,18 @@ class Runner:
         if problems:
             raise AssertionError(f"check_table: {len(problems)} problem(s) in {len(want)} rows: " + "; ".join(problems[:12]))
         logger.info("check_table: %d rows x %d columns match %s", len(want), len(columns), os.path.basename(arg["file"]))
+
+    def raise_for_input(self):
+        """Bring the focused window to the top before input aimed at a screen point; fail, naming the window
+        on top, when another program's window still covers it."""
+        try:
+            self.cua.call("bring_to_front", dict(self.win))
+        except (CallBlocked, RuntimeError) as e:
+            logger.warning("bring_to_front of %r before pointer input: %s", self.title, e)
+        cover = self.covering(self.cua.call("list_windows", {})[0].get("windows", []))
+        if cover:
+            raise AssertionError(f"{self.title!r} is covered by {', '.join(cover)}; input aimed at the screen would "
+                                 "land there, so nothing was sent")
 
     def grid_point(self):
         """A window-local point inside the grid's rows, for scrolling it (the middle of a row element)."""
