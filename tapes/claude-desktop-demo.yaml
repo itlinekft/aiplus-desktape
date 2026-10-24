@@ -6,6 +6,7 @@ name: claude-desktop-demo
 app: Claude Desktop 3.6556 (Windows)
 map: claude-desktop-win
 video_pause: 1.2
+dialogs: ["Add marketplace"]        # opened on purpose; any other dialog stops the run
 redact:
   - { x: 0, y: 282, w: 286, h: 750 }        # sidebar below the navigation: pinned, recents, account
 steps:

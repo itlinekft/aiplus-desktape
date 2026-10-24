@@ -4,6 +4,7 @@ name: claude-desktop-tour
 app: Claude Desktop 3.6556 (Windows)
 map: claude-desktop-win
 video_pause: 1.0
+dialogs: ["Search"]                  # the command palette, opened on purpose; any other dialog stops the run
 steps:
   - focus: "@window"
   - click: "@mode.chat"

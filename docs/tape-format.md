@@ -13,6 +13,7 @@ video_pause: 1.2                      # optional: seconds after each step in vid
 window: { width: 1280, height: 800 }  # optional: pin the window's frame (x, y default 0) after the first focus
 redact:                               # optional: boxes covered for the whole video, in screen pixels
   - { x: 0, y: 282, w: 286, h: 750 }
+dialogs: ["Add marketplace"]        # optional: dialogs the tape opens on purpose; any other stops it
 steps:
   - focus: "@window"
   - click: "@sidebar.customize"
@@ -73,6 +74,32 @@ ffmpeg -i runs/<stamp>-<name>-video/<name>.mp4 -vf "fps=1,scale=480:-1,tile=6x6"
 
 Each caption step holds the screen for `video_pause` too, so the screen a caption describes stays up while
 it is read. `tapes/claude-desktop-demo.yaml` is a worked example.
+
+### Guards: dialogs a tape did not plan, and clicks a map denies
+
+A replay asks nobody before it clicks, so two checks keep it from doing what the tape did not plan:
+
+- **An unexpected dialog stops the run.** Before every `click`, `type`, `key` and `hotkey`, and once a second
+  after the last step, the runner looks for a window inside the tape's window (`look` prints it as
+  `Dialog "…"`) and for a new titled top-level window of the same program (how WinForms programs open their
+  dialogs). A dialog the tape does not plan stops the run with a repair bundle that names it. Planned are:
+  the titles in the tape's or the map's `dialogs:` (a title, or `{title, prefix: true}`), the window of a
+  `focus` step, and an `expect` or `absent` step with `role: Window`. A dialog already open when the tape
+  starts counts too. `act` and `look` do not check: they are how an agent explores.
+- **A map's `deny:` list refuses clicks**, in `run` and in `act`, on the element the selector resolved to:
+
+```yaml
+deny:
+  - { label: "Delete" }                          # exact label, any role
+  - { label: "Post", prefix: true, role: Button }
+  - { match: "törl|delete|remove" }              # regular expression, case-insensitive, searched in the label
+  - { window: "Invoices", label: "Void" }        # only in a window whose title starts with "Invoices"
+```
+
+A tape whose click step names a denied label stops before the first tool call; a click that resolves to a
+denied element at run time (a prefix selector, a renamed button) stops with a repair bundle, and `act
+--append` does not keep it. The list covers clicks only: a `key: Delete` or an Enter after `type` is not
+matched.
 
 ## Map
 

@@ -21,6 +21,10 @@ ignore:
   - { subtree: { role: Text, label: "Claude responded:", prefix: true } }
   - { subtree: { role: Button, label: "Show message actions for", prefix: true } }
 
+# Windows inside the app that are not dialogs: a replay does not stop on them (a tape names its own dialogs).
+dialogs:
+  - URL         # the marketplace URL ComboBox's drop-down is reported as a Window "URL" with a List inside
+
 elements:
   # --- mode switch (top of the sidebar). The Chat radio's label carries a status ("Claude, awaiting your
   # input"), so match it by prefix.

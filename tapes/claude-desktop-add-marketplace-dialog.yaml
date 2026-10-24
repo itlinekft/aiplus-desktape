@@ -5,6 +5,7 @@ name: add-marketplace-dialog
 app: Claude Desktop 3.6556 (Windows)
 map: claude-desktop-win
 video_pause: 1.2
+dialogs: ["Add marketplace"]        # opened on purpose; any other dialog stops the run
 steps:
   - focus: "@window"
   - click: "@sidebar.customize"

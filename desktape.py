@@ -193,6 +193,63 @@ def resolve_all(steps, amap):
     return [resolve(s, amap) for s in steps]
 
 
+# ---- replay guards: a map's deny list, and dialogs a tape did not plan ----------------------------
+
+class DeniedClick(PermissionError):
+    """A click the map's deny list refuses (replay-guards D1)."""
+
+
+def deny_entries(amap):
+    """The map's `deny:` entries; raises ValueError on one that names no label, so a bad map stops early."""
+    entries = (amap or {}).get("deny") or []
+    for d in entries:
+        if not (isinstance(d, dict) and (d.get("label") or d.get("match"))):
+            raise ValueError(f"map deny: {d!r} needs a `label` or a `match`")
+        if d.get("match"):
+            re.compile(d["match"])
+    return entries
+
+
+def denied(entries, label, role=None, window=None):
+    """The first deny entry matching an element, or None (replay-guards D1). `match` is a case-insensitive
+    regular expression searched in the label; `window` is a prefix of the window's title."""
+    label = label or ""
+    for d in entries:
+        if d.get("role") and d["role"] != role:
+            continue
+        if d.get("window") and not (window or "").startswith(d["window"]):
+            continue
+        if d.get("match") and re.search(d["match"], label, re.IGNORECASE):
+            return d
+        if d.get("label") and (label.startswith(d["label"]) if d.get("prefix") else label == d["label"]):
+            return d
+    return None
+
+
+def check_tape_deny(plan, entries):
+    """Refuse a tape whose click selector is itself denied, before any tool call (replay-guards D1).
+    Entries tied to a window, and prefix selectors, are left to the check at click time."""
+    plain = [d for d in entries if not d.get("window")]
+    for i, (s, _) in enumerate(plan):
+        if "click" in s:
+            a = s["click"] if isinstance(s["click"], dict) else {"label": s["click"]}
+            if not a.get("prefix") and (d := denied(plain, a["label"], a.get("role"))):
+                raise DeniedClick(f"step {i}: click {a['label']!r} is denied by the map: {d}")
+
+
+def expected_dialogs(tape, amap, plan):
+    """A predicate on a dialog's title: does the tape plan it (replay-guards D3)?"""
+    pats = [d if isinstance(d, dict) else {"title": d}
+            for d in (tape.get("dialogs") or []) + ((amap or {}).get("dialogs") or [])]
+    for s, _ in plan:
+        kind, arg = next(iter(s.items()))
+        if kind == "focus":
+            pats.append({"title": arg})
+        elif kind in ("expect", "absent") and isinstance(arg, dict) and arg.get("role") == "Window":
+            pats.append({"title": arg["label"], "prefix": arg.get("prefix", False)})
+    return lambda t: any(t.startswith(p["title"]) if p.get("prefix") else t == p["title"] for p in pats)
+
+
 def boxes(arg, where):
     """Redaction rectangles in recording pixels (video-redaction D2); raises ValueError on a malformed one,
     so a bad tape stops before any tool call."""
@@ -208,6 +265,7 @@ def boxes(arg, where):
 
 
 REDACT_MARGIN = 0.5   # seconds a step-scoped box is widened on both ends (video-redaction D2)
+DIALOG_SETTLE = 1.0   # seconds before the after-the-last-step dialog check (replay-guards D4)
 
 
 def redact_spans(tape_boxes, steps_boxes):
@@ -338,12 +396,36 @@ class Runner:
         self.captions = []       # (seconds since recording start, text)
         self.redactions = []     # (seconds since recording start, boxes from then on)
         self.t_rec = None
+        self.title = None        # the focused window's title, for deny entries tied to a window
+        self.deny = []           # the map's deny entries (replay-guards D1)
+        self.expected = None     # a title predicate; None: no dialog check (replay-guards D3)
+        self.baseline = set()    # the process's window ids when the window was focused
+        self.dirty = False       # an action happened since the last snapshot
 
     def snapshot(self):
         sc, text = self.cua.call("get_window_state", dict(self.win))
         self.elements, self.tree = sc.get("elements", []), text
         self.snapshots += 1
+        self.dirty = False
         return self.elements
+
+    def check_dialogs(self):
+        """Stop on a dialog the tape did not plan (replay-guards D2): a Window inside the tape's window, or a
+        new titled top-level window of the same process."""
+        if self.expected is None or self.win is None:
+            return
+        if self.dirty:
+            self.snapshot()
+        found = [(n[2], "dialog") for n in map(parse, self.tree.splitlines())
+                 if n and n[1] == "Window" and n[0] > 0 and n[2]]
+        sc, _ = self.cua.call("list_windows", {})
+        found += [(w.get("title"), "window") for w in sc.get("windows", [])
+                  if w.get("pid") == self.win["pid"] and w.get("window_id") != self.win["window_id"]
+                  and w.get("window_id") not in self.baseline and w.get("title")]
+        bad = [f'{kind} "{title}"' for title, kind in found if not self.expected(title)]
+        if bad:
+            logger.warning("unexpected %s in %r (pid %s)", ", ".join(bad), self.title, self.win["pid"])
+            raise AssertionError(f"unexpected {', '.join(bad)}: name it in the tape's `dialogs:` if it is planned")
 
     def find(self, label, role=None, prefix=False, nth=1, enabled_only=False):
         """The `nth` element (1-based, negative from the end, in tree order) matching role and label."""
@@ -379,7 +461,9 @@ class Runner:
         w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
         if not w:
             raise RuntimeError(f"no window titled {title!r}")
-        self.win = {"pid": w["pid"], "window_id": w["window_id"]}
+        self.win, self.title = {"pid": w["pid"], "window_id": w["window_id"]}, title
+        self.baseline = {x.get("window_id") for x in sc.get("windows", []) if x.get("pid") == w["pid"]}
+        self.dirty = True        # a new window: the next dialog check needs its own snapshot (measured)
         try:
             self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
         except RuntimeError as e:
@@ -413,6 +497,9 @@ class Runner:
 
     def step(self, s):
         kind, arg = next(iter(s.items()))
+        if kind in ("click", "type", "key", "hotkey"):
+            self.check_dialogs()
+            self.dirty = True
         if kind == "focus":
             self.focus(arg)
         elif kind == "click":
@@ -421,10 +508,17 @@ class Runner:
                               enabled_only=True)
             if not e:
                 raise RuntimeError(f"click: {a['label']!r} not found (enabled)")
+            label = e.get("label") or e.get("name") or ""
+            d = denied(self.deny, label, e.get("role"), self.title)
+            if d:
+                logger.warning("refused a click on %s %r in %r: denied by the map entry %s",
+                               e.get("role"), label, self.title, d)
+                raise DeniedClick(f"click: {e.get('role')} {label!r} in {self.title!r} is denied by the map: {d}")
             args = {**self.win, "element_token": e["element_token"]}
             if a.get("action"):
                 args["action"] = a["action"]
             self.cua.call("click", args)
+            self.dirty = True
         elif kind == "expect":
             a = arg if isinstance(arg, dict) else {"label": arg}
             if not self.wait_for(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
@@ -532,12 +626,15 @@ def cmd_run(a):
     tape = yaml.safe_load(open(a.tape, encoding="utf-8"))
     amap = load_map(tape.get("map"))
     plan = resolve_all(tape["steps"], amap)          # a misspelt @name stops here, before any tool call
+    deny = deny_entries(amap)
+    check_tape_deny(plan, deny)                      # … and so does a click the map denies
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
     run_dir = new_run_dir(tape["name"], a.mode)
     stamp = os.path.basename(run_dir).split("-")[0] + "-" + os.path.basename(run_dir).split("-")[1]
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     r = Runner(cua, a.mode)
+    r.deny, r.expected = deny, expected_dialogs(tape, amap, plan)
     rec_dir = rec_rel = None
     if a.mode == "video":
         # The daemon has no HOME on Windows, so the recording directory must be absolute.
@@ -570,6 +667,17 @@ def cmd_run(a):
             logger.info("step %d ok: %s", i, json.dumps(tape["steps"][i], ensure_ascii=False)[:100])
             if a.mode == "video" and not {"pause", "redact"} & s.keys():
                 time.sleep(tape.get("video_pause", 1.2))
+        if failed is None and r.win is not None:
+            time.sleep(DIALOG_SETTLE)            # replay-guards D4: a dialog the last step opens takes a moment
+            r.dirty = True
+            try:
+                r.check_dialogs()
+            except AssertionError as e:
+                failed = f"after the last step: {e}"
+                logger.error("tape failed %s", failed)
+                repair = repair_bundle(os.path.join(run_dir, "repair.md"), tape["name"], len(plan),
+                                       {"after": "the last step"}, {"after": "the last step"}, None, e, r.tree,
+                                       (amap or {}).get("ignore"))
     finally:
         total = time.time() - (r.t_rec or t0)
         if r.t_rec is not None:
@@ -678,6 +786,7 @@ def cmd_act(a):
     run_dir = new_run_dir("act", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     r = Runner(cua, "test")
+    r.deny = deny_entries(amap)          # replay-guards D1: an agent learning a flow cannot click it either
     try:
         if "focus" not in s:
             r.focus(a.window or (amap["window"] if amap else "Claude"))
@@ -851,11 +960,69 @@ def selftest():
         cua.audit.close()
         log = [json.loads(l) for l in open(os.path.join(d, "audit.jsonl"), encoding="utf-8")]
         assert len(log) == 1 and log[0]["args"]["text"] == "<redacted>" and "hunter2" not in json.dumps(log), log
+    # replay-guards: deny entries, a refused click sends nothing, a denied tape stops early, dialogs.
+    deny = deny_entries({"deny": [{"label": "Delete"}, {"label": "Post", "prefix": True, "role": "Button"},
+                                  {"match": "törl|remove"}, {"window": "Invoices", "label": "Void"}]})
+    assert denied(deny, "Delete", "MenuItem") and not denied(deny, "Delete row", "Button")
+    assert denied(deny, "Post invoice", "Button") and not denied(deny, "Post invoice", "MenuItem")
+    assert denied(deny, "Sor TÖRLÉSE", "Button") and denied(deny, "Remove all")
+    assert denied(deny, "Void", "Button", "Invoices - Demo Ltd") and not denied(deny, "Void", "Button", "Orders")
+    for bad in ([{"role": "Button"}], [{"match": "("}]):
+        try:
+            deny_entries({"deny": bad}); raise AssertionError("expected an error")
+        except (ValueError, re.error):
+            pass
+    try:
+        check_tape_deny([({"click": "Save"}, None), ({"click": {"label": "Delete"}}, None)], deny)
+        raise AssertionError("expected DeniedClick")
+    except DeniedClick as e:
+        assert "step 1" in str(e), e
+    check_tape_deny([({"click": {"label": "Void"}}, None), ({"click": {"label": "Del", "prefix": True}}, None)], deny)
+
+    class Fake:                         # a window with a tree and a window list that a test can change
+        def __init__(self):
+            self.sent, self.tree, self.wins = [], '- Window "Main"\n  - [1] Button "Delete selected" [actions=[invoke]]', []
+        def call(self, tool, args, secret=False):
+            self.sent.append(tool)
+            if tool == "list_windows":
+                return {"windows": [{"title": "Main", "pid": 7, "window_id": 1}] + self.wins}, ""
+            if tool == "get_window_state":
+                return {"elements": [{"label": "Delete selected", "role": "Button", "element_token": "t"}]}, self.tree
+            return {}, "ok"
+    level = logger.level; logger.setLevel(logging.ERROR)      # the warnings below are expected
+    f = Fake(); r = Runner(f, "test"); r.deny = deny_entries({"deny": [{"match": "delete"}]}); r.focus("Main")
+    try:
+        r.step({"click": {"label": "Delete", "prefix": True}}); raise AssertionError("expected DeniedClick")
+    except DeniedClick as e:
+        assert "click" not in f.sent and "Delete selected" in str(e), (f.sent, e)
+    tape = {"dialogs": ["Import products", {"title": "Saved", "prefix": True}]}
+    plan = [({"focus": "Main"}, None), ({"expect": {"label": "Confirm", "role": "Window"}}, None)]
+    ok = expected_dialogs(tape, None, plan)
+    assert ok("Import products") and ok("Saved 3 rows") and ok("Main") and ok("Confirm") and not ok("Error")
+    f = Fake(); r = Runner(f, "test"); r.expected = ok; r.focus("Main")
+    f.wins = [{"title": "Import products", "pid": 7, "window_id": 2}, {"title": "", "pid": 7, "window_id": 3},
+              {"title": "Error", "pid": 8, "window_id": 4}]
+    r.step({"click": "Delete selected"})                    # planned window, an untitled one, another process
+    f.wins.append({"title": "Error", "pid": 7, "window_id": 5})
+    try:
+        r.step({"key": "Enter"}); raise AssertionError("expected AssertionError")
+    except AssertionError as e:
+        assert 'window "Error"' in str(e) and f.sent[-1] == "list_windows", (e, f.sent)
+    f = Fake(); r = Runner(f, "test"); r.expected = ok; r.focus("Main")
+    f.tree += '\n  - Window "Are you sure?"\n    - [2] Button "Yes" [actions=[invoke]]'
+    r.dirty = True
+    try:
+        r.check_dialogs(); raise AssertionError("expected AssertionError")
+    except AssertionError as e:
+        assert 'dialog "Are you sure?"' in str(e), e
+    r.expected = None; r.check_dialogs()                     # act and look: no dialog check
+    logger.setLevel(level)
     real = load_map("claude-desktop-win")
     for name in sorted(os.listdir(os.path.join(HERE, "tapes"))):   # every bundled tape resolves on its map
         if name.endswith((".yaml", ".yml")):
             tape = yaml.safe_load(open(os.path.join(HERE, "tapes", name), encoding="utf-8"))
-            resolve_all(tape["steps"], load_map(tape.get("map")))
+            m = load_map(tape.get("map"))
+            check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
     assert real["window"] == "Claude"
     print("selftest ok")
     return 0
@@ -891,6 +1058,9 @@ def main():
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act}[a.cmd](a)
     except KeyError as e:          # a map name the map lacks: say which, no traceback
         print(f"desktape: {e.args[0]}", file=sys.stderr)
+        return 2
+    except (DeniedClick, ValueError, re.error) as e:   # a denied tape or a malformed map entry: before any tool call
+        print(f"desktape: {e}", file=sys.stderr)
         return 2
 
 
