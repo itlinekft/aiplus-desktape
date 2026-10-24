@@ -1,6 +1,6 @@
 {
   "name": "desktape",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drive a Windows desktop program that has no API: Claude runs a recorded YAML tape of clicks and typing through Cua Driver, checks each step's outcome, and reads results back by value. The runner never calls a model; a failed step leaves a repair note.",
   "author": { "name": "desktape authors", "url": "https://github.com/tatargabor/desktape" },
   "homepage": "https://github.com/tatargabor/desktape",
