@@ -1997,6 +1997,9 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             logger.warning("video post-processing failed, the recording stays on the target in %s: %s", rec_rel, e)
             summary["video"] = f"failed: {e}"
     json.dump(summary, open(os.path.join(run_dir, "summary.json"), "w"), ensure_ascii=False, indent=2)
+    # file-outcome-and-typing: the newest run's summary at a fixed path, so another tape (or a person) can wait
+    # for "a run finished" with expect: {file: <runs>/last.json}
+    json.dump({**summary, "run_dir": run_dir}, open(os.path.join(RUNS, "last.json"), "w"), ensure_ascii=False, indent=2)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 1 if failed else 0
 

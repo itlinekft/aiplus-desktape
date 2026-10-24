@@ -164,6 +164,8 @@ within `timeout` (10 s by default), or the step fails with a sentence naming wha
 `file:` takes a path on the target; environment variables are expanded there (`%USERPROFILE%\demo\out.xlsx`).
 As a step of its own, `expect: { file: …, timeout: 300 }` waits until the file exists: the way to wait for
 another program, such as Claude writing a file, by its result rather than by its screen.
+Every run also writes its summary to `last.json` in the runs folder (`DESKTAPE_RUNS`), so a tape can wait
+for another desktape run to finish: `expect: { file: "C:\\Work\\.desktape\\runs\\last.json", timeout: 600 }`.
 
 ### Typing for a recording
 
