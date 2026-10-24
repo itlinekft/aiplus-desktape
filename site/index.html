@@ -67,6 +67,70 @@
   .table-wrap { overflow-x: auto; }
   ul.plain { padding-left: 20px; margin: 0; }
   ul.plain li { margin-bottom: 6px; }
+  .player { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 0; margin: 8px 0 24px; border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; background: var(--card); }
+  .tape-pane { background: var(--code-bg); color: var(--code-fg); padding: 14px 0; border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; font: 13px/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+  .pane-title { padding: 0 16px 10px; color: var(--muted); font-size: 12px; }
+  .tape-lines { list-style: none; margin: 0; padding: 0; flex: 1; }
+  .tape-lines li { padding: 3px 16px 3px 30px; position: relative; white-space: pre; overflow: hidden; text-overflow: ellipsis;
+    border-left: 3px solid transparent; transition: background .25s, border-color .25s; }
+  .tape-lines li.head { color: var(--muted); }
+  .tape-lines li.now { background: color-mix(in srgb, var(--accent) 14%, transparent); border-left-color: var(--accent); }
+  .tape-lines li.ok::before { content: "✓"; position: absolute; left: 12px; color: #3f8f4f; }
+  .meter { padding: 10px 16px 0; color: var(--muted); font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .meter b { color: var(--fg); font-weight: 600; }
+  .screen { position: relative; aspect-ratio: 16 / 10.5; background: var(--bg); font-size: 12px; overflow: hidden; }
+  .win-bar { height: 9%; display: flex; align-items: center; justify-content: space-between; padding: 0 10px;
+    border-bottom: 1px solid var(--line); color: var(--muted); }
+  .win-bar .ctl { letter-spacing: 10px; }
+  .win-bar.focus { color: var(--fg); }
+  .side { position: absolute; left: 0; top: 9%; bottom: 0; width: 27%; border-right: 1px solid var(--line); padding: 10px 8px; }
+  .side .item { padding: 4px 6px; border-radius: 5px; margin-bottom: 2px; }
+  .side .item.on { background: var(--code-bg); }
+  .side .label { color: var(--muted); font-size: 10px; margin: 10px 6px 4px; }
+  .side .chat { height: 9px; border-radius: 3px; background: var(--line); margin: 9px 6px; }
+  .chats { position: relative; }
+  .redact-box { position: absolute; inset: -4px 0; border-radius: 4px; background: #8a8780;
+    display: grid; place-items: center; color: #f4f2ee; font-size: 10px; letter-spacing: .04em; opacity: 0; transform: scale(.96);
+    transition: opacity .4s, transform .4s; }
+  .redact-box.on { opacity: 1; transform: none; }
+  .main { position: absolute; left: 27%; right: 0; top: 9%; bottom: 0; padding: 14px 16px; }
+  .view { position: absolute; inset: 14px 16px; transition: opacity .3s; }
+  .off { opacity: 0; pointer-events: none; }
+  .hello { display: grid; place-items: center; height: 70%; color: var(--muted); font-size: 15px; }
+  .view h4 { margin: 0 0 8px; font-size: 14px; }
+  .tabs { display: flex; gap: 12px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 12px; }
+  .tabs .sel { color: var(--fg); border-bottom: 2px solid var(--accent); padding-bottom: 4px; margin-bottom: -7px; }
+  .btn { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; background: var(--card); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .menu { position: absolute; top: 86px; left: 0; width: 140px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.12); padding: 4px; transition: opacity .2s; }
+  .menu div { padding: 3px 8px; border-radius: 4px; }
+  .dialog { position: absolute; left: 8%; right: 8%; top: 20%; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 12px 14px; transition: opacity .25s, transform .25s; }
+  .dialog.off { transform: translateY(6px); }
+  .field { border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; margin: 8px 0 12px; min-height: 24px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; white-space: nowrap; overflow: hidden; }
+  .field .caret { display: inline-block; width: 1px; height: 12px; background: var(--fg); vertical-align: -2px; margin-left: 1px; }
+  .dialog .row { display: flex; justify-content: flex-end; gap: 6px; }
+  .checked { outline: 2px solid #3f8f4f; outline-offset: 2px; }
+  .caption { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); max-width: 88%; background: rgba(20,19,17,.82);
+    color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 12px; text-align: center; transition: opacity .3s; }
+  .cursor { position: absolute; left: 60%; top: 60%; width: 16px; height: 22px; pointer-events: none; z-index: 5;
+    transition: left .7s cubic-bezier(.4,.1,.2,1), top .7s cubic-bezier(.4,.1,.2,1); filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
+  .cursor::after { content: ""; position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--accent); opacity: 0; transform: scale(.3); }
+  .cursor.click::after { animation: ripple .45s ease-out; }
+  @keyframes ripple { 0% { opacity: .9; transform: scale(.3); } 100% { opacity: 0; transform: scale(1.6); } }
+  @media (max-width: 760px) {
+    .player { grid-template-columns: minmax(0, 1fr); }
+    .tape-pane { border-right: 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .screen { font-size: 10px; aspect-ratio: 16 / 12; }
+    .main { padding: 10px; } .view { inset: 10px; } .dialog { left: 4%; right: 4%; top: 12%; }
+    .caption { font-size: 10px; bottom: 4%; }
+  }
+  @media (prefers-reduced-motion: reduce) { .cursor { display: none; } .tape-lines li, .view, .dialog, .redact-box { transition: none; } }
   footer { padding: 32px 0 48px; color: var(--muted); font-size: 15px; border-top: 1px solid var(--line); }
 </style>
 </head>
@@ -88,6 +152,53 @@
     <div class="buttons">
       <a class="primary" href="https://github.com/tatargabor/desktape">View on GitHub</a>
       <a href="https://github.com/tatargabor/desktape/blob/main/docs/user-guide.md">Read the guide</a>
+    </div>
+    <div class="player" id="player" role="img" aria-label="Animation: a tape replays step by step on a desktop window, with the account's chats covered and no model calls">
+      <div class="tape-pane">
+        <div class="pane-title">tapes/add-marketplace.yaml</div>
+        <ol class="tape-lines">
+          <li class="head">map: claude-desktop-win</li>
+          <li data-s="0">redact: [{ x: 0, y: 64, w: 210, h: 300 }]</li>
+          <li class="head">steps:</li>
+          <li data-s="1">  - focus: "@window"</li>
+          <li data-s="2">  - click: "@sidebar.customize"</li>
+          <li data-s="3">  - click: "@plugins.add_plugin"</li>
+          <li data-s="4">  - click: "Add marketplace"</li>
+          <li data-s="5">  - type: "https://github.com/acme/plugins"</li>
+          <li data-s="6">  - expect: "Sync"</li>
+        </ol>
+        <div class="meter"><span>step <b id="p-step">0</b>/6</span><span>model calls <b>0</b></span><span>tokens <b>0</b></span></div>
+      </div>
+      <div class="screen" aria-hidden="true">
+        <div class="win-bar" id="p-bar"><span>Claude</span><span class="ctl">–□×</span></div>
+        <div class="side">
+          <div class="item">New chat</div>
+          <div class="item" id="p-customize">Customize</div>
+          <div class="label">Recents</div>
+          <div class="chats">
+            <div class="chat"></div><div class="chat" style="width:70%"></div><div class="chat"></div>
+            <div class="chat" style="width:55%"></div><div class="chat" style="width:80%"></div>
+            <div class="redact-box" id="p-redact">redacted</div>
+          </div>
+        </div>
+        <div class="main">
+          <div class="view" id="p-hello"><div class="hello">How can I help you today?</div></div>
+          <div class="view off" id="p-custom">
+            <h4>Customize</h4>
+            <div class="tabs"><span>Skills</span><span class="sel">Plugins</span><span>Connectors</span></div>
+            <span class="btn" id="p-add">Add plugin ▾</span>
+            <div class="menu off" id="p-menu"><div>Browse plugins</div><div id="p-addmk">Add marketplace</div></div>
+          </div>
+          <div class="dialog off" id="p-dialog">
+            <h4>Add marketplace</h4>
+            <div style="color:var(--muted);font-size:11px">A GitHub repo or any git URL</div>
+            <div class="field" id="p-field"><span id="p-url"></span><span class="caret"></span></div>
+            <div class="row"><span class="btn">Cancel</span><span class="btn primary" id="p-sync">Sync</span></div>
+          </div>
+        </div>
+        <div class="caption" id="p-caption">Replaying a tape</div>
+        <svg class="cursor" id="p-cursor" viewBox="0 0 16 22"><path d="M1 1v17l4.5-4.2 3 6.6 2.6-1.2-3-6.4H14z" fill="#fff" stroke="#111" stroke-width="1.2" stroke-linejoin="round"/></svg>
+      </div>
     </div>
     <figure>
       <video src="demo.mp4" poster="demo-poster.jpg" controls muted playsinline preload="metadata"></video>
@@ -216,5 +327,65 @@ python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml</code><
     application under test.
   </footer>
 </div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const screen = document.querySelector(".screen"), cursor = $("p-cursor");
+  const lines = [...document.querySelectorAll(".tape-lines li[data-s]")];
+  const url = "https://github.com/acme/plugins";
+  const show = (id, on) => $(id).classList.toggle("off", !on);
+  const steps = [
+    { caption: "The account's chats are covered for the whole video", act: () => $("p-redact").classList.add("on") },
+    { at: "p-bar", caption: "Focus Claude Desktop", act: () => $("p-bar").classList.add("focus") },
+    { at: "p-customize", click: true, caption: "Open Customize",
+      act: () => { $("p-customize").classList.add("on"); show("p-hello", false); show("p-custom", true); } },
+    { at: "p-add", click: true, caption: "Add plugin → Add marketplace", act: () => show("p-menu", true) },
+    { at: "p-addmk", click: true, caption: "Add from a repository: a GitHub repo or any git URL",
+      act: () => { show("p-menu", false); show("p-dialog", true); } },
+    { at: "p-field", click: true, caption: "The URL of the marketplace repository goes here", type: true },
+    { at: "p-sync", caption: "Checked: the Sync button is there", act: () => $("p-sync").classList.add("checked") },
+  ];
+  function reset() {
+    lines.forEach(l => l.classList.remove("now", "ok"));
+    ["p-redact", "p-customize"].forEach(id => $(id).classList.remove("on"));
+    $("p-bar").classList.remove("focus"); $("p-sync").classList.remove("checked");
+    show("p-hello", true); show("p-custom", false); show("p-menu", false); show("p-dialog", false);
+    $("p-url").textContent = ""; $("p-step").textContent = "0"; $("p-caption").textContent = "Replaying a tape";
+  }
+  function point(id) {
+    const s = screen.getBoundingClientRect(), r = $(id).getBoundingClientRect();
+    cursor.style.left = (r.left - s.left + Math.min(r.width * 0.5, 40)) + "px";
+    cursor.style.top = (r.top - s.top + r.height * 0.55) + "px";
+  }
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    steps.forEach((st, i) => { st.act && st.act(); lines[i].classList.add("ok"); });
+    $("p-url").textContent = url; $("p-step").textContent = "6"; $("p-caption").textContent = "6/6 steps passed, 0 model calls";
+    return;
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let visible = true;
+  new IntersectionObserver(es => { visible = es[0].isIntersecting; }).observe(screen);
+  async function play() {
+    for (;;) {
+      reset(); await sleep(900);
+      for (let i = 0; i < steps.length; i++) {
+        while (!visible || document.hidden) await sleep(400);
+        const st = steps[i];
+        lines.forEach(l => l.classList.remove("now")); lines[i].classList.add("now");
+        $("p-caption").textContent = st.caption;
+        if (st.at) { point(st.at); await sleep(800); }
+        if (st.click) { cursor.classList.remove("click"); void cursor.offsetWidth; cursor.classList.add("click"); await sleep(200); }
+        st.act && st.act();
+        if (st.type) for (let k = 1; k <= url.length; k++) { $("p-url").textContent = url.slice(0, k); await sleep(45); }
+        await sleep(st.type ? 500 : 1100);
+        lines[i].classList.remove("now"); lines[i].classList.add("ok");
+        $("p-step").textContent = String(i);   // steps[0] is the tape-level redact, not a step
+      }
+      $("p-caption").textContent = "6/6 steps passed, 0 model calls"; await sleep(3200);
+    }
+  }
+  play();
+})();
+</script>
 </body>
 </html>
