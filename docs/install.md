@@ -56,19 +56,32 @@ shows "Az importálás nem lehetséges, egy szükséges komponens nincs telepít
 to Microsoft's download page (measured on 2026-10-24 with the demo, version 24.01.1211.10832).
 
 - **Which build:** the engine's bitness must match the program's. The measured program is 32-bit (PE machine
-  `0x14c`), so it needs the **32-bit** engine, `AccessDatabaseEngine.exe`, not `AccessDatabaseEngine_X64.exe`,
-  from the page the program links:
-  [Microsoft Access Database Engine 2010 Redistributable](https://www.microsoft.com/en-us/download/details.aspx?id=13255).
+  `0x14c`), so it needs the **32-bit** engine, `accessdatabaseengine.exe`, not `accessdatabaseengine_X64.exe`.
+  The program links Microsoft's 2010 package (download id 13255), which Microsoft has withdrawn ("this
+  download is no longer available", checked 2026-10-24). Its successor is the
+  [Microsoft Access Database Engine 2016 Redistributable](https://www.microsoft.com/en-us/download/details.aspx?id=54920).
+  Whether the program's import accepts the 2016 engine is measured once it is installed.
+- **The file used on the reference target** (2026-10-24), placed in `%USERPROFILE%\desktape\AccessDatabaseEngine.exe`
+  to be run by an administrator: 81 621 424 bytes, product version 16.0.5044.1000, SHA-256
+  `adc0504656f390d225530ac09f1fc2113295c4f9baeffea1e983fecf4ac960f0`, Authenticode signature valid, signed by
+  "Microsoft Corporation" (issuer "Microsoft Code Signing PCA 2010"). Check a copy before running it:
+
+```powershell
+Get-AuthenticodeSignature .\AccessDatabaseEngine.exe | Format-List Status, SignerCertificate
+(Get-FileHash .\AccessDatabaseEngine.exe -Algorithm SHA256).Hash
+```
+
 - **Admin:** yes. Run it on the target's desktop and enter an administrator's password at UAC; a standard
   user cannot install it.
 - **Clash to know about:** Microsoft's installer refuses a 32-bit engine next to a 64-bit Microsoft Office.
   The reference target has no Microsoft Office.
-- **Check:** `Microsoft.ACE.OLEDB.12.0` is registered under `HKLM\SOFTWARE\WOW6432Node\Classes`, and
-  `C:\Program Files (x86)\Common Files\microsoft shared\OFFICE14\ACEOLEDB.DLL` exists:
+- **Check:** the provider is registered in the 32-bit registry view, and its DLL exists (the 2016 engine
+  registers `Microsoft.ACE.OLEDB.16.0` and installs under `OFFICE16`; the 2010 one used `12.0` and `OFFICE14`):
 
 ```powershell
+Test-Path 'HKLM:\SOFTWARE\WOW6432Node\Classes\Microsoft.ACE.OLEDB.16.0'
 Test-Path 'HKLM:\SOFTWARE\WOW6432Node\Classes\Microsoft.ACE.OLEDB.12.0'
-Test-Path 'C:\Program Files (x86)\Common Files\microsoft shared\OFFICE14\ACEOLEDB.DLL'
+Test-Path 'C:\Program Files (x86)\Common Files\microsoft shared\OFFICE16\ACEOLEDB.DLL'
 ```
 
 The program itself: the demo installer needs administrator rights too (it refused with
