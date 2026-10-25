@@ -86,6 +86,8 @@ python3 desktape.py look --map claude-desktop-win --ocr    # … plus OCR lines 
 python3 desktape.py act 'click: "@plugins.add_plugin"' --append tapes/my-flow.yaml   # one step, kept if it passed
 python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml             # test mode
 python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml --mode video
+python3 desktape.py tidy --keep Claude --minimize Terminal   # only the scene's programs on screen
+python3 desktape.py record --until-file /tmp/take-done        # the target's whole screen, beside a run on another machine
 ```
 
 Authoring a tape: `look`, then `act` one step at a time with `--append`; a step is appended only if it

@@ -369,3 +369,18 @@ An entry is a program name or a title's start, or a mapping of `app`, `title`, `
 use `pid`). The program hosting the driver and remote-access programs are minimised, never closed, and a
 window that is already minimised is left. A key is sent only to a window that is in front after it was
 raised. `desktape.py tidy --keep Claude --minimize Terminal` between takes.
+
+## Recording a second screen: `record`
+
+A run in video mode records its own target. When a take shows two machines side by side, the other one is
+recorded on its own, for the same minutes:
+
+```bash
+desktape.py record --target mac --until-file /tmp/take-done      # or Ctrl+C, or --seconds N (at most 3600)
+```
+
+It acts on nothing and takes no lock, so a run beside it goes on. It writes the video into its own run
+folder, deletes the target's copy, and records `recording_started_at` (UTC, to the millisecond) in
+`summary.json`, as a video run's summary does too, so the edit lines the two videos up. On macOS the
+recorder writes a frame when the screen changes (2.8 frames a second on a still screen, measured): normalise
+the frame rate in the edit.

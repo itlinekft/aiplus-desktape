@@ -2740,6 +2740,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     if repair:
         summary["repair"] = repair
     if r.t_rec is not None:
+        summary["recording_started_at"] = utc_iso(r.t_rec)   # screen-record: lines this video up with another
+    if r.t_rec is not None:
         local_raw = os.path.join(run_dir, "recording.mp4")
         try:
             if redacting:   # video-redaction D3: the raw file is what the tape hides, so it stays out
@@ -2915,6 +2917,67 @@ def act_step(a, step, amap, s, entry, deny, lk=None, tape=None):
     if a.append:
         append_step(a.append, step)
         print(f"appended to {a.append}")
+    return 0
+
+
+def utc_iso(t):
+    """Wall-clock time in UTC to the millisecond, for lining two recordings up (screen-record)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int(t % 1 * 1000):03d}Z"
+
+
+RECORD_MAX = 3600.0
+
+
+def cmd_record(a):
+    """screen-record: the target's whole screen, recorded on its own until Ctrl+C, a stop file on the controller,
+    or --seconds; acts on nothing and takes no lock, so a run beside it goes on."""
+    limit = min(float(a.seconds or RECORD_MAX), RECORD_MAX)
+    run_dir = new_run_dir(a.name or "screen", "record")
+    stamp = os.path.basename(run_dir)
+    t = Target(a.host)
+    rec_rel = f"desktape/rec/{stamp}"
+    rec_dir = t.home() + ("/" + rec_rel if t.mac else "\\" + rec_rel.replace("/", "\\"))
+    if a.until_file and os.path.exists(a.until_file):
+        raise ValueError(f"record: the stop file {a.until_file} exists already; remove it first")
+    cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
+    t0 = time.time()
+    try:
+        cua.call("start_recording", {"output_dir": rec_dir, "record_video": True, "include_accessibility_tree": False})
+        t1 = time.time()
+        print(f"recording {a.host} since {utc_iso(t0)}; stop with Ctrl+C" +
+              (f", or create {a.until_file}" if a.until_file else "") + f" (at most {limit:.0f} s)", flush=True)
+        logger.info("record: %s started (the call took %.2f s), output %s", a.host, t1 - t0, rec_dir)
+        why = "time limit"
+        import signal
+        old = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))   # a kill stops it cleanly too
+        try:
+            while time.time() - t1 < limit:
+                if a.until_file and os.path.exists(a.until_file):
+                    why = "stop file"
+                    break
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            why = "interrupted"
+        finally:
+            signal.signal(signal.SIGTERM, old)
+        t2 = time.time()
+        cua.call("stop_recording", {})
+    finally:
+        cua.close()
+    local = os.path.join(run_dir, f"{a.name or 'screen'}.mp4")
+    try:
+        t.get(f"{rec_rel}/recording.mp4", local)
+    finally:
+        if t.mac:
+            t.sh(f'rm -rf "$HOME/{rec_rel}"')      # the whole screen: no copy stays on the target
+        else:
+            t.sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+    summary = {"record": a.name or "screen", "host": a.host, "stopped_by": why, "recording_started_at": utc_iso(t0),
+               "start_call_seconds": round(t1 - t0, 3), "seconds": round(t2 - t1, 1), "video": local,
+               "bytes": os.path.getsize(local)}
+    json.dump(summary, open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    logger.info("record: %s stopped by %s after %.1f s; %s", a.host, why, t2 - t1, local)
     return 0
 
 
@@ -3101,6 +3164,49 @@ def cmd_unlock(a):
 
 
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_record():
+    """screen-record: start, stop on the stop file, download, delete the target's copy, the summary."""
+    calls, cmds, real = [], [], (globals()["Cua"], Target.get, Target.sh, Target.home)
+    class FakeCua:
+        mac = True
+        def __init__(self, host, audit_path):
+            pass
+        def call(self, tool, args, **kw):
+            calls.append((tool, args))
+            if tool == "start_recording":    # the take ends while it records
+                open(stop, "w").close()
+            return {}, ""
+        def close(self):
+            pass
+    TARGET_OS["rec@mac"] = "macos"
+    globals()["Cua"] = FakeCua
+    Target.get = lambda self, rel, local: open(local, "wb").write(b"mp4")
+    Target.sh = lambda self, cmd, check=False, input=None: cmds.append(cmd)
+    Target.home = lambda self: "/Users/me"
+    level = logger.level; logger.setLevel(logging.ERROR)
+    try:
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
+            stop = os.path.join(d, "stop")
+            globals()["RUNS"], runs = d, globals()["RUNS"]
+            try:
+                assert cmd_record(argparse.Namespace(host="rec@mac", seconds=5, until_file=stop, name="mac")) == 0
+                summary = json.load(open(glob_one(d, "summary.json")))
+            finally:
+                globals()["RUNS"] = runs
+        assert [c[0] for c in calls] == ["start_recording", "stop_recording"], calls
+        assert calls[0][1]["output_dir"].startswith("/Users/me/desktape/rec/") and calls[0][1]["record_video"] is True
+        assert summary["stopped_by"] == "stop file" and summary["bytes"] == 3 and summary["recording_started_at"].endswith("Z")
+        assert cmds and cmds[-1].startswith('rm -rf "$HOME/desktape/rec/'), cmds          # no copy stays on the target
+    finally:
+        globals()["Cua"], Target.get, Target.sh, Target.home = real
+        logger.setLevel(level)
+
+
+def glob_one(root, name):
+    """The one file called `name` under `root` (for the selftest)."""
+    return next(os.path.join(p, name) for p, _, fs in os.walk(root) if name in fs)
+
 
 def selftest_tidy():
     """scene-tidy: keep, minimise and close; the guards; a program that asks stops the step unanswered."""
@@ -3997,6 +4103,7 @@ def selftest():
     assert ok and "not on this shell's PATH" in said, said
     selftest_macos()
     selftest_tidy()
+    selftest_record()
     print("selftest ok")
     return 0
 
@@ -4029,6 +4136,10 @@ def main():
     p = sub.add_parser("doctor", help="what this machine still needs, with the command that installs each")
     p.add_argument("--local", action="store_true", help="a Windows target on this machine")
     p.add_argument("--video", action="store_true", help="recording videos too")
+    p = sub.add_parser("record", help="record the target's whole screen on its own, until Ctrl+C, a stop file or --seconds")
+    p.add_argument("--seconds", type=float, help=f"stop after this many seconds (at most {RECORD_MAX:.0f})")
+    p.add_argument("--until-file", metavar="PATH", help="stop when this file exists on the controller")
+    p.add_argument("--name", help="the video's name (default: screen)")
     p = sub.add_parser("tidy", help="close every program with a window except the kept ones (scene-tidy)")
     p.add_argument("--keep", action="append", default=[], metavar="NAME", help="a program name or a window title's start")
     p.add_argument("--minimize", action="append", default=[], metavar="NAME", help="a program name or a window title's start to minimise")
@@ -4055,7 +4166,7 @@ def main():
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "
                      f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
-                "status": cmd_status, "tidy": cmd_tidy}[a.cmd](a)
+                "status": cmd_status, "tidy": cmd_tidy, "record": cmd_record}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
         return 3
