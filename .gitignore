@@ -2,6 +2,7 @@
 runs/
 *.png
 *.mp4
+!site/brand/*.png              # the published mark (brand exports), not a screenshot
 *.key
 secrets/
 __pycache__/
