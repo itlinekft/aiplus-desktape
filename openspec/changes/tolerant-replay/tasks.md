@@ -4,8 +4,8 @@
 
 - [x] 1.1 Settle-wait after actions and before element waits; tape `patience:` [REQ: Steps wait for a settled window]
 - [x] 1.2 Toasts logged, not failures [REQ: Toasts are not unplanned dialogs]
-- [ ] 1.3 `check_table` `search:`; labels ending in `*` [REQ: Table checks can search instead of reading the visible grid]
-- [ ] 1.4 Selftests for 1.1–1.3 [REQ: Steps wait for a settled window]
+- [x] 1.3 Labels and fields ending in `*` [REQ: Labels can match by prefix with a trailing star]
+- [x] 1.4 Selftests for 1.1–1.3 [REQ: Steps wait for a settled window]
 
 ## 2. Repair model
 

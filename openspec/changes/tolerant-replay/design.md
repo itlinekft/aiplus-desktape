@@ -20,10 +20,11 @@ An unexpected window whose controls are none, or only Close/X/OK-less text, is i
 goes on (it is closed only if it stays past the next step). Anything with another button is still an unplanned
 dialog. This keeps the replay-guards protection for real questions.
 
-## D4. Search instead of position
+## D4. Meaning instead of position
 
-`check_table: {…, search: {field: <caption>|id: <id>}}` types each key into the program's search box, reads the one
-row it leaves, and clears the box. A grid read no longer depends on how many rows exist or which are visible.
+A trailing `*` on a label or field is a prefix match. Rows are checked with `check_table`, which matches by key and
+pages through the grid (data-driven-import), never with a text expectation on what happens to be visible. A search-box
+mode was considered and left out: it is program-specific, and paging already reads every row.
 
 ## D5. What the model sees
 

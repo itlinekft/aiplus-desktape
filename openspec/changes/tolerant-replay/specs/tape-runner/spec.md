@@ -22,15 +22,14 @@ information and SHALL NOT fail the step.
 - **WHEN** „Desktape is installed and ready to use.” appears with only an X
 - **THEN** the run goes on and the log names the toast
 
-### Requirement: Table checks can search instead of reading the visible grid
+### Requirement: Labels can match by prefix with a trailing star
 
-`check_table` with `search:` SHALL find each key's row by typing the key into the named search box and reading the
-row it leaves, so the number, order and visibility of other rows do not change the result.
+A selector's `label` or `field` ending in `*` SHALL match every element whose label starts with the text before it.
 
-#### Scenario: an eleventh customer
+#### Scenario: a list tab with a row count
 
-- **WHEN** the list has 11 rows and only 10 are visible
-- **THEN** a `search:` check of the 11th finds and reads it
+- **WHEN** a tape clicks `{field: "Ügyfelek listája*", role: Button}` and the tab reads „Ügyfelek listája (11)”
+- **THEN** it clicks that tab's close button, as it would for „(10)”
 
 ### Requirement: An opt-in repair model proposes a selector once
 

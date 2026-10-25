@@ -15,8 +15,9 @@ able to find the new one once and remember it, rather than stop every run.
   elements) before the next step, up to a patience (default 30 s); element waits use the same patience by default.
 - **Benign toasts.** A new window with no actionable control, or only a close/X, is logged as information and not a
   failure; a window with real choices still stops the run.
-- **Search, don't count.** `check_table` can find each row through the program's own search box (`search:`), so the
-  grid's visible length, order or an extra row cannot change the result; labels may end in `*` to match any suffix.
+- **Match by meaning, not position.** A label or `field:` ending in `*` matches any suffix, so a tab whose caption
+  carries a row count („Ügyfelek listája (11)”) is named once; `check_table` already reads rows by key and pages
+  through the whole grid, so the docs steer tapes to it instead of `expect: {text:}` on a visible list.
 - **Repair model (opt-in).** With `--repair model`, a selector that matches nothing is given, with the step's intent
   and the window's element tree, to a small model (Haiku class). It proposes one selector; desktape validates it
   (exactly one element, an allowed tool, the step's own effect and outcome checks), runs it, and writes the fix back:
