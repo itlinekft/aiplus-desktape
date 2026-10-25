@@ -13,8 +13,8 @@ failure_lines: false
 
 # Hidden from `look` and repair bundles (`look --all` shows them), named by fixed elements only.
 ignore:
-  # Sidebar: pinned and recent chats (Chat mode), pinned and the sessions (Code mode), and the account button
-  - { from: { role: Heading, label: "Pinned" }, until: { role: Link, label: "Get apps and extensions" } }
+  # Sidebar: pinned and recent chats (Chat mode), pinned and the sessions (Code mode), and the account button;
+  # it ends at the sidebar's splitter in both modes (Code mode has no "Get apps and extensions" link)
   - { from: { role: Heading, label: "Pinned" }, until: { role: Splitter, label: "Resize sidebar" } }
   - { from: { role: Heading, label: "Recent artifacts" } }      # the new-chat screen's artifact list
   - { from: { role: List, label: "Command palette options" }, until: { role: Button, label: "Compose" } }  # search: recent sessions
@@ -22,6 +22,7 @@ ignore:
   - { subtree: { role: List, label: "Projects" } }               # Projects page: the user's projects
   - { subtree: { role: List, label: "Upload or add files" } }    # the in-app file picker: Drive and artifact names
   - { subtree: { role: List, label: "Search or create a project" } }   # "Project or folder": the user's projects and folders
+  - { from: { role: Edit, label: "Search folders…" }, until: { role: MenuItem, label: "Open folder…" } }  # Code mode's recent folders
 
 elements:
   # --- mode switch (top of the sidebar)
@@ -117,4 +118,6 @@ elements:
   code.environment:           { label: "Environment:", role: PopUpButton, prefix: true }
   code.folder:                { label: "Folder:", role: PopUpButton, prefix: true }
   code.permissions:           { label: "Permissions:", role: PopUpButton, prefix: true }
+  code.open_folder:           { label: "Open folder…", role: MenuItem }      # in the Folder menu: macOS's "Select folder" dialog
+  code.send:                  { label: "Send", role: Button }                # appears once the prompt has text
   usage.indicator:            { label: "Usage:", role: PopUpButton, prefix: true }
