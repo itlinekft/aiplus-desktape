@@ -5,6 +5,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-25
+
 ### Added
 - A recording is checked while it runs: once a minute desktape reads the size of the recording file on the target.
   If it has stopped growing, a video run fails with "recording stopped growing at <time>" and runs no further step,
@@ -13,6 +15,13 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   silently under load.
 - The driver's "Video capture failed" warning (it still says "Recording started") now fails the video run or
   `record` at once, with the driver's words: on Windows the driver records through ffmpeg.
+
+### Changed
+- ffmpeg is required on a driven machine, not only for video: the Windows driver records through it, and captions
+  are burned with it. `doctor` lists it without `--video`, and `doctor --target NAME` checks it on that machine over
+  SSH. A video run or `record` on a target without it stops before recording, with the install command.
+- On Windows, ffmpeg is found in winget's package folder in any version (newest first), then on the PATH; before, only
+  the 9.0.1 path was tried. winget's `Links\ffmpeg.exe` is used last: it does not run from an SSH logon.
 
 ### Changed
 - The AI+ marketplace lists the plugin as `aiplus-desktape` (aiplus-plugins d5e126c), following the rename to

@@ -86,6 +86,23 @@ Not measured: `open_file` in a real macOS file panel.
 | `unpair` | removed the line (`left 0`), the Mac kept no key, profile or host key |
 | `pair --accept` over SSH on Windows | `uv` cannot start its managed Python from an SSH logon (os error 448): run it in the desktop session |
 
+## 2026-10-25: the screen recording on a Windows 11 VM
+
+**Machine:** a Windows 11 VM (Hungarian, build 26300, 12 GB), Cua Driver 0.34.1, controlled over SSH from Linux.
+**Commands:** `DESKTAPE_LIVENESS_EVERY=20 desktape.py record --target <vm> --seconds 180`, with the recording's size
+read over SSH every 18–20 s; `desktape.py doctor --target <vm>`.
+
+| What | Result |
+|---|---|
+| `start_recording` without ffmpeg | answered "✅ Recording started" with "⚠️ Video capture failed" below; in 75 s the folder held only `session.json` and an empty `cursor.jsonl` |
+| after `winget install --id Gyan.FFmpeg -e` (ffmpeg 9.0.2) | the running driver recorded at once, without a restart (20 s: 4.7 MB) |
+| the file while recording, 1080p | grew at every read: 1.3 → 35.9 MB in 2 min 45 s, about 3.7 MB per 18 s; `record` ended normally, no liveness alarm |
+| winget's `Links\ffmpeg.exe` from an SSH logon | "cannot find the path specified"; the package folder's `ffmpeg.exe` ran, with `drawtext` |
+| `doctor --target` on this VM and on the Mac | found ffmpeg on both (the package path on Windows, `ffmpeg-full` on macOS) |
+
+Not measured: a 30-minute recording under a working tape's load (the case where the driver's recorder stopped at
+minute 5 on the Windows test PC).
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
