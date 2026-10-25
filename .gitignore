@@ -2,7 +2,8 @@
 runs/
 *.png
 *.mp4
-!site/brand/*.png              # the published mark (brand exports), not a screenshot
+# the published mark (brand exports) is not a screenshot
+!site/brand/*.png
 *.key
 secrets/
 __pycache__/
