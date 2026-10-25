@@ -1051,6 +1051,10 @@ def select(elements, tree, label=None, role=None, prefix=False, id=None, field=N
     controls whose centre lies inside the smallest caption element reading that text (measured on a DevExpress
     layout: each caption's frame holds exactly its own input)."""
     hits = elements
+    if label is not None and label.endswith("*") and len(label) > 1:
+        label, prefix = label[:-1], True        # tolerant-replay: "Ügyfelek listája*" matches "(10)" and "(11)"
+    if field is not None and field.endswith("*") and len(field) > 1:
+        field, prefix = field[:-1], True
     if label is not None:
         hits = [e for e in hits if ((e.get("label") or e.get("name") or "").startswith(label) if prefix
                                     else (e.get("label") or e.get("name") or "") == label)]
@@ -4830,6 +4834,8 @@ def selftest():
             check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
             check_selectors(resolve_all(tape["steps"], m))
     assert real["window"] == "Claude"
+    tabs2 = [{"label": "Ügyfelek listája (11)", "role": "TabItem", "element_index": 1}]
+    assert len(select(tabs2, "", label="Ügyfelek listája*")) == 1 and not select(tabs2, "", label="Ügyfelek listája")
     # tolerant-replay D3: a window with only a close control is a toast; one with a real choice is not
     toast = ('- Window "Claude"\n  - [1] Window "Plugin removed."\n    - [2] Text "Plugin removed."\n'
              '    - [3] Button "Close"\n  - [4] Button "New"')
