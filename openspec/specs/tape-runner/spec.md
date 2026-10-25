@@ -430,3 +430,195 @@ example file with placeholders.
 
 - **WHEN** no targets file exists and `DESKTAPE_HOST=user@host` is set
 - **THEN** desktape drives that host as before
+
+### Requirement: Expected outcome of a step
+
+An action step SHALL accept `expect:` naming its outcome: `opens` (a window title), `closes` (a window title),
+`shows` (a text), `value` (an element whose value contains a text), `filled` (an element with at least one
+row or item) and `enabled` (a control that is enabled), with `timeout`; an element is named by label, role or
+automation id. All named parts SHALL hold within the timeout, default 10 s, or the step SHALL fail
+with a sentence naming what did not happen. A map entry's `expect:` SHALL be the default for steps that use it.
+
+#### Scenario: the file dialog left open
+
+- **WHEN** a step expects `closes: Megnyitás` and the dialog is still open after the timeout
+- **THEN** the step fails with "the window 'Megnyitás' is still open"
+
+#### Scenario: a click that opens nothing
+
+- **WHEN** a click expects `opens: Megnyitás` and no such window appears
+- **THEN** the step fails with "the window 'Megnyitás' did not open"
+
+#### Scenario: an empty list
+
+- **WHEN** a step expects `filled: {label: "Azonosító oszlop"}` and the list has no items
+- **THEN** the step fails with "'Azonosító oszlop' stayed empty"
+
+### Requirement: The program's own failure fails the step
+
+While a step waits for its outcome, a window that appeared after the action, or a line that was not in the
+window before it, whose text contains a failure word SHALL fail the step at once, quoting the window's title
+and text. The failure words SHALL include Hungarian and English error words and SHALL be extendable by the map.
+
+#### Scenario: file not found
+
+- **WHEN** a path is opened and the program answers with a box saying the file cannot be found
+- **THEN** the step fails before its timeout, quoting the box's title and text
+
+### Requirement: A hung call is reported by the window in front
+
+When a driver call does not answer in time, the failure SHALL name the window in front, its program, and
+whether it opened before the step or with it.
+
+#### Scenario: keys into a dialog that does not answer
+
+- **WHEN** a key step blocks while the file dialog 'Megnyitás' is in front
+- **THEN** the report says that 'Megnyitás' is in front and does not answer, and that it opened before this step
+
+### Requirement: Unplanned dialogs fail act too
+
+After every action, in `run` and in `act`, a new window of the program that the step's `expect.opens` does not
+name and the tape's `dialogs:` does not list SHALL fail the step, reporting its title, text and buttons.
+
+#### Scenario: a confirmation after Bezárás
+
+- **WHEN** `act` clicks Bezárás and a window 'Kérdés' opens that the step did not expect
+- **THEN** the step fails with the window's title, its text and its buttons Igen / Nem
+
+### Requirement: The alert carries the sentence
+
+A run that stops SHALL send its failure sentence through `DESKTAPE_ALERT_CMD`; `act` SHALL send it when the
+program reported a failure.
+
+#### Scenario: a stop reaches the watcher
+
+- **WHEN** a run stops because a step's outcome was not reached
+- **THEN** the alert command receives the sentence, the host and the step
+
+### Requirement: A file as an outcome
+
+`expect:` SHALL accept `file`, a path on the target (environment variables expanded). On an action step the
+file SHALL exist and be new or changed since just before the action. As a step of its own, `expect: {file:
+…}` SHALL wait until the file exists. When the timeout passes first, the step SHALL fail with "the file
+'<path>' did not appear" or "the file '<path>' did not change".
+
+#### Scenario: another program writes the file
+
+- **WHEN** a tape waits with `expect: {file: "%USERPROFILE%\\demo\\out.xlsx", timeout: 300}` and the file
+  appears after 70 s
+- **THEN** the step passes at about 70 s
+
+#### Scenario: the file was already there
+
+- **WHEN** a click expects `file: out.xlsx` and out.xlsx existed before the click and did not change
+- **THEN** the step fails with "the file 'out.xlsx' did not change"
+
+### Requirement: Typing modes
+
+A tape's `typing:` SHALL be `fast` (default), `human` or `paste`, and a `type:` step's own `typing:` SHALL
+override it. `human` SHALL type at about `typing_cps` characters a second (default 12) in video mode and fast
+otherwise. `paste` SHALL put the text on the target's clipboard and paste it with Ctrl+V. A secret SHALL NOT
+be pasted.
+
+#### Scenario: a short prompt in a video
+
+- **WHEN** a video tape with `typing: human` types a 60-character prompt
+- **THEN** the text appears over about 5 s, a few characters at a time
+
+#### Scenario: a long text pasted
+
+- **WHEN** a step types 2 000 characters with `typing: paste`
+- **THEN** the text appears at once, and the step checks it like a typed text
+
+#### Scenario: a secret
+
+- **WHEN** a step with `secret: true` asks for `typing: paste`
+- **THEN** the step fails before sending anything, saying a secret is never pasted
+
+### Requirement: A real click aimed at one window
+
+desktape SHALL be able to click for real at a screen point only when the point belongs to a given window
+handle, and SHALL report, without clicking, when it does not.
+
+#### Scenario: two windows with one title
+
+- **WHEN** a prompt of the second of two "Claude" windows is clicked by its handle
+- **THEN** only that window is clicked, and a point covered by another window is reported, not clicked
+
+### Requirement: Selectors by automation id and by caption
+
+An element selector SHALL accept `label`, `id` and `field`, alone or together, with `role`, `prefix` and
+`nth`. `id` SHALL match the control's automation id. `field` SHALL match the editable controls whose centre
+lies inside the frame of the caption element whose text, without `&` and a trailing colon, equals the value
+(the smallest such caption when several do), in tree order. A selector naming none of `label`, `id`,
+`field`, `role` SHALL fail before any tool call.
+
+#### Scenario: a field with only a runtime id
+
+- **WHEN** a tape runs `click: {field: Mennyiség, foreground: true}` in a dialog whose quantity box has no
+  automation id and whose caption reads „Me&nnyiség"
+- **THEN** the click lands on the quantity box
+
+#### Scenario: a control by its automation id
+
+- **WHEN** a tape runs `set: {id: textEditCode, value: X1}`
+- **THEN** the control whose automation id is textEditCode gets the value, and no `label` is needed
+
+#### Scenario: an empty selector
+
+- **WHEN** a step is `click: {foreground: true}`
+- **THEN** the run stops before any tool call, naming the step
+
+### Requirement: A target's screen can be recorded on its own
+
+`desktape.py record` SHALL record the target's whole screen with the driver's recorder until it is
+interrupted, until the file named by `--until-file` exists on the controller, or for `--seconds`, at most
+3600 s. It SHALL then download the video into a new run folder, delete the target's copy, and write
+`summary.json` with the video's path, its length and `recording_started_at`. It SHALL NOT act on any window
+and SHALL NOT take the target's lock. A video run's `summary.json` SHALL also carry `recording_started_at`.
+
+#### Scenario: the Mac beside the Windows box
+
+- **WHEN** `desktape.py record --target mac --until-file /tmp/take-done` runs while a video run on the
+  Windows box drives it, and the take ends by creating `/tmp/take-done`
+- **THEN** the Mac's video is in its run folder, nothing of it stays on the Mac, and both summaries give the
+  wall-clock start, so the two videos line up
+
+### Requirement: A macOS video can show a person's pointer instead of the agent cursor
+
+A tape SHALL accept `cursor: agent` (the default) or `cursor: person`. With `person`, a video run on a
+macOS target SHALL hide the driver's agent cursor for its own session only, and before each click SHALL
+move the real pointer smoothly to the element's centre in `cursor_glide_ms` (default 500), then click. A
+glide that fails SHALL be logged as a warning and SHALL NOT stop the click. In test mode the setting SHALL
+change nothing. On a Windows target, `cursor: person` SHALL stop the run before its first step.
+
+#### Scenario: the person on the Mac
+
+- **WHEN** a tape with `cursor: person` and `typing: human` runs in video mode on the Mac mini
+- **THEN** the recording shows no agent cursor, and the normal pointer moves to each clicked element before
+  the screen reacts
+
+#### Scenario: Windows keeps the signature
+
+- **WHEN** a tape with `cursor: person` is run on a Windows target
+- **THEN** it stops before its first step, saying that `cursor: person` is for macOS targets
+
+### Requirement: A macOS file dialog is driven like a keyboard and read before every Return
+
+On a macOS target, `open_file` SHALL raise the named dialog and check that it is in front. It SHALL send
+Cmd+Shift+G, select-all and the path as keyboard events that go to the window in front. It SHALL then check
+by OCR that the path is in the dialog's field, press Return, and check by OCR that the dialog shows the target
+folder. It SHALL then press Return and wait for the dialog to close. When a check fails, it SHALL press Escape
+and fail the step, quoting what it read. `type` and `key` with `into:` and `os: true` SHALL send through the
+same keyboard events on macOS.
+
+#### Scenario: Claude's "Add folder"
+
+- **WHEN** `open_file: {path: "~/desktape-dialog-test", dialog: "Add folders to this session"}` runs after
+  the "Add folder" click
+- **THEN** the dialog closes, and Claude asks "Allow Claude to change files in “desktape-dialog-test”?"
+
+#### Scenario: the path did not arrive
+
+- **WHEN** OCR does not find the typed path in the dialog
+- **THEN** Escape closes the dialog without choosing anything, and the step fails quoting the dialog's text
