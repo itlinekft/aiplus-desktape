@@ -290,6 +290,35 @@ steps:
   `"1 173,23 Ft"` equals `1173.23`. It fails listing every mismatch and every row the grid lacks; a passing
   check goes into the summary's `checks`. Only the rows the grid has loaded can be compared.
 
+### Prompts that come at an unplanned moment: `answers:`
+
+Some prompts cannot be a step in the tape's order: an assistant asks about one uncertain row in the middle of a
+ten-minute answer, or a program asks a first-run question only on some machines. List them under `answers:`. While
+the runner waits (for an element to appear or go away, for a file, for a text), it checks each answer's `when` in
+the window it is reading; when it is there, it runs the answer's steps and goes on waiting. An answer whose
+prompt never comes changes nothing.
+
+```yaml
+answers:
+  - name: uncertain pairing
+    when: { label: "A 2. szállítólevél 4. tétele", prefix: true }
+    steps:
+      - caption: "Ahol bizonytalan, megkérdezi. Te döntesz."
+      - pause: 4
+      - click: { label: "Színes irattartók", prefix: true }
+      - click: { label: Submit, role: Button }
+steps:
+  - …
+  - absent: { label: Stop, role: Button, timeout: 1800 }     # the question is answered during this wait
+```
+
+- `when` is a selector like a step's (`label`/`prefix`/`role`/`id`/`field`, or a map name `@…`).
+- An answer fires once; `once: false` lets it fire again after its prompt has gone away and come back.
+- Its steps are checked before the run like the tape's own; they do not answer prompts themselves.
+- The run's summary lists the answers that fired (`answered`, with the time and the second of the video).
+- Answer only what the person in the scene would answer, with the answer they would give (an answer key is for
+  checking; a planned answer is the person's decision, said openly in the video).
+
 ## Map
 
 `maps/<app>.yaml` holds what a tape should not have to rediscover about an app:

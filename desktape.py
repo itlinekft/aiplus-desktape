@@ -703,6 +703,27 @@ def resolve_all(steps, amap):
     return [resolve(s, amap) for s in steps]
 
 
+def tape_answers(tape, amap, values):
+    """prompt-answers: the tape's `answers:` list, resolved and checked like its steps. Each entry is
+    {when: <selector or @map.name>, steps: [...], name?, once?}."""
+    out = []
+    for i, h in enumerate(tape.get("answers") or []):
+        if not isinstance(h, dict) or "when" not in h or not isinstance(h.get("steps"), list) or not h["steps"]:
+            raise ValueError(f"answers[{i}]: write {{when: <selector>, steps: [...]}}")
+        unknown = set(h) - {"when", "steps", "name", "once"}
+        if unknown:
+            raise ValueError(f"answers[{i}]: unknown key(s) {sorted(unknown)}; an answer has when, steps, name, once")
+        when = substitute(resolve({"expect": h["when"]}, amap)[0]["expect"], values)
+        when = when if isinstance(when, dict) else {"label": when}
+        if not any(when.get(k) for k in ("label", "id", "field", "role")):
+            raise ValueError(f"answers[{i}]: `when` names nothing (label, id, field or role)")
+        plan = [(substitute(st, values), e) for st, e in resolve_all(h["steps"], amap)]
+        check_selectors(plan)
+        out.append({"name": h.get("name") or sel_name(when), "when": when, "plan": plan,
+                    "once": h.get("once", True) is not False})
+    return out
+
+
 # ---- tape variables (data-driven-import) -----------------------------------------------------------
 
 VAR = re.compile(r"\$\{([A-Za-z_]\w*(?:\.local)?)\}")
@@ -1719,6 +1740,9 @@ class Runner:
         self.title = None        # the focused window's title, for deny entries tied to a window
         self.deny = []           # the map's deny entries (replay-guards D1)
         self.expected = None     # a title predicate; None: no dialog check (replay-guards D3)
+        self.answers = []        # prompt-answers: [{"name", "when", "steps", "once", "fired", "seen"}]
+        self.answering = False   # an answer's own steps answer nothing (no nesting)
+        self.answered = []       # [{"name", "at"}] for the summary
         self.secondary = False   # the focused window is not its process's biggest one (step-effect-check D2)
         self.checks = []         # check_table results, for the summary (data-driven-import)
         self.planned = None      # dialog titles a step may open without naming them (step-outcome-check D4)
@@ -2014,10 +2038,43 @@ class Runner:
         self.busy_logged = False
         return False
 
+    def answer_prompts(self):
+        """prompt-answers: run the steps of every tape answer whose `when` is in the window just read. True when
+        one ran, so the caller reads the window again before deciding anything."""
+        if getattr(self, "answering", False) or not getattr(self, "answers", None):
+            return False             # (selftests build bare Runners)
+        ran = False
+        for h in self.answers:
+            w = h["when"]
+            here = self.find(w.get("label"), w.get("role"), w.get("prefix", False), w.get("nth", 1),
+                             id=w.get("id"), field=w.get("field")) is not None
+            if not here:
+                h["seen"] = False           # once: false fires again only after its prompt went away
+                continue
+            if h["seen"] or (h["fired"] and h["once"]):
+                continue
+            logger.info("answering %r: %s is on screen", h["name"], sel_name(w))
+            self.answering, h["seen"] = True, True
+            try:
+                for st in h["steps"]:
+                    self.step(st)
+            except Exception as e:
+                raise OutcomeFailed(f"answering {h['name']!r}: {e}") from e
+            finally:
+                self.answering = False
+            h["fired"] = True
+            at = round(time.time() - self.t_rec, 1) if self.t_rec else None
+            self.answered.append({"name": h["name"], "at": time.strftime("%H:%M:%S"), "video_s": at})
+            ran = True
+        if ran:
+            self.snapshot()
+        return ran
+
     def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False, id=None, field=None):
         end = time.time() + timeout
         while True:
             self.snapshot()
+            self.answer_prompts()
             e = self.find(label, role, prefix, nth, enabled_only, id, field)
             if e or not self.busy_wait(end):
                 return e
@@ -2029,6 +2086,7 @@ class Runner:
         end = time.time() + timeout
         while True:
             self.snapshot()
+            self.answer_prompts()
             gone = not getattr(self, "busy", False) and not self.find(label, role, prefix, nth, id=id, field=field)
             if gone or not self.busy_wait(end):
                 return gone
@@ -2619,6 +2677,9 @@ class Runner:
         elif kind == "expect" and isinstance(arg, dict) and "file" in arg:
             end = time.time() + float(arg.get("timeout", 8.0))   # file-outcome-and-typing: another program's file
             while (state := remote_file_state(self.cua.host, arg["file"])) is None and time.time() < end:
+                if getattr(self, "answers", None) and not self.answering and self.win is not None:
+                    self.snapshot()                  # prompt-answers: a prompt may come while the file is made
+                    self.answer_prompts()
                 time.sleep(2.0)
             if state is None:
                 raise OutcomeFailed(f"the file {arg['file']!r} did not appear within {float(arg.get('timeout', 8.0)):g} s")
@@ -2627,6 +2688,7 @@ class Runner:
             end = time.time() + arg.get("timeout", 8.0)      # data-driven-import: a message the program shows
             while True:
                 self.snapshot()
+                self.answer_prompts()
                 if spaces(str(arg["text"])) in spaces(self.tree) or time.time() > end:
                     break
                 time.sleep(0.4)
@@ -2855,6 +2917,9 @@ def cmd_run(a):
     deny = deny_entries(amap)
     check_tape_deny(plan, deny)                      # … and so does a click the map denies
     check_selectors(plan)                            # … and a selector that names nothing
+    answers = tape_answers(tape, amap, values)       # prompt-answers: checked like the steps, before any tool call
+    check_tape_deny([st for h in answers for st in h["plan"]], deny)
+    tape["_answers"] = answers
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
     with box_lock(a.host, f"run {a.tape}") as lk:    # box-lock: after the offline checks, so a broken tape never waits
@@ -2873,6 +2938,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                                                               f"within {waited:.1f} s")
     r = Runner(cua, a.mode)
     r.deny, r.expected = deny, expected_dialogs(tape, amap, plan)
+    r.answers = [{"name": h["name"], "when": h["when"], "steps": [st for st, _ in h["plan"]], "once": h["once"],
+                  "fired": False, "seen": False} for h in tape.get("_answers", [])]
     r.planned = r.expected                            # step-outcome-check D4: the same names, right after a step
     r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
     r.cursor, r.glide_ms = tape.get("cursor", "agent"), int(tape.get("cursor_glide_ms", 500))
@@ -2961,6 +3028,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                "model_calls": 0}
     if r.checks:
         summary["checks"] = r.checks
+    if r.answered:
+        summary["answered"] = r.answered
     if repair:
         summary["repair"] = repair
     if r.t_rec is not None:
@@ -4707,6 +4776,37 @@ def selftest():
             check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
             check_selectors(resolve_all(tape["steps"], m))
     assert real["window"] == "Claude"
+    # prompt-answers: an answer fires once in the middle of a wait, a missing one changes nothing, bad ones stop early
+    class FakeR(Runner):
+        def __init__(self, frames):
+            Runner.__init__(self, None, "test")
+            self.frames, self.ran, self.win, self.t_rec = list(frames), [], {"pid": 1}, None
+        def snapshot(self):
+            self.elements = [{"label": l, "role": "Button", "element_index": i} for i, l in
+                             enumerate(self.frames.pop(0) if len(self.frames) > 1 else self.frames[0])]
+            self.tree, self.busy = "", False
+        def step(self, st):
+            self.ran.append(st)
+    fr = FakeR([["Stop"], ["Stop", "A 2. tétel melyik?"], ["Stop", "A 2. tétel melyik?"], ["Stop"], []])
+    fr.answers = [{"name": "q", "when": {"label": "A 2. tétel", "prefix": True}, "steps": [{"click": "x"}],
+                   "once": True, "fired": False, "seen": False}]
+    sleep, time.sleep = time.sleep, lambda _: None
+    try:
+        assert fr.wait_gone("Stop", "Button", timeout=5) and fr.ran == [{"click": "x"}] and len(fr.answered) == 1
+        quiet = FakeR([["Stop"], []]); quiet.answers = [dict(fr.answers[0], fired=False, seen=False)]
+        assert quiet.wait_gone("Stop", "Button", timeout=5) and quiet.ran == [] and quiet.answered == []
+    finally:
+        time.sleep = sleep
+    ok = tape_answers({"answers": [{"when": {"label": "Kérdés", "prefix": True}, "steps": [{"click": {"label": "Igen"}}]}]},
+                      None, {})
+    assert ok[0]["name"] == "Kérdés" and ok[0]["once"]
+    for bad in ([{"when": {"label": "K"}}], [{"when": {}, "steps": [{"click": {"label": "x"}}]}],
+                [{"when": "K", "steps": [{"click": {"label": "x"}}], "after": 3}], [{"when": "K", "steps": [{"click": {}}]}]):
+        try:
+            tape_answers({"answers": bad}, None, {})
+            raise AssertionError(f"accepted {bad}")
+        except ValueError:
+            pass
     # target-pairing §2: the target accepts only the exact line, LAN addresses only, and replaces its own earlier one
     raw = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + bytes(range(32))
     blob = base64.b64encode(raw).decode()
