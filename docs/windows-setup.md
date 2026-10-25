@@ -58,11 +58,19 @@ Check it from Linux:
 DESKTAPE_HOST=user@windows-host python3 desktape.py look --window "<a window title>"
 ```
 
-## 4. ffmpeg, for video mode
+## 4. ffmpeg (required)
 
-Video mode records with the driver's `start_recording` and burns the captions with the target's ffmpeg,
-which needs a full build (for `drawtext`). The reference target used `winget install Gyan.FFmpeg`
-(ffmpeg 9.0.1); `desktape.py` finds it by the path in `FFMPEG_WIN`.
+The driver records video through ffmpeg, and desktape burns the captions with it (a full build, for `drawtext`).
+Without it the driver still answers "Recording started" but records nothing; desktape refuses a video run or
+`record` on a target without it. Install it in the user's account on the target:
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+desktape finds it in winget's package folder, any version (9.0.1 and 9.0.2 measured), then on the PATH. It does not
+use winget's `Links\ffmpeg.exe`, which does not run from an SSH logon (measured). The driver picked up a fresh install
+without a restart. `desktape doctor --target <name>` checks it over SSH.
 
 ## 5. Keep the session rendering
 

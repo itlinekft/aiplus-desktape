@@ -12,3 +12,11 @@
 - [ ] 2.2 Stop: on the stop file or Ctrl+C the process is ended and the file fetched; the growth check of 1.1 applies [REQ: A Windows recording can use ffmpeg instead of the driver]
 - [ ] 2.3 docs/windows-setup.md, knowledge/windows.md: the silent stop, the console window [REQ: A Windows recording can use ffmpeg instead of the driver]
 - [ ] 2.4 Measure a 30-minute recording on the reference target, add it to docs/MEASURED.md [REQ: A Windows recording can use ffmpeg instead of the driver]
+
+## 3. ffmpeg required
+
+- [x] 3.1 Find ffmpeg on a Windows target by winget's link, the PATH, or any version's package folder (`Target.ffmpeg`) [REQ: ffmpeg is a required piece of a target]
+- [x] 3.2 `doctor`: ffmpeg required for a local target without `--video`, and checked over SSH for a named target [REQ: ffmpeg is a required piece of a target]
+- [x] 3.3 A video run and `record` stop before recording without ffmpeg, with the install command [REQ: ffmpeg is a required piece of a target]
+- [x] 3.4 Docs (README, windows-setup, macos-setup, the desktape-start skill): ffmpeg is required, not "for video" [REQ: ffmpeg is a required piece of a target]
+

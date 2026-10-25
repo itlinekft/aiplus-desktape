@@ -26,7 +26,7 @@ row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a b
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, base64, contextlib, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, base64, contextlib, glob, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
 
 import yaml
 
@@ -228,6 +228,24 @@ class Target:
             shutil.copyfile(self.path(rel), local_path)
         else:
             subprocess.run(["scp", "-q", *self.opts, f"{self.host}:{rel}", local_path], check=True)
+
+    def ffmpeg(self):
+        """record-liveness: ffmpeg's full path on the target, or None (cached per host). macOS: Homebrew's
+        ffmpeg-full (drawtext); Windows: see find_ffmpeg_win."""
+        if self.host not in FFMPEGS:
+            if self.mac:
+                ok = os.path.exists(FFMPEG_MAC) if self.local else \
+                    self.sh(f'test -x {FFMPEG_MAC} && echo yes').stdout.strip() == "yes"
+                FFMPEGS[self.host] = FFMPEG_MAC if ok else None
+            elif self.local:
+                FFMPEGS[self.host] = find_ffmpeg_win()
+            else:
+                lines = [l.strip() for l in (self.sh(FFMPEG_WIN_PROBE).stdout or "").splitlines()
+                         if l.strip().lower().endswith("ffmpeg.exe")]
+                pkgs = sorted(l for l in lines if "\\WinGet\\Packages\\" in l)      # the newest version wins
+                FFMPEGS[self.host] = pkgs[-1] if pkgs else (lines[0] if lines else None)
+            logger.info("ffmpeg on %s: %s", self.host, FFMPEGS[self.host] or "none")
+        return FFMPEGS[self.host]
 
     def size(self, path):
         """record-liveness: a file's size in bytes on the target, by its absolute path; None if it is not there."""
@@ -2957,7 +2975,34 @@ def repair_bundle(path, tape_name, index, written, resolved, map_entry, error, t
     return path
 
 
-FFMPEG_WIN = r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe"
+# record-liveness: ffmpeg is a required piece of a Windows target (the driver records video through it, desktape burns
+# captions with it). Found in winget's package folder in any version (9.0.1 and 9.0.2 measured, the newest wins), then on
+# the PATH, then by winget's link last: the link does not run from an SSH logon ("cannot find the path", measured).
+FFMPEG_WIN_LINK = r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"
+FFMPEG_WIN_PKGS = r"%LOCALAPPDATA%\Microsoft\WinGet\Packages"
+FFMPEG_WIN_PROBE = (f'(for /d %D in ("{FFMPEG_WIN_PKGS}\\Gyan.FFmpeg*") do @for /d %E in ("%D\\ffmpeg-*") do '
+                    f'@if exist "%E\\bin\\ffmpeg.exe" echo %E\\bin\\ffmpeg.exe) & (where ffmpeg 2>nul) & '
+                    f'(if exist "{FFMPEG_WIN_LINK}" echo {FFMPEG_WIN_LINK})')
+FFMPEGS = {}            # host -> ffmpeg's path on it, or None
+
+
+def find_ffmpeg_win(exists=os.path.exists, which=shutil.which, glob_=glob.glob):
+    """ffmpeg on this Windows machine: the newest in winget's package folder, the PATH, then winget's link."""
+    hits = sorted(glob_(os.path.join(os.path.expandvars(FFMPEG_WIN_PKGS), "Gyan.FFmpeg*", "ffmpeg-*", "bin", "ffmpeg.exe")))
+    if hits:
+        return hits[-1]
+    if which("ffmpeg"):
+        return which("ffmpeg")
+    link = os.path.expandvars(FFMPEG_WIN_LINK)
+    return link if exists(link) else None
+
+
+def need_ffmpeg(t, what):
+    """A video run or `record` does not start on a target without ffmpeg: the install command instead."""
+    if not t.ffmpeg():
+        how = INSTALL["ffmpeg"]["darwin" if t.mac else "win32"]
+        raise RuntimeError(f"{what}: ffmpeg is missing on {t.host}; install it there with `{how}` "
+                           "(`desktape doctor` checks it)")
 
 
 def srt(captions, total):
@@ -3009,7 +3054,8 @@ def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name)
                                "it needs `brew install ffmpeg-full` (docs/macos-setup.md step 6)")
     else:
         win = rec_rel.replace("/", "\\")
-        t.sh(f'cd /d %USERPROFILE%\\{win} && "{FFMPEG_WIN}" -y -loglevel error -i recording.mp4 '
+        need_ffmpeg(t, "burning the captions")
+        t.sh(f'cd /d %USERPROFILE%\\{win} && "{t.ffmpeg()}" -y -loglevel error -i recording.mp4 '
              f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
     out = os.path.join(local_dir, f"{name}.mp4")
     t.get(f"{rec_rel}/captioned.mp4", out)
@@ -3190,6 +3236,11 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     if a.mode == "video":
         # The daemon has no HOME on Windows, so the recording directory must be absolute (macOS: the same rule).
         tt = Target(a.host)
+        try:
+            need_ffmpeg(tt, "video mode")
+        except RuntimeError:
+            cua.close()
+            raise
         profile = tt.home()
         rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "/" + rec_rel if tt.mac else profile + "\\" + rec_rel.replace("/", "\\")
@@ -3555,6 +3606,7 @@ def cmd_record(a):
     run_dir = new_run_dir(a.name or "screen", "record")
     stamp = os.path.basename(run_dir)
     t = Target(a.host)
+    need_ffmpeg(t, "record")
     rec_rel = f"desktape/rec/{stamp}"
     rec_dir = t.home() + ("/" + rec_rel if t.mac else "\\" + rec_rel.replace("/", "\\"))
     if a.until_file and os.path.exists(a.until_file):
@@ -4002,8 +4054,7 @@ def doctor_mac(rows, video, which, exists, how, perms, version):
             rows.append((ok, f"{piece} for CuaDriver", "granted" if ok else
                          ("not known yet: " if p.get("status") == "unknown" else "not granted: ") + how("grants")))
     rows.append((bool(which("swiftc")), "swiftc (OCR)", "found" if which("swiftc") else how("swiftc")))
-    if video:
-        rows.append((exists(FFMPEG_MAC), "ffmpeg-full (video)", "found" if exists(FFMPEG_MAC) else how("ffmpeg")))
+    rows.append((exists(FFMPEG_MAC), "ffmpeg-full", "found" if exists(FFMPEG_MAC) else how("ffmpeg")))   # required
 
 
 def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.exists, platform=sys.platform,
@@ -4031,9 +4082,8 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
         else:
             rows.append((exists(os.path.expandvars(EXE)), "Cua Driver 0.34.1", os.path.expandvars(EXE)
                          if exists(os.path.expandvars(EXE)) else how("driver")))
-            if video:
-                rows.append((exists(os.path.expandvars(FFMPEG_WIN)), "ffmpeg (video)",
-                             "found" if exists(os.path.expandvars(FFMPEG_WIN)) else how("ffmpeg")))
+            ff = find_ffmpeg_win(exists, which, glob_=lambda pattern: [p for p in glob.glob(pattern) if exists(p)])
+            rows.append((bool(ff), "ffmpeg", ff or how("ffmpeg")))          # required: the driver records through it
     else:
         rows.append((bool(which("ssh")), "ssh client", "found" if which("ssh") else how("ssh")))
     return rows
@@ -4041,6 +4091,16 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
 
 def cmd_doctor(a):
     rows = doctor_report(a.local, a.video)
+    if not a.local and (a.host or a.target or host_default()):     # a named target: what it needs, over SSH
+        host = None
+        try:
+            host, _ = choose_target(a.host, a.target)
+            t = Target(host)
+            ff = t.ffmpeg()
+            rows.append((bool(ff), f"ffmpeg on {host}", ff or INSTALL["ffmpeg"]["darwin" if t.mac else "win32"]
+                         + " (run it on that machine)"))
+        except (Exception, SystemExit) as e:
+            rows.append((False, f"target {host or a.host or a.target}", f"not reachable: {e}"))
     for ok, piece, detail in rows:
         print(f"{'ok     ' if ok else 'MISSING'}  {piece}: {detail}")
     missing = [p for ok, p, _ in rows if not ok]
@@ -4263,7 +4323,7 @@ def selftest_pairing():
 
 def selftest_record():
     """screen-record: start, stop on the stop file, download, delete the target's copy, the summary."""
-    calls, cmds, real = [], [], (globals()["Cua"], Target.get, Target.sh, Target.home)
+    calls, cmds, real = [], [], (globals()["Cua"], Target.get, Target.sh, Target.home, Target.ffmpeg)
     class FakeCua:
         mac = True
         def __init__(self, host, audit_path):
@@ -4280,6 +4340,7 @@ def selftest_record():
     Target.get = lambda self, rel, local: open(local, "wb").write(b"mp4")
     Target.sh = lambda self, cmd, check=False, input=None: cmds.append(cmd)
     Target.home = lambda self: "/Users/me"
+    Target.ffmpeg = lambda self: FFMPEG_MAC
     level = logger.level; logger.setLevel(logging.ERROR)
     try:
         with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
@@ -4315,8 +4376,17 @@ def selftest_record():
         finally:
             Target.size = real_size
             os.environ.pop("DESKTAPE_LIVENESS_EVERY", None)
+        # ffmpeg is required: without it `record` stops before the driver is asked to record
+        calls.clear()
+        Target.ffmpeg = lambda self: None
+        try:
+            cmd_record(argparse.Namespace(host="rec@mac", seconds=5, until_file=None, name="mac"))
+            raise AssertionError("record started without ffmpeg")
+        except RuntimeError as e:
+            assert "ffmpeg is missing on rec@mac" in str(e) and "brew install ffmpeg-full" in str(e), e
+        assert calls == [], calls
     finally:
-        globals()["Cua"], Target.get, Target.sh, Target.home = real
+        globals()["Cua"], Target.get, Target.sh, Target.home, Target.ffmpeg = real
         logger.setLevel(level)
 
 
@@ -4510,8 +4580,8 @@ def selftest_macos():
     rows = doctor_report(local=True, video=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: "ffmpeg-full" not in p,
                          platform="darwin", perms=perms, version=lambda: DRIVER_VERSION)
     bad = {p: d for ok, p, d in rows if not ok}
-    assert set(bad) == {"Screen Recording for CuaDriver", "ffmpeg-full (video)"}, bad
-    assert "permissions grant" in bad["Screen Recording for CuaDriver"] and bad["ffmpeg-full (video)"] == "brew install ffmpeg-full"
+    assert set(bad) == {"Screen Recording for CuaDriver", "ffmpeg-full"}, bad
+    assert "permissions grant" in bad["Screen Recording for CuaDriver"] and bad["ffmpeg-full"] == "brew install ffmpeg-full"
     rows = doctor_report(local=True, which=lambda x: None, exists=lambda p: False, platform="darwin",
                          perms=perms, version=lambda: None)
     bad = {p: d for ok, p, d in rows if not ok}
@@ -5177,6 +5247,23 @@ def selftest():
     said = "✅ Recording started -> C:\\r\n\n⚠️ Video capture failed (per-turn JSON+screenshot still running):\nffmpeg not found"
     assert capture_failed(said).startswith("Video capture failed") and "ffmpeg not found" in capture_failed(said)
     assert capture_failed("✅ Recording started -> /Users/me/r") is None and capture_failed(None) is None
+    # ffmpeg on Windows: winget's link first, then the PATH, then any version's package folder
+    assert find_ffmpeg_win(exists=lambda p: False, which=lambda x: None,
+                           glob_=lambda g: ["C:/p/Gyan.FFmpeg_x/ffmpeg-9.0.1-full_build/bin/ffmpeg.exe",
+                                            "C:/p/Gyan.FFmpeg_x/ffmpeg-9.0.2-full_build/bin/ffmpeg.exe"]).endswith(
+        "9.0.2-full_build/bin/ffmpeg.exe")
+    assert find_ffmpeg_win(exists=lambda p: False, which=lambda x: "C:/bin/ffmpeg.exe", glob_=lambda g: []) == "C:/bin/ffmpeg.exe"
+    assert find_ffmpeg_win(exists=lambda p: False, which=lambda x: None, glob_=lambda g: []) is None
+    pk = "C:\\Users\\u\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_x\\ffmpeg-9.0.%d-full_build\\bin\\ffmpeg.exe"
+    for out, want in (("C:\\Users\\u\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe\r\n", True), ("\r\n", False),
+                      (f"{pk % 1}\r\n{pk % 2}\r\nC:\\x\\Links\\ffmpeg.exe\r\n", "9.0.2")):
+        tt = Target.__new__(Target)
+        tt.host, tt.local, tt.mac, tt.opts = "ff@win", False, False, []
+        tt.sh = lambda cmd, out=out: subprocess.CompletedProcess(cmd, 0, out, "")
+        FFMPEGS.pop("ff@win", None)
+        got = tt.ffmpeg()
+        assert (want in got) if isinstance(want, str) else (bool(got) is want), (out, got)
+    FFMPEGS.pop("ff@win", None)
     # the size on each system, from what its shell prints
     for mac, out, want in ((False, "12345\r\n", 12345), (False, "\r\n", None), (True, "678\n", 678), (True, "", None)):
         tt = Target.__new__(Target)
@@ -5420,7 +5507,7 @@ def selftest():
     # claude-plugin: doctor names what is missing with the command for this OS, and installs nothing
     rows = doctor_report(local=True, video=True, which=lambda x: None, exists=lambda p: False, platform="win32")
     bad = {p: d for ok, p, d in rows if not ok}
-    assert set(bad) == {"uv", "Cua Driver 0.34.1", "ffmpeg (video)"}, bad
+    assert set(bad) == {"uv", "Cua Driver 0.34.1", "ffmpeg"}, bad
     assert bad["uv"].startswith("winget install --id astral-sh.uv") and "windows-setup.md" in bad["Cua Driver 0.34.1"]
     rows = doctor_report(local=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: True, platform="linux")
     assert [p for ok, p, _ in rows if not ok] == ["Windows or macOS"], rows

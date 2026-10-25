@@ -43,3 +43,22 @@ read on the target.
 
 - **WHEN** a 30-minute take is recorded with `--with ffmpeg`
 - **THEN** no console window appears on the screen, and the file covers the whole take at its frame rate
+
+### Requirement: ffmpeg is a required piece of a target
+
+A Windows or macOS target SHALL have ffmpeg (Windows: a full build; macOS: Homebrew's `ffmpeg-full`), because the
+Windows driver records video through it and captions are burned with it on both. desktape SHALL find it on Windows
+by winget's link, the PATH, or winget's package folder in any version, not by one version's path. `doctor` SHALL
+report it as required for a target on this machine (`--local`) and, when a target is named, for that target over
+SSH; a video run and `record` SHALL stop before recording when the target has none, with the install command.
+
+#### Scenario: no ffmpeg on the target
+
+- **WHEN** a video run or `record` starts on a target without ffmpeg
+- **THEN** it stops before `start_recording` with "ffmpeg is missing on <target>" and the command that installs it
+
+#### Scenario: a newer ffmpeg
+
+- **WHEN** winget installed ffmpeg 9.0.2 where desktape was measured with 9.0.1
+- **THEN** desktape finds it and burns the captions with it
+

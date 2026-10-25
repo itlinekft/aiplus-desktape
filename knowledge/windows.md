@@ -76,6 +76,13 @@ open.
   the folder only ever holds `session.json` and an empty `cursor.jsonl`. desktape reads that warning and fails the run
   or `record` at once; `desktape doctor --video` names the install (`winget install --id Gyan.FFmpeg -e`). Measured on
   a Hungarian build 26300 VM, 2026-10-25.
+- **winget's `ffmpeg` link does not run over SSH.** `%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe` answers "The
+  system cannot find the path specified" from an SSH logon (the same kind of link `uv` trips on), while the real exe in
+  `WinGet\Packages\Gyan.FFmpeg_…\ffmpeg-<version>-full_build\bin\` runs. desktape uses the package folder's newest
+  version first. The driver, in the desktop session, found ffmpeg right after the install, without a restart.
+  Measured: 2026-10-25, ffmpeg 9.0.2.
+- **The recording file grows while the driver records** (about 3.7 MB every 18 s at 1080p, measured over 3 minutes on
+  the same VM), so a size check once a minute tells a live recorder from a stopped one.
 - **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
   minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
 

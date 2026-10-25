@@ -27,11 +27,10 @@ may not have that folder on its PATH yet. Call it by its full path then.
 
 ```bash
 dt doctor --local            # the program runs on THIS Windows computer
-dt doctor                    # the program runs on another Windows machine, reached over SSH
-dt doctor --local --video    # … and the run will be recorded as a video
+dt doctor --target NAME      # the program runs on another machine: also checks that machine over SSH
 ```
 
-`doctor` installs nothing. For each `MISSING` line it prints the one command that installs that piece on this
+`doctor` installs nothing. ffmpeg is required on the driven machine (the driver records video through it). For each `MISSING` line it prints the one command that installs that piece on this
 OS (`winget`, `brew`, or the tool's official script). Then:
 
 1. Tell the person, in one sentence each, what is missing and what the command does.

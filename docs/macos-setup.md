@@ -18,7 +18,7 @@ does not let a program grant itself these permissions, and that is the point.
   during a run (step 5).
 - Xcode or the Command Line Tools (`xcode-select --install`) for the OCR helper, which is compiled on first
   use with `swiftc`.
-- For video mode, Homebrew's `ffmpeg-full` (step 6). The plain `ffmpeg` formula has no `drawtext`, so it
+- Homebrew's `ffmpeg-full` (step 6), required. The plain `ffmpeg` formula has no `drawtext`, so it
   cannot burn captions (measured: Homebrew ffmpeg 9.0.2 has `drawbox` but not `drawtext`).
 
 ## 1. SSH with key login
@@ -137,10 +137,10 @@ desktape.py run tapes/claude-desktop-tour-mac.yaml  # the read-only tour: 41/41 
 - **A headless Mac mini** works without a monitor: Apple Silicon creates a 1920×1080 display.
 - Unlike Windows RDP, macOS keeps rendering whether or not a Screen Sharing window is open.
 
-## 6. ffmpeg, for video mode
+## 6. ffmpeg (required)
 
-The driver records the screen itself (ScreenCaptureKit; no ffmpeg needed to record). Burning the captions
-needs ffmpeg with `drawtext`:
+The driver records the screen itself (ScreenCaptureKit), but burning the captions needs ffmpeg with `drawtext`, and
+desktape refuses a video run or `record` on a target without it:
 
 ```bash
 brew install ffmpeg-full                       # keg-only: /opt/homebrew/opt/ffmpeg-full/bin/ffmpeg

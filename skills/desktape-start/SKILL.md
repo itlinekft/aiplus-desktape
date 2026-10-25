@@ -15,15 +15,15 @@ version with the same facts: Hungarian first. No jargon to the person beyond „
 ## 1. Which machine is driven?
 
 Ask once, if it is not clear: is the program on **this** computer, or on another one reached over SSH? That decides
-`--local`. Ask too whether the run will be recorded as a video (`--video`).
+`--local`. ffmpeg is required on the driven machine either way: `doctor` checks it, and over SSH it checks the
+named target's.
 
 ## 2. Check: `doctor` installs nothing
 
 ```bash
 dt() { uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" "$@"; }      # PowerShell: uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py" …
 dt doctor --local            # the program runs on THIS computer
-dt doctor                    # the program runs on another machine, over SSH
-dt doctor --local --video    # … and the run will be recorded
+dt doctor --target NAME      # the program runs on another machine: this computer, then that machine over SSH
 ```
 
 If `uv` itself is missing, look in `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) first; otherwise it

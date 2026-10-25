@@ -37,7 +37,7 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 
 ### Mi kell hozzá
 
-- **A vezérelt gépen:** Windows 11 vagy macOS, a Cua Driver, SSH-belépés kulccsal, videóhoz ffmpeg.
+- **A vezérelt gépen:** Windows 11 vagy macOS, a Cua Driver, SSH-belépés kulccsal és az ffmpeg (kötelező: a felvétel és a feliratok ezzel készülnek).
 - **Ahonnan vezérled:** Linux, Windows vagy macOS. A Pythont és a többi eszközt a `uv` hozza magával.
 - **Futás közben:** Windowson nyitva kell lennie egy RDP-ablaknak, macOS-en a képernyő nem lehet zárolva.
 
@@ -124,9 +124,9 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 - **Controller (where desktape runs):** Linux, macOS, or Windows from the user's desktop session; Python 3.9+,
   PyYAML (`pip install -r requirements.txt`), and an OpenSSH client with key login to the target.
 - **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
-  session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
+  session, and an ffmpeg full build (required: the driver records video through it). Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
   Or macOS (tested on macOS 26.4, Apple Silicon) with Remote Login, Cua Driver 0.34.1 and its permissions
-  granted once by a person, and `ffmpeg-full` for video mode: [`docs/macos-setup.md`](docs/macos-setup.md).
+  granted once by a person, and `ffmpeg-full` (required): [`docs/macos-setup.md`](docs/macos-setup.md).
   Every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
 - An RDP client must stay connected and visible on a Windows target during a run, because Windows stops
   rendering a minimised or disconnected session. Holding the session headless from Linux is the next change
