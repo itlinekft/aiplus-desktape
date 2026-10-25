@@ -5,6 +5,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- A map can carry `answers:`, like a tape: they apply to every tape on that map, and a tape answer with the same
+  name replaces the map's. An unplanned dialog is offered to the answers before it fails a step. Meant for pop-ups
+  any tape on the app may meet, such as Claude Desktop's auto-sync card (closed with its X, never "Grant access");
+  that card's answer goes into the Claude Desktop maps once its X is measured on each platform.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

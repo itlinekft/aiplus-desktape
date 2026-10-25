@@ -344,6 +344,12 @@ steps:
 - The run's summary lists the answers that fired (`answered`, with the time and the second of the video).
 - Answer only what the person in the scene would answer, with the answer they would give (an answer key is for
   checking; a planned answer is the person's decision, said openly in the video).
+- A map may carry `answers:` too, in the same format. They apply to every tape on that map, after the tape's own;
+  a tape answer with the same `name` replaces the map's. Use it for a pop-up any tape on the app may meet, such as
+  Claude Desktop's "Auto-sync requires the Claude GitHub App…" card, which is closed with its X and never with
+  "Grant access". Give such an answer `once: false`.
+- An unplanned dialog that would fail a step is offered to the answers first: a dialog an answer closed is no
+  failure. An answer's own steps are not stopped by the dialog they answer.
 
 ## Map
 

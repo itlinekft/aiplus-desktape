@@ -761,25 +761,40 @@ def resolve_all(steps, amap):
     return [resolve(s, amap) for s in steps]
 
 
-def tape_answers(tape, amap, values):
+def tape_answers(tape, amap, values, where="answers"):
     """prompt-answers: the tape's `answers:` list, resolved and checked like its steps. Each entry is
-    {when: <selector or @map.name>, steps: [...], name?, once?}."""
+    {when: <selector or @map.name>, steps: [...], name?, once?}. `where` names the list in errors."""
     out = []
     for i, h in enumerate(tape.get("answers") or []):
         if not isinstance(h, dict) or "when" not in h or not isinstance(h.get("steps"), list) or not h["steps"]:
-            raise ValueError(f"answers[{i}]: write {{when: <selector>, steps: [...]}}")
+            raise ValueError(f"{where}[{i}]: write {{when: <selector>, steps: [...]}}")
         unknown = set(h) - {"when", "steps", "name", "once"}
         if unknown:
-            raise ValueError(f"answers[{i}]: unknown key(s) {sorted(unknown)}; an answer has when, steps, name, once")
+            raise ValueError(f"{where}[{i}]: unknown key(s) {sorted(unknown)}; an answer has when, steps, name, once")
         when = substitute(resolve({"expect": h["when"]}, amap)[0]["expect"], values)
         when = when if isinstance(when, dict) else {"label": when}
         if not any(when.get(k) for k in ("label", "id", "field", "role")):
-            raise ValueError(f"answers[{i}]: `when` names nothing (label, id, field or role)")
+            raise ValueError(f"{where}[{i}]: `when` names nothing (label, id, field or role)")
         plan = [(substitute(st, values), e) for st, e in resolve_all(h["steps"], amap)]
         check_selectors(plan)
         out.append({"name": h.get("name") or sel_name(when), "when": when, "plan": plan,
                     "once": h.get("once", True) is not False})
     return out
+
+
+def with_map_answers(answers, amap, values, map_name=None):
+    """map-answers: the map's `answers:` after the tape's, checked the same way; a tape answer with the same
+    name replaces the map's (a pop-up every tape on the app may meet is written once, in the map)."""
+    where = f"map {map_name!r} answers" if map_name else "map answers"
+    try:
+        mine = tape_answers({"answers": (amap or {}).get("answers")}, amap, values, where=where)
+    except KeyError as e:                            # a misspelt @name inside a map answer
+        raise ValueError(f"{where}: {e.args[0]}") from e
+    names = {h["name"] for h in answers}
+    for h in mine:
+        if h["name"] in names:
+            logger.info("map answer %r: the tape's own answer of that name is used", h["name"])
+    return answers + [h for h in mine if h["name"] not in names]
 
 
 # ---- tape variables (data-driven-import) -----------------------------------------------------------
@@ -1856,11 +1871,11 @@ class Runner:
         self.dirty = False
         return self.elements
 
-    def check_dialogs(self):
+    def check_dialogs(self, retried=False):
         """Stop on a dialog the tape did not plan (replay-guards D2): a Window inside the tape's window, or a
         new titled top-level window of the same process."""
-        if self.expected is None or self.win is None:
-            return
+        if self.expected is None or self.win is None or getattr(self, "answering", False):
+            return                   # map-answers: an answer's steps act on the very prompt it answers
         if self.dirty:
             self.snapshot()
         found = [(n[2], "dialog") for n in map(parse, self.tree.splitlines())
@@ -1876,6 +1891,9 @@ class Runner:
                 self.toasts_seen = getattr(self, "toasts_seen", set()) | {t}
         bad = [f'{kind} "{title}"' for title, kind in found if not self.expected(title) and title not in toasts]
         self.check_covered(sc.get("windows", []))
+        if bad and not retried and self.answer_prompts():
+            logger.info("unexpected %s in %r answered; checking again", ", ".join(bad), self.title)
+            return self.check_dialogs(retried=True)   # map-answers: a dialog an answer closed is no failure
         if bad:
             logger.warning("unexpected %s in %r (pid %s)", ", ".join(bad), self.title, self.win["pid"])
             raise AssertionError(f"unexpected {', '.join(bad)}: name it in the tape's `dialogs:` if it is planned")
@@ -3081,6 +3099,7 @@ def cmd_run(a):
     check_tape_deny(plan, deny)                      # … and so does a click the map denies
     check_selectors(plan)                            # … and a selector that names nothing
     answers = tape_answers(tape, amap, values)       # prompt-answers: checked like the steps, before any tool call
+    answers = with_map_answers(answers, amap, values, tape.get("map"))   # map-answers: the app's own, after the tape's
     check_tape_deny([st for h in answers for st in h["plan"]], deny)
     tape["_answers"] = answers
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
@@ -4795,6 +4814,21 @@ def selftest():
     except AssertionError as e:
         assert 'dialog "Are you sure?"' in str(e), e
     r.expected = None; r.check_dialogs()                     # act and look: no dialog check
+    # map-answers: a dialog an answer closes is no failure, an unanswered one still is, and an answer's own
+    # steps (its click on the card's X) are not stopped by the card they close
+    f = Fake(); r = Runner(f, "test"); r.expected = ok; r.focus("Main")
+    base, card = f.tree, ('\n  - Window "Auto-sync requires access"\n    - [2] Button "Grant access" [actions=[invoke]]'
+                        '\n    - [3] Button "Close" [actions=[invoke]]')
+    def closes():
+        f.tree = base; r.snapshot(); return True
+    f.tree, r.dirty, r.answer_prompts = base + card, True, closes
+    r.check_dialogs()
+    f.tree, r.dirty, r.answer_prompts = base + card, True, lambda: False
+    try:
+        r.check_dialogs(); raise AssertionError("expected AssertionError")
+    except AssertionError as e:
+        assert 'dialog "Auto-sync requires access"' in str(e), e
+    r.answering = True; r.check_dialogs(); r.answering = False
     logger.setLevel(level)
     # box-lock: free, held by a live process, by a lease, a crashed holder, the same holder, unlock.
     with tempfile.TemporaryDirectory() as d:
@@ -5383,6 +5417,25 @@ def selftest():
     ok = tape_answers({"answers": [{"when": {"label": "Kérdés", "prefix": True}, "steps": [{"click": {"label": "Igen"}}]}]},
                       None, {})
     assert ok[0]["name"] == "Kérdés" and ok[0]["once"]
+    # map-answers: the map's answers come after the tape's; a tape answer of the same name wins; errors name the map
+    card = {"name": "card", "when": {"label": "Auto-sync", "prefix": True}, "steps": [{"click": {"label": "Close"}}],
+            "once": False}
+    m = {"answers": [card]}
+    both = with_map_answers(tape_answers({}, m, {}), m, {}, "app")
+    assert [h["name"] for h in both] == ["card"] and not both[0]["once"], both
+    mine = tape_answers({"answers": [dict(card, steps=[{"key": "Escape"}])]}, m, {})
+    both = with_map_answers(mine, m, {}, "app")
+    assert len(both) == 1 and both[0]["plan"][0][0] == {"key": "Escape"}, both
+    try:
+        with_map_answers([], {"answers": [{"when": "K", "steps": [{"click": "@nope"}]}]}, {}, "app")
+        raise AssertionError("accepted a map answer naming a missing entry")
+    except ValueError as e:
+        assert "map 'app' answers" in str(e) and "@nope" in str(e), e
+    try:
+        with_map_answers([], {"answers": [{"when": "K"}]}, {}, "app")
+        raise AssertionError("accepted a map answer without steps")
+    except ValueError as e:
+        assert "map 'app' answers[0]" in str(e), e
     for bad in ([{"when": {"label": "K"}}], [{"when": {}, "steps": [{"click": {"label": "x"}}]}],
                 [{"when": "K", "steps": [{"click": {"label": "x"}}], "after": 3}], [{"when": "K", "steps": [{"click": {}}]}]):
         try:
