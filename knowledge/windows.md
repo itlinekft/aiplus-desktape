@@ -38,6 +38,15 @@ open.
   process, not by title.
 - A maximised window ignores a new frame. Restore it first (Win+Down); `window:` in a tape does that.
 
+## Windows that are listed but not on screen
+
+- Windows starts the Settings app ahead of time in the background, with no one asking (UWP prelaunch). Its
+  window ("Settings", on a Hungarian system "Gépház", from `SystemSettings.exe` and `ApplicationFrameHost.exe`) is
+  *cloaked*: the driver's window list reports it on screen with full-screen bounds, but nothing is drawn and a
+  screen grab does not show it. Measured on a Windows 11 test PC on 2026-10-25: it reappeared four times in a day,
+  minutes after unrelated runs. A check that counts listed windows fails on it; take a screen grab before you
+  chase it, and stop the process (`Stop-Process -Name SystemSettings`) before a check that counts windows.
+
 ## Still to write
 
 The session that drives the Windows test box fills this page from its measurements: permission prompts,
