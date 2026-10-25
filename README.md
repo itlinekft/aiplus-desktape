@@ -111,6 +111,8 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
   and `claude-desktop-demo.yaml`, which records the public demo with the user's content covered.
 - `windows/` — scripts desktape copies to a Windows target (the OCR, run as a one-off interactive task).
 - `macos/` — the pinned driver install for a Mac, and the Vision OCR helper desktape compiles there.
+- `knowledge/` — what desktape knows about each operating system (file dialogs, permissions, the locked screen…),
+  published and kept up to date; `desktape.py knowledge` prints it with your own notes on top.
 - `docs/` — setup, the tape format, and measured results.
 - `site/` — the landing page and the demo video (GitHub Pages, `.github/workflows/pages.yml`).
 - `openspec/` — requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).

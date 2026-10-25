@@ -82,6 +82,24 @@ data again. If the person keeps a backup step, it belongs before the run.
 does one step and checks its outcome. Use them to **build or repair a tape** with the person, not to do a
 business task step by step on your own: a tape is reviewed once and then replayed the same way every time.
 
+## Know the operating system
+
+Each operating system has its own traps for a program that drives its screen. Examples: a macOS file dialog
+the driver cannot type into, or a Windows process query that SSH may not read. desktape keeps what it has
+measured about them in two layers:
+
+```bash
+dt knowledge                 # the target's OS: the published base first, then the person's own notes
+dt knowledge --where         # the paths, and where the person's own page goes
+```
+
+- Read it before you drive an operating system's own windows (file dialogs, permission prompts, the lock
+  screen), and before you guess around something that fails.
+- When you measure something new, add it to the person's own page with what happens, what to do, and the
+  date and OS version. desktape never overwrites that page.
+- If it is about the operating system itself, not this machine or program, tell the person it belongs in
+  desktape's base page (`knowledge/<os>.md`), so the next user gets it too.
+
 ## Behave like the person at the computer
 
 When you drive a desktop yourself (`act`, or while a tape runs), act the way its user would, at once:

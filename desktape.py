@@ -3401,6 +3401,48 @@ def cmd_unpair(a):
     return 0
 
 
+KNOWLEDGE = os.path.join(HERE, "knowledge")
+
+
+def user_knowledge_dir():
+    """The user's own knowledge pages (os-knowledge D1), beside the targets file; desktape never writes here."""
+    return os.environ.get("DESKTAPE_KNOWLEDGE") or os.path.join(os.path.dirname(targets_path()), "knowledge")
+
+
+def knowledge_pages(os_name):
+    """(base page, the user's pages, the user's page for this OS): base first, then `<os>.md`, then `<os>-*.md`."""
+    import glob
+    mine = user_knowledge_dir()
+    own = os.path.join(mine, f"{os_name}.md")
+    pages = ([own] if os.path.exists(own) else []) + sorted(glob.glob(os.path.join(mine, f"{os_name}-*.md")))
+    return os.path.join(KNOWLEDGE, f"{os_name}.md"), pages, own
+
+
+def cmd_knowledge(a):
+    """os-knowledge: the base page for the target's OS (published, updated with desktape), then the user's own."""
+    os_name = a.for_os
+    if not os_name:
+        host, _ = choose_target(a.host, a.target) if (a.host or a.target or host_default()) else (None, None)
+        os_name = target_os(host) if host and host != "local" else local_os()
+    base, pages, own = knowledge_pages(os_name)
+    if a.where:
+        print(f"base: {base}" + ("" if os.path.exists(base) else " (none for this OS yet)"))
+        for p in pages:
+            print(f"yours: {p}")
+        if own not in pages:
+            print(f"yours: {own} (not written yet: put your own notes about {os_name} here)")
+        return 0
+    if os.path.exists(base):
+        print(f"<!-- base: {base} -->\n" + open(base, encoding="utf-8").read().rstrip())
+    else:
+        print(f"<!-- no base page for {os_name} yet -->")
+    for p in pages:
+        print(f"\n<!-- yours: {p} -->\n" + open(p, encoding="utf-8").read().rstrip())
+    if not pages:
+        print(f"\n<!-- yours: none yet; write your own notes to {own} -->")
+    return 0
+
+
 def cmd_tidy(a):
     """scene-tidy: the `tidy` step outside a tape, between takes."""
     with box_lock(a.host, "tidy") as lk:
@@ -3584,6 +3626,38 @@ def cmd_unlock(a):
 
 
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_knowledge():
+    """os-knowledge: the base page first, then the user's pages; --where names the page not written yet."""
+    import io
+    with tempfile.TemporaryDirectory() as d:
+        old = os.environ.get("DESKTAPE_KNOWLEDGE")
+        os.environ["DESKTAPE_KNOWLEDGE"] = d
+        try:
+            open(os.path.join(d, "macos-claude.md"), "w").write("# Claude on my Mac\nmine\n")
+            open(os.path.join(d, "macos.md"), "w").write("# my Mac\n")
+            open(os.path.join(d, "windows-x.md"), "w").write("other OS\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_knowledge(argparse.Namespace(for_os="macos", where=False, host=None, target=None))
+            text = out.getvalue()
+            assert text.index("base:") < text.index("macos.md -->") < text.index("macos-claude.md"), text[:300]
+            assert "File dialogs" in text and "other OS" not in text
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_knowledge(argparse.Namespace(for_os="windows", where=True, host=None, target=None))
+            lines = out.getvalue().splitlines()
+            assert lines[0].startswith("base: ") and lines[0].endswith("windows.md"), lines
+            assert lines[1].endswith("windows-x.md") and "not written yet" in lines[2], lines
+        finally:
+            if old is None:
+                os.environ.pop("DESKTAPE_KNOWLEDGE", None)
+            else:
+                os.environ["DESKTAPE_KNOWLEDGE"] = old
+    for page in ("macos", "windows"):
+        text = open(os.path.join(KNOWLEDGE, page + ".md"), encoding="utf-8").read()
+        assert text.startswith("# ") and "knowledge --os" in text
+
 
 def selftest_mac_file_dialog():
     """mac-file-dialog: keys only after the dialog is in front, OCR before each Return, Escape on a failed read."""
@@ -4705,7 +4779,9 @@ def selftest():
     selftest_pairing()
     selftest_person_cursor()
     selftest_mac_file_dialog()
-    for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair"):
+    selftest_knowledge()
+    for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
+                "knowledge"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     print("selftest ok")
@@ -4748,6 +4824,9 @@ def main():
     p.add_argument("--accept", metavar="LINE", help="on the target: add the controller's printed line (or @file holding it) for this user")
     p = sub.add_parser("unpair", help="take a paired target's line back, then the key and the profile")
     p.add_argument("name"); p.add_argument("--local-only", action="store_true", help="the target's line was removed by hand")
+    p = sub.add_parser("knowledge", help="what desktape knows about the target's OS: the published base, then your own notes")
+    p.add_argument("--os", dest="for_os", choices=list(OSES), help="this OS instead of the target's")
+    p.add_argument("--where", action="store_true", help="only the paths, including where your own page goes")
     p = sub.add_parser("record", help="record the target's whole screen on its own, until Ctrl+C, a stop file or --seconds")
     p.add_argument("--seconds", type=float, help=f"stop after this many seconds (at most {RECORD_MAX:.0f})")
     p.add_argument("--until-file", metavar="PATH", help="stop when this file exists on the controller")
@@ -4773,6 +4852,8 @@ def main():
             return cmd_targets(a)
         if a.cmd == "doctor":
             return cmd_doctor(a)
+        if a.cmd == "knowledge":                                 # os-knowledge: needs a target only to learn its OS
+            return cmd_knowledge(a)
         if a.cmd in ("pair", "unpair"):                         # target-pairing: the name is the target
             return cmd_pair(a) if a.cmd == "pair" else cmd_unpair(a)
         a.host, a.target = choose_target(a.host, a.target)     # target-profiles
