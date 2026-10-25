@@ -229,6 +229,17 @@ class Target:
         else:
             subprocess.run(["scp", "-q", *self.opts, f"{self.host}:{rel}", local_path], check=True)
 
+    def size(self, path):
+        """record-liveness: a file's size in bytes on the target, by its absolute path; None if it is not there."""
+        if self.local:
+            try:
+                return os.path.getsize(path)
+            except OSError:
+                return None
+        out = self.sh(f'stat -f %z "{path}" 2>/dev/null' if self.mac else f'for %I in ("{path}") do @echo %~zI').stdout
+        out = out.strip().splitlines()[-1].strip() if out.strip() else ""
+        return int(out) if out.isdigit() else None
+
 
 # step-effect-check D1: every driver call has a deadline (seconds); DESKTAPE_CALL_DEADLINE scales them all.
 DEADLINES = {"get_window_state": 15.0, "list_windows": 10.0, "start_recording": 30.0, "stop_recording": 10.0,
@@ -3183,6 +3194,9 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "/" + rec_rel if tt.mac else profile + "\\" + rec_rel.replace("/", "\\")
     t0 = time.time(); failed = None; done = 0; repair = None; frame_set = False; repairs = []
+    lv = None; on_dead = tape.get("on_dead", "fail")
+    if on_dead not in ("fail", "alert"):
+        raise ValueError(f"tape: on_dead is fail or alert, not {on_dead!r}")
     logger.info("tape %s, mode %s, %d steps, run dir %s", tape["name"], a.mode, len(plan), run_dir)
     try:
         for i, (s, entry) in enumerate(plan):
@@ -3194,6 +3208,12 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                     logger.error("tape failed at %s", failed)
                     break
                 r.t_rec = time.time()
+                lv = Liveness(tt, rec_dir + ("/" if tt.mac else "\\") + "recording.mp4")
+                lv.watch(lambda text: alert(f"desktape {a.host}: run {tape['name']}: {text}"))
+            if lv and lv.dead and on_dead != "alert":    # record-liveness: a dead recording fails the take
+                failed = f"step {i}: {lv.dead}"
+                logger.error("tape failed at %s", failed)
+                break
             desc = f"{tape['name']} step {i}: " + json.dumps(tape["steps"][i], ensure_ascii=False)[:100]
             if lk:
                 lk.status(state="running", step=desc)
@@ -3229,6 +3249,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             logger.info("step %d ok: %s", i, json.dumps(tape["steps"][i], ensure_ascii=False)[:100])
             if a.mode == "video" and not {"pause", "redact"} & s.keys():
                 time.sleep(tape.get("video_pause", 1.2))
+        if failed is None and lv and lv.dead and on_dead != "alert":
+            failed = f"after the last step: {lv.dead}"
         if failed is None and r.win is not None:
             time.sleep(DIALOG_SETTLE)            # replay-guards D4: a dialog the last step opens takes a moment
             r.dirty = True
@@ -3242,6 +3264,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                                        ignores(amap, a.host))
     finally:
         total = time.time() - (r.t_rec or t0)
+        if lv:
+            lv.stop()
         if r.t_rec is not None:
             time.sleep(1.0)
             try:
@@ -3265,6 +3289,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         summary["repair"] = repair
     if r.t_rec is not None:
         summary["recording_started_at"] = utc_iso(r.t_rec)   # screen-record: lines this video up with another
+        if lv:
+            summary["liveness"] = lv.summary()
     if r.t_rec is not None:
         local_raw = os.path.join(run_dir, "recording.mp4")
         try:
@@ -3452,6 +3478,59 @@ def utc_iso(t):
 RECORD_MAX = 3600.0
 
 
+LIVENESS_EVERY = 60.0      # record-liveness: seconds between two size checks of a running recording
+
+
+class Liveness:
+    """record-liveness: is the recording on the target still growing? `check()` reads its size at most once per
+    `every` seconds; a size that did not grow since the last read (or no file at all) marks it dead, for good. A probe
+    that fails (SSH) is only a warning: the recorder is not judged by the network."""
+
+    def __init__(self, target, path, every=None, clock=time.time):
+        self.t, self.path, self.clock = target, path, clock
+        self.every = float(every or os.environ.get("DESKTAPE_LIVENESS_EVERY") or LIVENESS_EVERY)
+        now = clock()
+        self.size, self.last_grew, self.due, self.dead, self._stop = None, now, now + self.every, None, None
+        self.alerted = False
+
+    def check(self):
+        now = self.clock()
+        if self.dead or now < self.due:
+            return self.dead
+        self.due = now + self.every
+        try:
+            size = self.t.size(self.path)
+        except Exception as e:
+            logger.warning("liveness: could not read the size of %s (%s); not judged this time", self.path, e)
+            return None
+        if size is not None and (self.size is None or size > self.size):
+            logger.debug("liveness: %s grew %s -> %s bytes", self.path, self.size, size)
+            self.size, self.last_grew = size, now
+            return None
+        self.dead = (f"recording stopped growing at {time.strftime('%H:%M:%S', time.localtime(self.last_grew))}"
+                     + (f" ({size} bytes)" if size is not None else f" (no file at {self.path})"))
+        logger.error("liveness: %s", self.dead)
+        return self.dead
+
+    def watch(self, on_dead):
+        """Check from a background thread, so a long step cannot hide a dead recorder; `on_dead(text)` runs once."""
+        self._stop = threading.Event()
+
+        def loop():
+            while not self._stop.wait(1.0):
+                if self.check():
+                    on_dead(self.dead)
+                    return
+        threading.Thread(target=loop, name="liveness", daemon=True).start()
+
+    def stop(self):
+        if self._stop:
+            self._stop.set()
+
+    def summary(self):
+        return {"last_grew": utc_iso(self.last_grew), "bytes_seen": self.size, "dead": self.dead}
+
+
 def cmd_record(a):
     """screen-record: the target's whole screen, recorded on its own until Ctrl+C, a stop file on the controller,
     or --seconds; acts on nothing and takes no lock, so a run beside it goes on."""
@@ -3468,6 +3547,7 @@ def cmd_record(a):
     try:
         cua.call("start_recording", {"output_dir": rec_dir, "record_video": True, "include_accessibility_tree": False})
         t1 = time.time()
+        lv = Liveness(t, rec_dir + ("/" if t.mac else "\\") + "recording.mp4")
         print(f"recording {a.host} since {utc_iso(t0)}; stop with Ctrl+C" +
               (f", or create {a.until_file}" if a.until_file else "") + f" (at most {limit:.0f} s)", flush=True)
         logger.info("record: %s started (the call took %.2f s), output %s", a.host, t1 - t0, rec_dir)
@@ -3479,6 +3559,12 @@ def cmd_record(a):
                 if a.until_file and os.path.exists(a.until_file):
                     why = "stop file"
                     break
+                if lv.check() and not lv.alerted:
+                    lv.alerted = True
+                    alert(f"desktape {a.host}: record {a.name or 'screen'}: {lv.dead}")
+                    if getattr(a, "on_dead", "fail") != "alert":
+                        why = lv.dead
+                        break
                 time.sleep(0.2)
         except KeyboardInterrupt:
             why = "interrupted"
@@ -3498,11 +3584,11 @@ def cmd_record(a):
             t.sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
     summary = {"record": a.name or "screen", "host": a.host, "stopped_by": why, "recording_started_at": utc_iso(t0),
                "start_call_seconds": round(t1 - t0, 3), "seconds": round(t2 - t1, 1), "video": local,
-               "bytes": os.path.getsize(local)}
+               "bytes": os.path.getsize(local), "liveness": lv.summary()}
     json.dump(summary, open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     logger.info("record: %s stopped by %s after %.1f s; %s", a.host, why, t2 - t1, local)
-    return 0
+    return 1 if lv.dead and getattr(a, "on_dead", "fail") != "alert" else 0
 
 
 # ---- target-pairing: a controller's own key on a target, and taking it back --------------------------------
@@ -4186,6 +4272,27 @@ def selftest_record():
         assert calls[0][1]["output_dir"].startswith("/Users/me/desktape/rec/") and calls[0][1]["record_video"] is True
         assert summary["stopped_by"] == "stop file" and summary["bytes"] == 3 and summary["recording_started_at"].endswith("Z")
         assert cmds and cmds[-1].startswith('rm -rf "$HOME/desktape/rec/'), cmds          # no copy stays on the target
+        # record-liveness: a recorder that stops growing ends the recording with an error, and keeps what it has
+        calls.clear()
+        real_size, Target.size = Target.size, lambda self, path: 100
+        os.environ["DESKTAPE_LIVENESS_EVERY"] = "0.3"
+        try:
+            with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
+                stop = os.path.join(d, "never")                # FakeCua writes it: point it elsewhere
+                globals()["RUNS"], runs = d, globals()["RUNS"]
+                try:
+                    stop_file = os.path.join(d, "stop")
+                    assert cmd_record(argparse.Namespace(host="rec@mac", seconds=5, until_file=stop_file, name="mac",
+                                                         on_dead="fail")) == 1
+                    summary = json.load(open(glob_one(d, "summary.json")))
+                finally:
+                    globals()["RUNS"] = runs
+            assert summary["stopped_by"].startswith("recording stopped growing at "), summary
+            assert summary["liveness"]["bytes_seen"] == 100 and summary["seconds"] < 3, summary
+            assert [c[0] for c in calls] == ["start_recording", "stop_recording"], calls      # stopped, then fetched
+        finally:
+            Target.size = real_size
+            os.environ.pop("DESKTAPE_LIVENESS_EVERY", None)
     finally:
         globals()["Cua"], Target.get, Target.sh, Target.home = real
         logger.setLevel(level)
@@ -5016,6 +5123,39 @@ def selftest():
            {"role": "ListItem", "element_index": 34, "frame": {"x": 6, "y": 370, "w": 1886, "h": 24}}]
     assert on_screen_table([ta, tb], els, {"x": -10, "y": -10, "width": 1940, "height": 1040}) is tb
     assert on_screen_table([tb], [], {}) is tb and on_screen_table([], [], {}) is None
+    # record-liveness: a recording that grows is alive; one that stops, or never appears, is dead; a failed probe is not
+    class SizeTarget:
+        mac = False
+        def __init__(self, sizes):
+            self.sizes = list(sizes)
+        def size(self, path):
+            v = self.sizes.pop(0)
+            if isinstance(v, Exception):
+                raise v
+            return v
+    clock = [1000.0]
+    lv = Liveness(SizeTarget([10, 20, RuntimeError("ssh"), 20]), "C:\\rec\\recording.mp4", every=60, clock=lambda: clock[0])
+    assert lv.check() is None                       # not due yet: no probe
+    for t, want in ((1060, None), (1120, None), (1180, None), (1240, "stopped")):
+        clock[0] = t
+        got = lv.check()
+        assert (got is None) if want is None else (want in got), (t, got)
+    assert lv.summary()["bytes_seen"] == 20 and lv.summary()["dead"].startswith("recording stopped growing at ")
+    assert time.strftime("%H:%M:%S", time.localtime(1120)) in lv.dead, lv.dead     # the time it last grew
+    clock[0] = 1300
+    assert lv.check() == lv.dead                    # dead stays dead
+    clock[0] = 0.0
+    lv = Liveness(SizeTarget([None]), "/Users/x/rec/recording.mp4", every=60, clock=lambda: clock[0])
+    clock[0] = 60
+    assert "no file at /Users/x/rec/recording.mp4" in lv.check()
+    # the size on each system, from what its shell prints
+    for mac, out, want in ((False, "12345\r\n", 12345), (False, "\r\n", None), (True, "678\n", 678), (True, "", None)):
+        tt = Target.__new__(Target)
+        tt.host, tt.local, tt.mac, tt.opts = "user@example", False, mac, []
+        seen = []
+        tt.sh = lambda cmd, out=out, seen=seen: (seen.append(cmd), subprocess.CompletedProcess(cmd, 0, out, ""))[1]
+        assert tt.size("C:\\r\\recording.mp4" if not mac else "/r/recording.mp4") == want, (mac, out)
+        assert ("stat -f %z" in seen[0]) if mac else ("%~zI" in seen[0]), seen
     # the check after the last step survives a last click that closed the tape's window
     class LastGone(Runner):
         def __init__(self, err):
@@ -5323,6 +5463,8 @@ def main():
     p.add_argument("--seconds", type=float, help=f"stop after this many seconds (at most {RECORD_MAX:.0f})")
     p.add_argument("--until-file", metavar="PATH", help="stop when this file exists on the controller")
     p.add_argument("--name", help="the video's name (default: screen)")
+    p.add_argument("--on-dead", choices=("fail", "alert"), default="fail",
+                   help="a recording that stops growing: stop and exit 1 (fail, default), or only alert")
     p = sub.add_parser("tidy", help="close every program with a window except the kept ones (scene-tidy)")
     p.add_argument("--keep", action="append", default=[], metavar="NAME", help="a program name or a window title's start")
     p.add_argument("--minimize", action="append", default=[], metavar="NAME", help="a program name or a window title's start to minimise")

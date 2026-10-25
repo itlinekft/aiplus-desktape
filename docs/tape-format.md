@@ -10,6 +10,7 @@ name: add-marketplace-dialog          # used in run folder and video names
 app: Claude Desktop 3.6556 (Windows)  # free text, for the reader
 map: claude-desktop-win               # optional: maps/<name>.yaml, or a path
 video_pause: 1.2                      # optional: seconds after each step in video mode (default 1.2)
+on_dead: fail                         # optional, video mode: a recording that stops growing fails the run (fail), or only alerts (alert)
 typing: fast                          # optional: fast (default), human (a person's pace, video mode only) or paste
 typing_cps: 7                         # optional: characters a second for `human` (default 12)
 cursor: agent                         # optional: agent (default) or person (macOS, video mode only; see below)

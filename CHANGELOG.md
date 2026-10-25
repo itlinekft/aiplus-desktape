@@ -5,6 +5,13 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- A recording is checked while it runs: once a minute desktape reads the size of the recording file on the target.
+  If it has stopped growing, a video run fails with "recording stopped growing at <time>" and runs no further step,
+  and `record` stops and exits 1; both keep what was recorded, and the summary says when it last grew. The tape key
+  `on_dead: alert` (or `record --on-dead alert`) only raises the alert. Measured: the driver's recorder can stop
+  silently under load.
+
 ### Changed
 - The AI+ marketplace lists the plugin as `aiplus-desktape` (aiplus-plugins d5e126c), following the rename to
   AI+ desktape. If you installed `desktape@aiplus-plugins`, remove it and add `aiplus-desktape@aiplus-plugins`
