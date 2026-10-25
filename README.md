@@ -10,7 +10,7 @@
   </picture>
 </p>
 
-<p align="center"><b>AI+ desktape</b> · ITLine AI+ · ingyenes · MIT</p>
+<p align="center"><b>AI+ desktape</b> · ITLine AI+ · ingyenes · MIT · <a href="https://www.itline.hu/ai-plus/desktape/">itline.hu/ai-plus/desktape</a></p>
 
 # AI+ desktape
 
@@ -138,9 +138,9 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 
 In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste `itlinekft/aiplus-plugins` (ITLine's
 marketplace, which lists desktape) or `https://github.com/itlinekft/aiplus-desktape.git` (desktape's own), **Sync**, then
-**Add desktape**. In Claude Code: `claude plugin marketplace add itlinekft/aiplus-plugins`, then
-`claude plugin install desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/desktape`, then
-`/plugin install desktape@desktape`.
+the **Add** button on the AI+ desktape card. In Claude Code: `claude plugin marketplace add itlinekft/aiplus-plugins`, then
+`claude plugin install desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/aiplus-desktape`, then
+`/plugin install aiplus-desktape@aiplus-desktape`.
 
 Then ask Claude "how do I start?". The `desktape-start` skill runs `desktape.py doctor`, which names what this
 machine still lacks and the one command that installs each piece (`winget`, `brew` or the tool's official
