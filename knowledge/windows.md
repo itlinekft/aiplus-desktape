@@ -63,6 +63,11 @@ open.
   screen grab does not show it. Measured on a Windows 11 test PC on 2026-10-25: it reappeared four times in a day,
   minutes after unrelated runs. A check that counts listed windows fails on it; take a screen grab before you
   chase it, and stop the process (`Stop-Process -Name SystemSettings`) before a check that counts windows.
+- The shell's own host, `ShellExperienceHost.exe` (Start, notifications), can be listed over the whole desktop on
+  some Windows 11 builds, so a tape that focuses the desktop ("Program Manager") was refused as covered. desktape
+  counts it as a shell window since 0.4.3. Measured on a Hungarian build 26300 VM, 2026-10-25.
+- On an unactivated Windows, the "Aktiválja a Windowst" (Activate Windows) notice can surface as an unplanned window
+  called "Window Dialog" after a key press. Name it in the tape's `dialogs:`. Measured on the same VM.
 
 ## Still to write
 

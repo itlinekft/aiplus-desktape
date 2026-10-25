@@ -203,6 +203,9 @@ within `timeout` (10 s by default), or the step fails with a sentence naming wha
 | `file: <path>` | the file exists on the target and is new or changed since just before the action | the file 'p' did not appear / did not change |
 | `in: <title>` | (where `shows`, `value` and `filled` read, when the step has no window) | |
 
+`opens:` only checks: the next step still works in the window it worked in before. To act inside the new
+window, put `- focus: <its title>` after the step. A window the last step closes needs nothing: the run ends cleanly.
+
 `file:` takes a path on the target; environment variables are expanded there (`%USERPROFILE%\demo\out.xlsx`).
 As a step of its own, `expect: { file: …, timeout: 300 }` waits until the file exists: the way to wait for
 another program, such as Claude writing a file, by its result rather than by its screen.

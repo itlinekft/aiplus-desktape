@@ -1615,6 +1615,9 @@ def shape(tree_text):
 # covered-window-guard: windows that are always on top and cover nothing a person would close
 SHELL_WINDOWS = {("cua-driver.exe", None), ("TextInputHost.exe", None), ("explorer.exe", "Program Manager"),
                  ("explorer.exe", "PopupHost"),
+                 # the shell's own host (Start, notifications): on some Windows 11 builds its window is always
+                 # listed over the desktop without being drawn (measured, a Hungarian build 26300 VM)
+                 ("ShellExperienceHost.exe", None),
                  ("Cua Driver", ""), ("loginwindow", "")}      # macOS: the driver's cursor overlay; the login shield
 
 
@@ -3135,6 +3138,17 @@ def write_back(tape, amap_name, entry, i, old, new, run_dir):
     return out
 
 
+def last_dialog_check(r):
+    """The unplanned-dialog check after the last step. When that step closed the tape's own window (a „Run” that
+    starts an installer, measured), there is no window left to read: the check is skipped, not the run crashed."""
+    try:
+        r.check_dialogs()
+    except RuntimeError as e:
+        if "No window with window_id" not in str(e):
+            raise
+        logger.info("after the last step: %r closed with it; no dialog check", r.title)
+
+
 def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     run_dir = new_run_dir(tape["name"], a.mode)
     stamp = os.path.basename(run_dir).split("-")[0] + "-" + os.path.basename(run_dir).split("-")[1]
@@ -3219,7 +3233,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             time.sleep(DIALOG_SETTLE)            # replay-guards D4: a dialog the last step opens takes a moment
             r.dirty = True
             try:
-                r.check_dialogs()
+                last_dialog_check(r)
             except AssertionError as e:
                 failed = f"after the last step: {e}"
                 logger.error("tape failed %s", failed)
@@ -5002,6 +5016,20 @@ def selftest():
            {"role": "ListItem", "element_index": 34, "frame": {"x": 6, "y": 370, "w": 1886, "h": 24}}]
     assert on_screen_table([ta, tb], els, {"x": -10, "y": -10, "width": 1940, "height": 1040}) is tb
     assert on_screen_table([tb], [], {}) is tb and on_screen_table([], [], {}) is None
+    # the check after the last step survives a last click that closed the tape's window
+    class LastGone(Runner):
+        def __init__(self, err):
+            Runner.__init__(self, None, "test")
+            self.title, self.err = "Fájl megnyitása", err
+        def check_dialogs(self):
+            raise RuntimeError(self.err)
+    last_dialog_check(LastGone("get_window_state failed: No window with window_id 525406 exists"))
+    try:
+        last_dialog_check(LastGone("the driver is gone"))
+        raise AssertionError("another failure must still fail")
+    except RuntimeError:
+        pass
+    assert ("ShellExperienceHost.exe", None) in SHELL_WINDOWS
     # settle-wait after a click that closed its own window returns instead of failing the step
     class Gone(Runner):
         def __init__(self, err):
