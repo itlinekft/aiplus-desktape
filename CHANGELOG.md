@@ -11,6 +11,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   and `record` stops and exits 1; both keep what was recorded, and the summary says when it last grew. The tape key
   `on_dead: alert` (or `record --on-dead alert`) only raises the alert. Measured: the driver's recorder can stop
   silently under load.
+- The driver's "Video capture failed" warning (it still says "Recording started") now fails the video run or
+  `record` at once, with the driver's words: on Windows the driver records through ffmpeg.
 
 ### Changed
 - The AI+ marketplace lists the plugin as `aiplus-desktape` (aiplus-plugins d5e126c), following the rename to

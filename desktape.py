@@ -3202,7 +3202,11 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         for i, (s, entry) in enumerate(plan):
             if a.mode == "video" and r.t_rec is None and r.win is not None:
                 try:
-                    cua.call("start_recording", {"output_dir": rec_dir, "record_video": True})
+                    _, said = cua.call("start_recording", {"output_dir": rec_dir, "record_video": True})
+                    if capture_failed(said):
+                        r.t_rec = time.time()    # stopped in the finally below
+                        raise RuntimeError(f"the driver did not record video: {capture_failed(said)} "
+                                           "(on Windows the driver records through ffmpeg: `desktape doctor --video`)")
                 except Exception as e:           # no recording, no video run: but a summary and last.json
                     failed = f"step {i}: the screen recording did not start: {e}"
                     logger.error("tape failed at %s", failed)
@@ -3481,10 +3485,20 @@ RECORD_MAX = 3600.0
 LIVENESS_EVERY = 60.0      # record-liveness: seconds between two size checks of a running recording
 
 
+def capture_failed(said):
+    """record-liveness: the driver answers start_recording with "✅ Recording started" even when its video capture did not
+    start (measured on Windows without ffmpeg: "⚠️ Video capture failed (per-turn JSON+screenshot still running)").
+    Returns the driver's words from that warning on, or None."""
+    i = (said or "").find("Video capture failed")
+    return " ".join(said[i:].split())[:300] if i >= 0 else None
+
+
 class Liveness:
     """record-liveness: is the recording on the target still growing? `check()` reads its size at most once per
-    `every` seconds; a size that did not grow since the last read (or no file at all) marks it dead, for good. A probe
-    that fails (SSH) is only a warning: the recorder is not judged by the network."""
+    `every` seconds; once the file has been seen, a size that did not grow since the last read (or the file gone) marks
+    it dead, for good. A file not seen yet is only a warning: a recorder may write it late, and one that did not start
+    says so in its own answer (`capture_failed`). A probe that fails (SSH) is a warning too: the recorder is not judged
+    by the network."""
 
     def __init__(self, target, path, every=None, clock=time.time):
         self.t, self.path, self.clock = target, path, clock
@@ -3506,6 +3520,9 @@ class Liveness:
         if size is not None and (self.size is None or size > self.size):
             logger.debug("liveness: %s grew %s -> %s bytes", self.path, self.size, size)
             self.size, self.last_grew = size, now
+            return None
+        if size is None and self.size is None:
+            logger.warning("liveness: %s is not there yet; judged once it has been seen", self.path)
             return None
         self.dead = (f"recording stopped growing at {time.strftime('%H:%M:%S', time.localtime(self.last_grew))}"
                      + (f" ({size} bytes)" if size is not None else f" (no file at {self.path})"))
@@ -3545,8 +3562,13 @@ def cmd_record(a):
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     t0 = time.time()
     try:
-        cua.call("start_recording", {"output_dir": rec_dir, "record_video": True, "include_accessibility_tree": False})
+        _, said = cua.call("start_recording", {"output_dir": rec_dir, "record_video": True,
+                                               "include_accessibility_tree": False})
         t1 = time.time()
+        if capture_failed(said):
+            cua.call("stop_recording", {})
+            raise RuntimeError(f"record: the driver did not record video: {capture_failed(said)} "
+                               "(on Windows the driver records through ffmpeg: `desktape doctor --video`)")
         lv = Liveness(t, rec_dir + ("/" if t.mac else "\\") + "recording.mp4")
         print(f"recording {a.host} since {utc_iso(t0)}; stop with Ctrl+C" +
               (f", or create {a.until_file}" if a.until_file else "") + f" (at most {limit:.0f} s)", flush=True)
@@ -5145,9 +5167,16 @@ def selftest():
     clock[0] = 1300
     assert lv.check() == lv.dead                    # dead stays dead
     clock[0] = 0.0
-    lv = Liveness(SizeTarget([None]), "/Users/x/rec/recording.mp4", every=60, clock=lambda: clock[0])
+    lv = Liveness(SizeTarget([None, 50, None]), "/Users/x/rec/recording.mp4", every=60, clock=lambda: clock[0])
     clock[0] = 60
-    assert "no file at /Users/x/rec/recording.mp4" in lv.check()
+    assert lv.check() is None                       # not there yet: a warning, not a verdict
+    clock[0] = 120
+    assert lv.check() is None                       # seen
+    clock[0] = 180
+    assert "no file at /Users/x/rec/recording.mp4" in lv.check()       # seen, then gone: dead
+    said = "✅ Recording started -> C:\\r\n\n⚠️ Video capture failed (per-turn JSON+screenshot still running):\nffmpeg not found"
+    assert capture_failed(said).startswith("Video capture failed") and "ffmpeg not found" in capture_failed(said)
+    assert capture_failed("✅ Recording started -> /Users/me/r") is None and capture_failed(None) is None
     # the size on each system, from what its shell prints
     for mac, out, want in ((False, "12345\r\n", 12345), (False, "\r\n", None), (True, "678\n", 678), (True, "", None)):
         tt = Target.__new__(Target)

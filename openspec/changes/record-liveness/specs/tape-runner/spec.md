@@ -16,6 +16,18 @@ error and raises the alert.
 - **THEN** the run fails with "recording stopped growing at <time>", no further step runs, and the summary names
   the time it last grew
 
+#### Scenario: the driver reports that its video capture did not start
+
+- **WHEN** the driver answers `start_recording` with its "Video capture failed" warning (measured on Windows without
+  ffmpeg, where it still says "Recording started")
+- **THEN** a video run fails at once with the driver's words, and `record` stops with them; no step runs on an
+  unrecorded take
+
+#### Scenario: a file not written yet
+
+- **WHEN** the recording file has not appeared by a check
+- **THEN** that is logged as a warning, and the file is judged from the first check that sees it
+
 #### Scenario: a size on either system
 
 - **WHEN** the target is Windows or macOS

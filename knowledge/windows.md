@@ -69,6 +69,16 @@ open.
 - On an unactivated Windows, the "Aktiválja a Windowst" (Activate Windows) notice can surface as an unplanned window
   called "Window Dialog" after a key press. Name it in the tape's `dialogs:`. Measured on the same VM.
 
+## Screen recording
+
+- **The driver records video through ffmpeg.** Without ffmpeg on the machine, `start_recording` still answers
+  "✅ Recording started", with "⚠️ Video capture failed (per-turn JSON+screenshot still running)" below it, and
+  the folder only ever holds `session.json` and an empty `cursor.jsonl`. desktape reads that warning and fails the run
+  or `record` at once; `desktape doctor --video` names the install (`winget install --id Gyan.FFmpeg -e`). Measured on
+  a Hungarian build 26300 VM, 2026-10-25.
+- **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
+  minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
+
 ## Still to write
 
 The session that drives the Windows test box fills this page from its measurements: permission prompts,
