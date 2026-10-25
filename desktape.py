@@ -2507,7 +2507,15 @@ class Runner:
         limit = min(float(patience or self.patience), SETTLE_MAX)
         end, last = time.time() + limit, None
         while time.time() < end:
-            self.snapshot()
+            try:
+                self.snapshot()
+            except RuntimeError as e:
+                # the action closed its own window (a form's „Save and close”, its `closes:` already checked):
+                # nothing is left to settle; the next step picks its window (measured, take B rehearsal 1)
+                if "No window with window_id" not in str(e):
+                    raise
+                logger.info("settle: %r closed with the action; nothing to settle", self.title)
+                return
             sig = (getattr(self, "busy", False), tuple((e.get("role"), e.get("label")) for e in self.elements))
             if sig == last and not sig[0]:
                 return
@@ -4994,6 +5002,19 @@ def selftest():
            {"role": "ListItem", "element_index": 34, "frame": {"x": 6, "y": 370, "w": 1886, "h": 24}}]
     assert on_screen_table([ta, tb], els, {"x": -10, "y": -10, "width": 1940, "height": 1040}) is tb
     assert on_screen_table([tb], [], {}) is tb and on_screen_table([], [], {}) is None
+    # settle-wait after a click that closed its own window returns instead of failing the step
+    class Gone(Runner):
+        def __init__(self, err):
+            Runner.__init__(self, None, "test")
+            self.win, self.title, self.patience, self.err = {"pid": 1, "window_id": 5}, "Ügyfél - X", 30, err
+        def snapshot(self):
+            raise RuntimeError(self.err)
+    Gone("get_window_state failed: No window with window_id 5 exists").settle()
+    try:
+        Gone("get_window_state failed: the driver is gone").settle()
+        raise AssertionError("another read failure must still fail the step")
+    except RuntimeError:
+        pass
     # a scroll must aim at the grid being read: hidden rows off screen and a second grid below do not count
     fr = lambda x, y, w=1886: {"role": "ListItem", "frame": {"x": x, "y": y, "w": w, "h": 24}}
     g = [fr(6, 370 + 24 * i) for i in range(10)] + [fr(11, 711, 1898), fr(11, 735, 1898)] + \
