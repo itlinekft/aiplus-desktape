@@ -8,7 +8,7 @@
     {
       "name": "desktape",
       "source": "./",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "description": "Drive a Windows desktop program that has no API through recorded tapes, checked step by step.",
       "category": "productivity"
     }
