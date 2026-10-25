@@ -378,6 +378,7 @@ class Cua:
             text = mac_tree(sc.get("tree_markdown") or text)     # macos-target D3: the Windows vocabulary
             for e in sc.get("elements") or []:
                 mac_element(e)
+            text = mac_values(text, sc.get("elements") or [])
         return sc, text
 
     def reconnect(self):
@@ -955,6 +956,19 @@ def mac_line(line):
         bracket = re.sub(r":?\s*$", "", bracket) if not acts else bracket
     inner = " ".join(x for x in ((f'value="{value}"' if value is not None else ""), bracket) if x)
     return f'{head}{idx or ""}{role}' + (f' "{label}"' if label else "") + (f" [{inner}]" if inner else "")
+
+
+def mac_values(text, elements):
+    """A value only the structured elements carry (a checkbox's 0/1, measured on Claude's settings), written into
+    its line, so `look` and `expect: {value: …}` see it."""
+    vals = {e["element_index"]: e["value"] for e in elements if e.get("value") not in (None, "") and "element_index" in e}
+    def add(m):
+        line, idx = m.group(0), int(m.group(2))
+        if idx not in vals or "value=" in line:
+            return line
+        v = str(vals[idx]).replace('"', '\\"')
+        return re.sub(r'( \[(?=[a-z_]+=))|$', lambda b: f' [value="{v}" ' if b.group(1) else f' [value="{v}"]', line, count=1)
+    return re.sub(r'^(\s*- \[(\d+)\] .*)$', add, text, flags=re.M)
 
 
 def mac_tree(text):
@@ -3330,6 +3344,9 @@ def selftest_macos():
     assert hidden == 2 and not any("Recent file.md" in l for l in kept), (hidden, kept)   # the menu bar is hidden
     assert ignores(None, "user@box") == []                                                # … only on macOS
     assert mac_element({"role": "AXStaticText", "value": "x"}) == {"role": "Text", "value": "x", "label": "x"}
+    vt = mac_values('- [41] CheckBox "Search and reference chats" [actions=[press]]\n- [42] Button "Save"',
+                    [{"element_index": 41, "value": "0"}, {"element_index": 42}])
+    assert vt.splitlines() == ['- [41] CheckBox "Search and reference chats" [value="0" actions=[press]]', '- [42] Button "Save"'], vt
     # D1, D2: a macOS target's driver connection; a declared OS; a bad one refused
     argv, env = Target("me@mac").mcp()
     assert argv[-1].endswith("~/.local/bin/cua-driver mcp") and "CUA_DRIVER_RS_TELEMETRY_ENABLED=false" in argv[-1], argv

@@ -52,6 +52,9 @@ twin (`PopUpButton`, `Row`, `Cell`, `Heading`) stay as macOS names them, and the
 
 On macOS `get_window_state` also returns a screenshot unless told not to; every tree read asks for none.
 
+A value that only the structured elements carry, such as a checkbox's `0`/`1` (measured on Claude Desktop's
+settings), is written into its line as `[value="…"]`, so `look` and `expect: {value: …}` see it.
+
 The application **menu bar** is in every macOS tree (161 menu items measured, including Apple menu ›
 Recent Items with private file names). It is hidden from `look`, `--new` and the repair bundle by a
 built-in ignore region on macOS, and `--all` shows it. A step can still click a menu item: the snapshot keeps
