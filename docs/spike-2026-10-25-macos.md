@@ -55,6 +55,7 @@ foreground delivery, captions with `ffmpeg-full`, and the setup guide `docs/maco
 | `tapes/claude-desktop-tour-mac.yaml`, remote, test mode | 41/41 in 41.5 s, 64 snapshots, 0 model calls |
 | the same tape with `DESKTAPE_HOST=local`, started over SSH | 41/41 in 44.5 s |
 | the same tape, video mode | 41/41 in 91.9 s; native 1920×1080 60 fps recording, captions burned on the Mac with `ffmpeg-full` and SF |
+| the raw recording | H.264 Main, 1920×1080, 60 fps nominal but 29.3 fps on average (frames when the screen changes), 5.8 MB per minute of desktop work; `start_recording` has no frame-rate option in 0.34.1 |
 
 Not measured yet: `open_file` in a real macOS file panel (Claude Desktop's "Upload or add files" is an in-app
 picker that lists the user's files; the map hides it).
