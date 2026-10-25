@@ -577,7 +577,8 @@ def resolve(step, amap):
     kind, arg = next(iter(step.items()))
     if kind == "redact":
         return {kind: boxes(arg, "step redact")}, None
-    if isinstance(arg, str) and arg.startswith("@"):
+    step, arg = scalars(kind, step, arg)
+    if kind in MAP_KINDS and isinstance(arg, str) and arg.startswith("@"):   # `type: "@gmail.com"` is text
         name = arg[1:]
         if amap is None:
             raise KeyError(f"step {kind}: {arg} needs a map, and the tape names none")
@@ -587,6 +588,24 @@ def resolve(step, amap):
             raise KeyError(f"step {kind}: {arg} is not in map {amap.get('app')!r}")
         return {kind: dict(amap["elements"][name])}, name
     return step, None
+
+
+MAP_KINDS = ("click", "expect", "absent", "focus", "set")
+
+
+def scalars(kind, step, arg):
+    """A YAML number where a text belongs (`click: 7`, `expect: {text: 2026}`) becomes that text. Typed text
+    must be quoted: YAML reads `type: 0123` as 83, and the runner cannot know what was meant."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    text = arg.get("text") if kind == "type" and isinstance(arg, dict) else arg if kind == "type" else None
+    if num(text):
+        raise ValueError(f"type: {text!r} is a number in YAML; quote it (\"{text}\") so it is typed as written")
+    if kind in ("click", "expect", "absent", "caption", "key") and num(arg):
+        return {kind: str(arg)}, str(arg)
+    if kind in ("click", "expect", "absent") and isinstance(arg, dict) and any(num(arg.get(k)) for k in ("label", "text")):
+        arg = {**arg, **{k: str(arg[k]) for k in ("label", "text") if num(arg.get(k))}}
+        return {kind: arg}, arg
+    return step, arg
 
 
 def resolve_all(steps, amap):
@@ -865,7 +884,11 @@ def read_tables(tree_text):
 def read_rows(path):
     """(headers, rows as dicts) of a .csv (`,` or `;`) or the first sheet of an .xlsx, standard library only."""
     if path.lower().endswith(".csv"):
-        text = open(path, encoding="utf-8-sig").read()
+        try:
+            text = open(path, encoding="utf-8-sig").read()
+        except UnicodeDecodeError:           # Excel's "CSV" on a Hungarian Windows is cp1250
+            logger.warning("%s is not UTF-8; reading it as cp1250", path)
+            text = open(path, encoding="cp1250").read()
         rows = list(csv.reader(text.splitlines(), delimiter=";" if text.split("\n", 1)[0].count(";") > text.split("\n", 1)[0].count(",") else ","))
     else:
         import zipfile, xml.etree.ElementTree as ET
@@ -895,12 +918,24 @@ def read_rows(path):
     return headers, [dict(zip(headers, r)) for r in rows[1:]]
 
 
+NUMBER = re.compile(r"(-?\d[\d\s\u00a0\u202f.,]*)\s*(?:Ft|HUF|EUR|€|\$|%|db|kg|g|l|m)?\.?")
+
+
 def as_number(v):
-    """135, "135 Ft", "1 190 Ft", "106,38 Ft" → a float; None when it is not a number."""
-    t = re.sub(r"[^\d,.\-]", "", str(v))
-    if not re.search(r"\d", t):
+    """135, "135 Ft", "1 190 Ft", "106,38 Ft", "1.190,50" → a float; None when the cell is not one number
+    with at most a unit. A name or a code ("Alma 1kg", "A-1", "0012") stays text, so it is compared as text."""
+    m = NUMBER.fullmatch(str(v).strip())
+    if not m:
         return None
-    t = t.replace(",", ".") if "," in t and "." not in t else t.replace(",", "")
+    t = re.sub(r"[\s\u00a0\u202f]", "", m.group(1))
+    if re.match(r"-?0\d", t):                    # a leading zero: a code, not a number
+        return None
+    if "," in t and "." in t:                    # the later one is the decimal mark
+        t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")
+    elif "," in t:
+        t = t.replace(",", ".") if t.count(",") == 1 else t.replace(",", "")
+    elif t.count(".") > 1:
+        t = t.replace(".", "")
     try:
         return float(t)
     except ValueError:
@@ -1095,17 +1130,17 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
     t, remote = Target(host), "desktape"
     t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & del /q %USERPROFILE%\\{remote}\\os-input-out.json 2>nul")
     t.put(os.path.join(HERE, "windows", "os-input.ps1"), f"{remote}/os-input.ps1")
-    with tempfile.TemporaryDirectory() as d:
-        req = os.path.join(d, "os-input.json")
-        json.dump({"title": title, "keys": keys, "at": at, "file": file, "hwnd": hwnd, "xy": xy, "clip": clip},
-                  open(req, "w", encoding="utf-8"), ensure_ascii=False)
-        t.put(req, f"{remote}/os-input.json")
     tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\os-input.ps1"
     t0 = time.time()
-    t.sh(f'schtasks /create /tn desktape-os-input /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-os-input >nul',
-         check=True)
+    out = None
     try:
-        out = None
+        with tempfile.TemporaryDirectory() as d:
+            req = os.path.join(d, "os-input.json")
+            json.dump({"title": title, "keys": keys, "at": at, "file": file, "hwnd": hwnd, "xy": xy, "clip": clip},
+                      open(req, "w", encoding="utf-8"), ensure_ascii=False)
+            t.put(req, f"{remote}/os-input.json")
+        t.sh(f'schtasks /create /tn desktape-os-input /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-os-input >nul',
+             check=True)
         for _ in range(40):
             raw = t.sh(f"type %USERPROFILE%\\{remote}\\os-input-out.json 2>nul").stdout.lstrip("\ufeff").strip()
             if raw:
@@ -1278,6 +1313,8 @@ class Runner:
         key = arg["key"]
         columns = arg["columns"] if isinstance(arg["columns"], dict) else {c: c for c in arg["columns"]}
         headers, want = read_rows(arg["file"])
+        if not want:
+            raise OutcomeFailed(f"check_table: {arg['file']!r} has no data rows, so there is nothing to check")
         missing = [c for c in [arg.get("file_key") or key, *columns.values()] if c not in headers]
         if missing:
             raise ValueError(f"check_table: {arg['file']} has no column {missing[0]!r}; it has {headers}")
@@ -1631,7 +1668,10 @@ class Runner:
             alive = self.win is not None and any(w.get("window_id") == self.win["window_id"] for w in wins)
             needs_tree = before["lines"] is not None or any(k in exp for k in ("shows", "value", "filled", "enabled"))
             tree = ""
-            if alive and needs_tree:
+            if needs_tree and exp.get("in"):     # a dialog of the same process: the tape's window stays alive
+                w = next((w for w in wins if w.get("title") == exp["in"]), None)
+                tree = self.read_window(w)[0] if w else ""
+            elif alive and needs_tree:
                 try:
                     self.snapshot()
                     tree = self.tree
@@ -1640,9 +1680,6 @@ class Runner:
                         raise
                     alive = False            # it was closing while the window list still showed it (measured)
                     logger.info("%s: the window %r closed", what, self.title)
-            elif needs_tree and exp.get("in"):
-                w = next((w for w in wins if w.get("title") == exp["in"]), None)
-                tree = self.read_window(w)[0] if w else ""
             if before["lines"] is not None and alive and self.failure_lines:
                 for line in shape(tree).splitlines():
                     if line in before["lines"]:
@@ -1672,7 +1709,7 @@ class Runner:
             miss.append(f"the window {exp['opens']!r} did not open")
         if "closes" in exp and exp["closes"] in titles:
             miss.append(f"the window {exp['closes']!r} is still open")
-        if "shows" in exp and exp["shows"] not in tree and not any(exp["shows"] in t for t, _ in read.values()):
+        if "shows" in exp and str(exp["shows"]) not in tree and not any(str(exp["shows"]) in t for t, _ in read.values()):
             miss.append(f"{exp['shows']!r} did not appear in the program's windows")
         if "file" in exp:            # file-outcome-and-typing: checked last, it costs a round trip
             now = remote_file_state(self.cua.host, exp["file"]) if not miss else None
@@ -1699,7 +1736,7 @@ class Runner:
                 continue
             m = VALUE.search(lines[at])
             value = m.group(1) if m else ""
-            if key == "value" and sel.get("contains", "") not in value:
+            if key == "value" and str(sel.get("contains", "")) not in value:
                 miss.append(f"{name!r} shows {value!r}, not {sel.get('contains')!r}")
             if key == "enabled" and "actions=[" not in lines[at]:      # a disabled control has no actions
                 miss.append(f"{name!r} is still disabled")
@@ -1901,9 +1938,20 @@ class Runner:
             raise ValueError(f"unknown step {kind!r}")
 
 
+def hide_secret(step):
+    """A step with `secret: true`, its typed or set value redacted: a `${var}` is substituted by then."""
+    if not isinstance(step, dict) or len(step) != 1:
+        return step
+    kind, arg = next(iter(step.items()))
+    if isinstance(arg, dict) and arg.get("secret"):
+        return {kind: {k: ("<redacted>" if k in ("text", "value") else v) for k, v in arg.items()}}
+    return step
+
+
 def repair_bundle(path, tape_name, index, written, resolved, map_entry, error, tree_text, ignore=None):
     """What the agent needs to fix a failed step (design D1), and nothing it does not: the elements,
     any open dialog and the texts, without the map's ignore regions."""
+    written, resolved = hide_secret(written), hide_secret(resolved)
     kept, hidden = apply_ignore(tree_text.splitlines(), ignore)
     lines = compact(kept, texts=True)
     note = f", {hidden} hidden by the map's ignore regions" if hidden else ""
@@ -2018,7 +2066,12 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     try:
         for i, (s, entry) in enumerate(plan):
             if a.mode == "video" and r.t_rec is None and r.win is not None:
-                cua.call("start_recording", {"output_dir": rec_dir, "record_video": True})
+                try:
+                    cua.call("start_recording", {"output_dir": rec_dir, "record_video": True})
+                except Exception as e:           # no recording, no video run: but a summary and last.json
+                    failed = f"step {i}: the screen recording did not start: {e}"
+                    logger.error("tape failed at %s", failed)
+                    break
                 r.t_rec = time.time()
             desc = f"{tape['name']} step {i}: " + json.dumps(tape["steps"][i], ensure_ascii=False)[:100]
             if lk:
@@ -2062,7 +2115,11 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         total = time.time() - (r.t_rec or t0)
         if r.t_rec is not None:
             time.sleep(1.0)
-            cua.call("stop_recording", {})
+            try:
+                cua.call("stop_recording", {})
+            except Exception as e:
+                logger.warning("stop_recording failed (%s); the recording may be incomplete", e)
+                failed = failed or f"stopping the screen recording: {e}"
         cua.close()
     if lk and failed is None:
         passed(lk, f"{tape['name']}: all {len(plan)} steps")
@@ -3007,6 +3064,27 @@ def selftest():
             pass
     check_selectors([({"click": {"id": "textEditCode"}}, None), ({"set": {"field": "Mennyiség", "value": 3}}, None)])
     check_tape_deny([({"click": {"id": "textEditCode"}}, None)], deny_entries({"deny": [{"label": "Delete"}]}))
+    # review fixes 2026-10-25: a number only when the whole cell is one; a code or a name stays text
+    assert as_number("1 190 Ft") == 1190 and as_number("106,38 Ft") == 106.38 and as_number("1.190,50") == 1190.5
+    assert as_number("1,190.50") == 1190.5 and as_number("-12 Ft") == -12 and as_number("5 db") == 5
+    assert as_number("Alma 1kg") is None and as_number("A-1") is None and as_number("0012") is None
+    assert compare_table({"rows": [{"Kód": "X", "Név": "Körte 1kg"}]}, [{"Kód": "X", "Név": "Alma 1kg"}], "Kód",
+                         {"Név": "Név"}) == ["X Név: file Alma 1kg, grid Körte 1kg"]
+    # `@` is a map reference only where a selector goes; YAML numbers become text, a typed one must be quoted
+    assert resolve({"type": "@gmail.com"}, None) == ({"type": "@gmail.com"}, None)
+    assert resolve({"click": 7}, None) == ({"click": "7"}, None)
+    assert resolve({"expect": {"text": 2026}}, None)[0] == {"expect": {"text": "2026"}}
+    for bad in ({"type": 1234}, {"type": {"text": 83}}):
+        try:
+            resolve(bad, None)
+            raise AssertionError(f"accepted {bad}")
+        except ValueError:
+            pass
+    # a secret's substituted value never reaches repair.md
+    with tempfile.TemporaryDirectory() as d:
+        body = open(repair_bundle(os.path.join(d, "r.md"), "t", 0, {"type": {"text": "${pw}", "secret": True}},
+                                  {"type": {"text": "hunter2", "secret": True}}, None, "x", ""), encoding="utf-8").read()
+        assert "hunter2" not in body and "<redacted>" in body, body
     assert RUNS == os.path.expandvars(os.path.expanduser(os.environ.get("DESKTAPE_RUNS") or os.path.join(HERE, "runs")))
     # claude-plugin: doctor names what is missing with the command for this OS, and installs nothing
     rows = doctor_report(local=True, video=True, which=lambda x: None, exists=lambda p: False, platform="win32")
