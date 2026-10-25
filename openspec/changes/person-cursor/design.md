@@ -13,7 +13,7 @@ hides the cursor again.
 ## D2. The glide is a helper on the target, not the driver's pointer call
 
 The driver's `move_cursor` with `scope: desktop` jumps the real pointer once per call, so 0.5 s gives about
-six jumps locally and two over SSH. `macos/desktape-pointer.swift` posts mouse-moved events at 60 a second
+six jumps locally and two over SSH. `macos/desktape-pointer.swift` (since mac-file-dialog: `desktape-input.swift glide`) posts mouse-moved events at 60 a second
 with an ease-in-out curve, and is compiled on the target once per source version, like the OCR helper. The
 target point is the element's frame centre, which the driver gives in screen points. The click itself stays
 the driver's accessibility action. A glide that fails is logged as a warning and the click goes ahead: the

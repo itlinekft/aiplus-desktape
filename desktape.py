@@ -1248,7 +1248,7 @@ def compact(tree_text, texts=False):
 
 
 MAC_OCR_SRC = os.path.join(HERE, "macos", "desktape-ocr.swift")
-MAC_POINTER_SRC = os.path.join(HERE, "macos", "desktape-pointer.swift")
+MAC_INPUT_SRC = os.path.join(HERE, "macos", "desktape-input.swift")
 
 
 def mac_helper(t, src):
@@ -1267,14 +1267,45 @@ def mac_helper(t, src):
     return exe
 
 
+def shlex_quote(s):
+    import shlex
+    return shlex.quote(s)
+
+
+def mac_input(host, *args, audit=None, secret=False, stdin=None):
+    """A person's pointer and keyboard on macOS (mac-file-dialog D1): events posted where a real keyboard's go, to
+    the window in front, which is what reaches a file dialog. The caller has checked which window is in front."""
+    import shlex
+    t, t0 = Target(host), time.time()
+    exe = mac_helper(t, MAC_INPUT_SRC)
+    r = t.sh(f'"$HOME/{exe}" ' + " ".join(shlex.quote(str(a)) for a in args), input=stdin)
+    if audit:
+        shown = list(map(str, args)) + ([f"<stdin: {len(stdin)} characters>" if secret else f"<stdin: {stdin}>"] if stdin else [])
+        audit.write(json.dumps({"ts": round(t0, 3), "tool": "mac_input", "args": {"argv": ["<redacted>"] if secret else shown},
+                                "ok": r.returncode == 0, "ms": int((time.time() - t0) * 1000),
+                                "summary": (r.stdout or r.stderr).strip()[:160]}, ensure_ascii=False) + "\n")
+        audit.flush()
+    if r.returncode:
+        raise RuntimeError(f"mac input {args[0]}: {r.stderr.strip()[-300:] or r.returncode}")
+    return r.stdout.strip()
+
+
+OVERLAY_APPS = {"Cua Driver", "CuaDriver"}    # the agent cursor is an ordinary-layer window that never takes keys
+
+
+def mac_front(host, audit=None):
+    """The window a keyboard's events go to (mac-file-dialog D1): the first ordinary window, front to back, that is
+    not an overlay, from the system's own window list. None when there is none."""
+    for line in mac_input(host, "front", audit=audit).splitlines():
+        w = json.loads(line)
+        if w.get("app") not in OVERLAY_APPS and float(w.get("alpha", 1)) > 0:
+            return w
+    return None
+
+
 def pointer_glide(host, x, y, ms):
     """person-cursor D2: the real pointer to (x, y) screen points in `ms`, smoothly."""
-    t = Target(host)
-    exe = mac_helper(t, MAC_POINTER_SRC)
-    r = t.sh(f'"$HOME/{exe}" {float(x):.0f} {float(y):.0f} {int(ms)}')
-    if r.returncode:
-        raise RuntimeError(r.stderr.strip()[-300:] or f"the pointer helper exited {r.returncode}")
-    return r.stdout.strip()
+    return mac_input(host, "glide", f"{float(x):.0f}", f"{float(y):.0f}", int(ms))
 
 
 def mac_ocr(cua, win):
@@ -1827,13 +1858,25 @@ class Runner:
             if not w:
                 raise AssertionError(f"into {title!r}: no window has that title; nothing was sent")
             ids = {"pid": w["pid"], "window_id": w["window_id"]}
-            r, _ = self.cua.call("bring_to_front", ids)
-            if not front_ok(r, w["window_id"]):
-                fid = (r.get("observed") or {}).get("frontmost_ordinary_window_id")
-                top = next((x for x in sc.get("windows", []) if x.get("window_id") == fid), {})
-                raise AssertionError(f"into {title!r}: the window in front is \"{top.get('title')}\" "
-                                     f"({top.get('app_name')}); nothing was sent")
-            return ids
+            end, front = time.time() + 3.0, None
+            while True:
+                try:
+                    r, _ = self.cua.call("bring_to_front", ids)
+                    if front_ok(r, w["window_id"]):
+                        return ids
+                except RuntimeError as e:     # e.g. "not verified": the agent cursor's own window sits on top
+                    logger.debug("into %r: bring_to_front: %s", title, str(e)[:200])
+                # mac-file-dialog D1: the system's own window list decides, the agent cursor's window skipped
+                front = mac_front(self.cua.host, self.cua.audit)
+                if front and front.get("window_id") == w["window_id"]:
+                    logger.info("into %r: in front by the system's window list (the driver could not verify it)", title)
+                    return ids
+                if time.time() > end:
+                    break
+                time.sleep(0.4)
+            top = next((x for x in sc.get("windows", []) if x.get("window_id") == (front or {}).get("window_id")), front or {})
+            raise AssertionError(f"into {title!r}: the window in front is \"{top.get('title', '?')}\" "
+                                 f"({top.get('app_name') or top.get('app')}); nothing was sent")
         wins = [w for w in sc.get("windows", []) if w.get("is_on_screen") and not w.get("minimized")
                 and (w.get("app_name"), None) not in SHELL_WINDOWS and (w.get("app_name"), w.get("title")) not in SHELL_WINDOWS]
         top = max(wins, key=lambda w: w.get("z_index") or -1, default=None)
@@ -2161,26 +2204,87 @@ class Runner:
                             + f" (nothing was answered: answer it, keep {app!r}, or minimise it)")
 
     def mac_open_file(self, arg):
-        """A path into a macOS file panel (macos-target D5): the panel raised and verified in front, Cmd+Shift+G
-        ("Go to Folder"), the path typed, Return to go there, Return to open; done when the panel is gone."""
+        """A path into a macOS file dialog (mac-file-dialog): the dialog belongs to a system service, so the keys
+        are a keyboard's, sent only while the dialog, or a window it opened (the Go-to field is one), is in front
+        (D1). Cmd+Shift+G, the path, Return, Return; OCR reads them before each Return, and anything wrong after
+        the first key presses Escape, so nothing is chosen that was not read (D2)."""
         dialog = arg.get("dialog", "Open")
         ids = self.check_front(dialog)
-        path = mac_path(Target(self.cua.host), arg["path"])
-        self.cua.call("hotkey", {**ids, "keys": ["cmd", "shift", "g"], "delivery_mode": "foreground"})
-        time.sleep(0.6)
-        self.cua.call("type_text", {**ids, "text": path, "delivery_mode": "foreground"})
-        self.cua.call("press_key", {**ids, "key": "return", "delivery_mode": "foreground"})
-        time.sleep(0.8)
-        self.cua.call("press_key", {**ids, "key": "return", "delivery_mode": "foreground"})
+        pid, did, host, au = ids["pid"], ids["window_id"], self.cua.host, self.cua.audit
+        t = Target(host)
+        path = mac_path(t, arg["path"]).rstrip("/") or "/"
+        kind = t.sh(f"if [ -d {shlex_quote(path)} ]; then echo dir; elif [ -e {shlex_quote(path)} ]; then echo file; fi").stdout.strip()
+        if not kind:                       # before any key: the dialog cannot be shown a place that does not exist
+            mac_input(t.host, "key", "escape", audit=self.cua.audit)    # it was in front: Escape chooses nothing
+            raise OutcomeFailed(f"opening {arg['path']!r}: there is no such file or folder on the target ({path}); "
+                                f"nothing was typed, and Escape closed {dialog!r}")
+        is_dir = kind == "dir"
+        name = path.split("/")[-1]
+        folder = name if is_dir else (path.split("/")[-2] or "/")
+        key = lambda k: mac_input(host, "key", k, audit=au)
+        mine = lambda: [w for w in self.cua.call("list_windows", {})[0].get("windows", [])
+                        if w.get("pid") == pid and w.get("is_on_screen", True)]
+        before = {w["window_id"] for w in mine()}
         self.dirty = True
-        end = time.time() + 5.0
-        while time.time() < end:
-            if not any(w.get("window_id") == ids["window_id"] for w in self.cua.call("list_windows", {})[0].get("windows", [])):
-                logger.info("open_file: %r opened %s", dialog, path)
-                return
-            time.sleep(0.4)
-        raise OutcomeFailed(f"opening {arg['path']!r}: the file panel {dialog!r} is still open after Return; "
-                            "the file was not opened")
+
+        def ours(wid):                     # the dialog, or a window that opened after it
+            return wid == did or wid not in before
+
+        def read():                        # OCR of the dialog and its new windows, per window
+            return {w["window_id"]: (w, mac_ocr(self.cua, w)) for w in mine() if ours(w["window_id"])}
+
+        def text(seen):
+            return [l.split(" ", 1)[-1] for _, lines in seen.values() for l in lines]
+
+        def in_front():
+            f = mac_front(host, au)
+            return bool(f and f.get("pid") == pid and ours(f.get("window_id")))
+
+        def give_up(why, seen):
+            key("escape")                  # closes the Go-to field, or the dialog
+            time.sleep(0.6)
+            if any(w.get("window_id") == did for w in mine()):
+                key("escape")
+            said = " / ".join(text(seen)[:14]) or "(nothing readable)"
+            raise OutcomeFailed(f"opening {arg['path']!r}: {why}; Escape closed {dialog!r} without choosing "
+                                f"anything. It read: {said}")
+
+        seen = {}
+        try:
+            key("cmd+shift+g")
+            time.sleep(0.8)
+            key("cmd+a")
+            mac_input(host, "type", "-", stdin=path, audit=au)
+            time.sleep(0.6)
+            seen = read()
+            if not any("/" + name in l for l in text(seen)):
+                give_up(f"the path did not show in the dialog's Go-to field (looked for '/{name}')", seen)
+            if not in_front():
+                give_up("the dialog is no longer in front", seen)
+            key("return")
+            time.sleep(1.2)
+            seen = read()
+            if did in seen:
+                w, lines = seen[did]
+                top = w.get("bounds", {}).get("y", 0) + 110
+                if not any(folder.lower() in l.split(" ", 1)[-1].lower() and int(l.split(",")[1].split(" ")[0]) < top
+                           for l in lines):
+                    give_up(f"the dialog does not show the folder {folder!r} at its top", seen)
+                if not in_front():
+                    give_up("the dialog is no longer in front", seen)
+                key("return")
+            end = time.time() + 5.0
+            while time.time() < end:
+                if not any(w.get("window_id") == did for w in mine()):
+                    logger.info("open_file: %r chose %s", dialog, path)
+                    return
+                time.sleep(0.4)
+            give_up("the dialog is still open after Return", read())
+        except OutcomeFailed:
+            raise
+        except Exception as e:             # a helper or driver failure half-way: never leave a half-typed dialog
+            logger.warning("open_file: %s; pressing Escape", e)
+            give_up(f"it stopped half-way ({e})", seen)
 
     def set_frame(self, frame):
         """Pin the window's frame (runner-robustness D2); a maximised window is restored first."""
@@ -2497,6 +2601,11 @@ class Runner:
             a = arg if isinstance(arg, dict) else {"text": arg}
             if "env" in a or "file" in a:
                 a = {**a, "text": secret_text(a)}    # read now, on the controller; the step keeps only the name
+            if a.get("into") and self.mac and a.get("os"):   # mac-file-dialog D1: a keyboard's events
+                self.check_front(a["into"])
+                mac_input(self.cua.host, "type", "-", stdin=a["text"], audit=self.cua.audit, secret=a.get("secret", False))
+                self.dirty = True
+                return
             if a.get("into") and self.mac:       # macos-target D5: raised, verified in front, the driver types
                 ids = self.check_front(a["into"])
                 self.cua.call("type_text", {**ids, "text": a["text"], "delivery_mode": "foreground"},
@@ -2538,7 +2647,10 @@ class Runner:
             self.cua.call("hotkey", {**self.win, "keys": list(arg), "delivery_mode": "foreground"})
         elif kind == "key":
             a = arg if isinstance(arg, dict) else {"key": arg}
-            if a.get("into") and self.mac:       # macos-target D5
+            if a.get("into") and self.mac and a.get("os"):   # mac-file-dialog D1
+                self.check_front(a["into"])
+                mac_input(self.cua.host, "key", a["key"], audit=self.cua.audit)
+            elif a.get("into") and self.mac:     # macos-target D5
                 ids = self.check_front(a["into"])
                 self.cua.call("press_key", {**ids, "key": a["key"], "delivery_mode": "foreground"})
             elif a.get("into") and a.get("os"):
@@ -3473,6 +3585,71 @@ def cmd_unlock(a):
 
 # ---- offline selftest --------------------------------------------------------------------------
 
+def selftest_mac_file_dialog():
+    """mac-file-dialog: keys only after the dialog is in front, OCR before each Return, Escape on a failed read."""
+    class DC:
+        host, mac, audit = "me@mac", True, None
+        def __init__(self, ocr_after_type, ocr_after_go, closes=True):
+            self.open, self.stage, self.closes = True, 0, closes
+            self.ocr = {1: ocr_after_type, 2: ocr_after_go}
+        def call(self, tool, args, **kw):
+            if tool == "list_windows":
+                return {"windows": [{"pid": 5, "window_id": 9, "title": "Add folders to this session", "is_on_screen": True,
+                                     "bounds": {"x": 147, "y": 31, "width": 1626, "height": 958}}] if self.open else []}, ""
+            return {}, ""
+    keys, real = [], (globals()["mac_input"], globals()["mac_ocr"], Target.sh, Runner.check_front)
+    real_front = globals()["mac_front"]
+    def fake_input(host, *a, audit=None, secret=False, stdin=None):
+        keys.append(a[1] if a[0] == "key" else f"type:{stdin}")
+        if a[:2] == ("key", "return"):
+            dc.stage += 1
+            if dc.stage == 3 and dc.closes:     # the second Return opens
+                dc.open = False
+        if a[:2] == ("key", "escape"):
+            dc.open = False
+        if a[0] == "type":
+            dc.stage = 1
+        return "ok"
+    try:
+        globals()["mac_input"] = fake_input
+        globals()["mac_ocr"] = lambda cua, w: dc.ocr.get(dc.stage, [])
+        globals()["mac_front"] = lambda host, audit=None: {"window_id": 9, "pid": 5, "app": "Claude"}
+        Target.sh = lambda self, cmd, check=False, input=None: subprocess.CompletedProcess(
+            cmd, 0, "" if "missing" in cmd else "dir\n" if "-d" in cmd else "", "")
+        Runner.check_front = lambda self, title: {"pid": 5, "window_id": 9}
+        TARGET_OS["me@mac"] = "macos"
+        arg = {"path": "/Users/me/Demo", "dialog": "Add folders to this session"}
+        dc = DC(["839,356 /Users/me/Demo", "499,361 > Demo"], ["1001,81 -Demo", "1586,806 Open"])
+        Runner(dc, "test").mac_open_file(arg)
+        assert keys == ["cmd+shift+g", "cmd+a", "type:/Users/me/Demo", "return", "return"], keys
+        keys.clear()                               # a path that does not exist: not a single key
+        try:
+            Runner(DC([], []), "test").mac_open_file({"path": "/Users/me/missing", "dialog": "Add folders to this session"})
+            raise AssertionError("expected OutcomeFailed")
+        except OutcomeFailed as e:
+            assert "no such file or folder" in str(e) and keys == ["escape"], (e, keys)
+        keys.clear()                               # the path never reached the field: no Return at all
+        dc = DC(["499,361 > Demo", "503,48 Add folders to this session"], [])
+        try:
+            Runner(dc, "test").mac_open_file(arg); raise AssertionError("expected OutcomeFailed")
+        except OutcomeFailed as e:
+            assert "did not show" in str(e) and "Escape closed" in str(e), e
+        assert "return" not in keys and keys[-1] == "escape", keys
+        keys.clear()                               # it went somewhere else: no second Return
+        dc = DC(["839,356 /Users/me/Demo"], ["974,80 Claude", "469,145 Projects"])
+        try:
+            Runner(dc, "test").mac_open_file(arg); raise AssertionError("expected OutcomeFailed")
+        except OutcomeFailed as e:
+            assert "does not show the folder 'Demo'" in str(e), e
+        assert keys.count("return") == 1 and keys[-1] == "escape", keys
+        globals()["mac_input"] = lambda host, *a, **kw: ('{"window_id": 2947, "pid": 7, "app": "Cua Driver", "alpha": 1.0}\n'
+                                                       '{"window_id": 3096, "pid": 5, "app": "Claude", "alpha": 1.0}')
+        assert real_front("me@mac")["window_id"] == 3096          # the agent cursor's window is not "in front"
+    finally:
+        globals()["mac_input"], globals()["mac_ocr"], Target.sh, Runner.check_front = real
+        globals()["mac_front"] = real_front
+
+
 def selftest_person_cursor():
     """person-cursor: one session label on every call, the agent cursor hidden, a glide to the centre first."""
     class PC:
@@ -3506,8 +3683,8 @@ def selftest_person_cursor():
         logger.setLevel(level)
     finally:
         globals()["pointer_glide"] = real
-    src = open(MAC_POINTER_SRC, encoding="utf-8").read()
-    assert "mouseMoved" in src and src.isascii()
+    src = open(MAC_INPUT_SRC, encoding="utf-8").read()
+    assert "mouseMoved" in src and "keyboardSetUnicodeString" in src and src.isascii()
 
 
 def selftest_pairing():
@@ -4527,6 +4704,7 @@ def selftest():
     selftest_record()
     selftest_pairing()
     selftest_person_cursor()
+    selftest_mac_file_dialog()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time

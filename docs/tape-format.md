@@ -269,13 +269,19 @@ steps:
 - **`open_file`** fills the standard Windows file dialog's file name box through the dialog's own controls,
   reads it back and presses OK, with no focus and no keyboard, so it works in any language. It fails when
   the dialog stays open, quoting a message box that came up instead. On macOS (`dialog:` defaults to
-  `Open`) it raises the file panel, checks that it is in front, and types the path into Cmd+Shift+G
-  "Go to Folder", then presses Return twice; `~/` and `$HOME` in the path are expanded.
+  `Open`; Claude Desktop's "Add folder" is `Add folders to this session`) the dialog belongs to a system
+  service that the driver's keys never reach, so desktape types like a keyboard (`macos/desktape-input.swift`)
+  while the dialog is in front: Cmd+Shift+G, the path, Return, Return. OCR reads the Go-to field before the
+  first Return and the dialog's location before the second; a path that does not exist, a check that fails
+  or a dialog that stays open presses Escape, which chooses nothing, and fails the step quoting what it read.
+  `~/` and `$HOME` in the path are expanded. A program may ask next what the place may be used for (Claude:
+  "Allow Claude to change files in “Demo”?"); that is the tape's next step, and its text names the place.
 - **`into: <title>`** on `type` and `key` goes to the window in front, after checking that it is the one named.
   With **`os: true`**, it goes through Windows itself (SendKeys, from a one-off task in the desktop session).
   The keys reach whatever control has the keyboard focus in that window. On macOS `into` always raises the
-  named window, takes the driver's verdict that it is in front, and sends through the driver's foreground
-  delivery; `os: true` changes nothing there.
+  named window, takes the driver's verdict that it is in front (or the system's own window list, which skips the
+  driver's agent cursor window), and sends through the driver's foreground delivery. With `os: true` the
+  keys are a keyboard's instead, for a window whose input the driver cannot reach, such as a file dialog.
 - **`env` / `file`** on `type` read the text on the controller when the step runs. `secret: true` is required,
   so a password is never in the tape, the audit, a report or a caption.
 - **`check_table`** reads a grid's headers and rows (each cell by its column's name) and compares the named
@@ -406,6 +412,6 @@ typing_cps: 7
 ```
 
 In a video run the agent cursor is hidden for that run's own session only, and before each click the real
-pointer moves smoothly to the element's centre (a small helper, `macos/desktape-pointer.swift`, compiled on
+pointer moves smoothly to the element's centre (a small helper, `macos/desktape-input.swift`, compiled on
 the Mac once). The click itself is unchanged, and a glide that fails is a warning, not a failure. In test
 mode the setting changes nothing; on a Windows target the run stops before its first step.
