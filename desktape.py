@@ -26,7 +26,7 @@ row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a b
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, base64, contextlib, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, base64, contextlib, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
 
 import yaml
 
@@ -3139,6 +3139,16 @@ def fingerprint(pub_path):
 
 def cmd_pair(a):
     """target-pairing: the controller half. Nothing reaches the target until a person accepts the printed line."""
+    if a.accept:                         # the target half, run ON the target by its user (or Claude there)
+        line = open(a.accept[1:], encoding="utf-8-sig").read() if a.accept.startswith("@") else a.accept
+        path, fp, comment, replaced = accept_pair(line)          # @file: PowerShell 5.1 mangles the line's quotes
+        print(f"accepted: {comment}\nfingerprint: {fp}  (compare it with the one the controller printed)\n"
+              f"written to: {path}" + (" (replacing its earlier line)" if replaced else ""))
+        print("Undo on the controller: desktape.py unpair <name>; or remove the line ending in "
+              f"' {comment}' from that file")
+        return 0
+    if not a.name:
+        raise ValueError("pair: give the target's NAME (or --accept LINE on the target)")
     key = pair_key(a.name)
     if a.check:
         host, _ = choose_target(None, a.name)
@@ -3179,6 +3189,57 @@ def cmd_pair(a):
     print(f"\nOn {a.name}, accept this ONE line (the target's own `pair --accept`, or the user's authorized_keys):\n\n{line}\n")
     print(f"Then: desktape.py pair {a.name} --check      Undo: desktape.py unpair {a.name}")
     return 0
+
+
+PAIR_LINE = re.compile(r'from="([0-9.,]+)",' + re.escape(PAIR_OPTS) +
+                       r' ssh-ed25519 ([A-Za-z0-9+/]+=*) (desktape-pair-[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+)')
+
+
+def check_pair_line(line):
+    """The target half (target-pairing §2): only the exact line `pair` prints is accepted. Returns (addresses,
+    the key's SHA256 fingerprint, the comment); raises ValueError naming what is wrong."""
+    m = PAIR_LINE.fullmatch(line.strip())
+    if not m:
+        raise ValueError("pair --accept: not a desktape pairing line (from=\"<LAN addresses>\"," + PAIR_OPTS +
+                         " ssh-ed25519 <key> desktape-pair-<name>@<controller>); nothing written")
+    addrs, blob, comment = m.group(1).split(","), m.group(2), m.group(3)
+    skip = [ipaddress.ip_network(n) for n in NOT_LAN]
+    for ip in addrs:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            raise ValueError(f"pair --accept: {ip!r} in from= is not an address; nothing written")
+        if not a.is_private or a.is_loopback or a.is_link_local or any(a in n for n in skip):
+            raise ValueError(f"pair --accept: {ip} is not a LAN address; nothing written")
+    raw = base64.b64decode(blob)
+    if raw[4:15] != b"ssh-ed25519":
+        raise ValueError("pair --accept: the key inside is not an ed25519 key; nothing written")
+    fp = "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
+    return addrs, fp, comment
+
+
+def windows_admin():
+    """Is this Windows user in Administrators? Then OpenSSH reads administrators_authorized_keys instead."""
+    out = subprocess.run(["whoami", "/groups", "/fo", "csv"], capture_output=True, text=True, errors="replace").stdout
+    return "S-1-5-32-544" in out
+
+
+def accept_pair(line, path=None):
+    """Append the controller's line to this user's own authorized_keys, replacing an earlier line with the same
+    comment (pairing again after an address change). Returns (path, fingerprint, comment, replaced)."""
+    addrs, fp, comment = check_pair_line(line)
+    if sys.platform == "win32" and windows_admin():
+        raise ValueError("pair --accept: this Windows user is an administrator; its SSH keys live in "
+                         "%ProgramData%\\ssh\\administrators_authorized_keys, which needs an admin. desktape pairs "
+                         "standard users only; nothing written")
+    path = path or os.path.join(os.path.expanduser("~"), ".ssh", "authorized_keys")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    old = open(path, encoding="utf-8", errors="replace").read().splitlines() if os.path.exists(path) else []
+    keep = [l for l in old if (l.split() or [""])[-1] != comment]
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(keep + [line.strip()]) + "\n")
+    logger.info("pair --accept: %s for %s from %s into %s", fp, comment, ",".join(addrs), path)
+    return path, fp, comment, len(old) - len(keep)
 
 
 def remove_line_cmd(os_name, comment):
@@ -4334,6 +4395,26 @@ def selftest():
             check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
             check_selectors(resolve_all(tape["steps"], m))
     assert real["window"] == "Claude"
+    # target-pairing §2: the target accepts only the exact line, LAN addresses only, and replaces its own earlier one
+    raw = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + bytes(range(32))
+    blob = base64.b64encode(raw).decode()
+    good = f'from="10.20.30.10,10.20.30.11",{PAIR_OPTS} ssh-ed25519 {blob} desktape-pair-box1@macmini'
+    addrs, fp, comment = check_pair_line(good)
+    assert addrs == ["10.20.30.10", "10.20.30.11"] and comment == "desktape-pair-box1@macmini" and fp.startswith("SHA256:")
+    for bad in (good.replace("no-pty", "pty"), good.replace("10.20.30.11", "8.8.8.8"),
+                good.replace("10.20.30.11", "100.64.0.1"), good + " extra", good.replace("ssh-ed25519", "ssh-rsa")):
+        try:
+            check_pair_line(bad)
+            raise AssertionError(f"accepted {bad[:60]}")
+        except ValueError:
+            pass
+    with tempfile.TemporaryDirectory() as d:
+        ak = os.path.join(d, "authorized_keys")
+        open(ak, "w").write("ssh-ed25519 AAAA owner@laptop\n")
+        accept_pair(good, ak)
+        _, _, _, replaced = accept_pair(good.replace("10.20.30.11", "10.20.30.12"), ak)
+        lines = open(ak).read().splitlines()
+        assert replaced == 1 and len(lines) == 2 and lines[0] == "ssh-ed25519 AAAA owner@laptop" and "10.20.30.12" in lines[1]
     # field-selectors: frames as measured on a DevExpress line dialog (2026-10-25); the quantity box has only a
     # runtime id, its caption „Me&nnyiség" is a separate layout item whose frame holds it
     fe = lambda i, role, label, x, y, w, h, **k: {"element_index": i, "role": role, "label": label, "enabled": True,
@@ -4482,10 +4563,11 @@ def main():
     p.add_argument("--local", action="store_true", help="a Windows target on this machine")
     p.add_argument("--video", action="store_true", help="recording videos too")
     p = sub.add_parser("pair", help="pair this controller with a target: its own key, one restricted line (target-pairing)")
-    p.add_argument("name")                                    # --host (common) is the target's address here
+    p.add_argument("name", nargs="?")                         # --host (common) is the target's address here
     p.add_argument("--user"); p.add_argument("--os", choices=list(OSES)); p.add_argument("--label")
     p.add_argument("--from", dest="from_addr", metavar="IP,IP", help="the addresses for from= (default: this machine's LAN IPv4)")
     p.add_argument("--check", action="store_true", help="key login, then the driver's window list")
+    p.add_argument("--accept", metavar="LINE", help="on the target: add the controller's printed line (or @file holding it) for this user")
     p = sub.add_parser("unpair", help="take a paired target's line back, then the key and the profile")
     p.add_argument("name"); p.add_argument("--local-only", action="store_true", help="the target's line was removed by hand")
     p = sub.add_parser("record", help="record the target's whole screen on its own, until Ctrl+C, a stop file or --seconds")
