@@ -36,6 +36,18 @@ open.
   Measured: 2026-10-25.
 - **Quoting PowerShell inside `ssh … 'powershell -Command "…"'` breaks** on `''`, `@{n=…}` and `-like '…'`
   (cmd strips the quotes). Copy a `.ps1` file over and run it with `-File` instead.
+- **The ScheduledTasks cmdlets return nothing over SSH.** `New-ScheduledTaskAction` gives `$null` (it is CIM
+  underneath), so `Register-ScheduledTask` fails with "argument is null or empty". Use `schtasks.exe` for a
+  one-off `/it` task that runs in the desktop session. Measured: 2026-10-26.
+- **A second Claude Desktop with its own profile, started from SSH.** The Store entry
+  (`shell:AppsFolder\…!Claude`) passes no arguments. Run the package's own `app\Claude.exe` (path from
+  `(Get-AppxPackage -Name Claude).InstallLocation`) with `--user-data-dir=<folder>`: write that line into a
+  `.cmd` file (`@start "" "<exe>" --user-data-dir=<folder>`) and run the `.cmd` from a one-off `/it` task. It
+  opens a second instance next to the first one, at the sign-in screen. The path names the app version, so
+  regenerate the `.cmd` after a Store update. What the new profile shows depends on the account, not on the
+  profile: signed into the same account it brings back the pinned projects and the project sessions, but not the
+  chat Recents list. Only a different account starts empty. The "Import N Claude Code CLI sessions" offer comes
+  from the Windows user's `.claude` folder, so it shows with any account. Measured: 2026-10-26.
 
 ## Settings a script cannot change
 
