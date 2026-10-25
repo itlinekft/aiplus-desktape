@@ -101,7 +101,10 @@ elements:
   scheduled.search:           { label: "Search scheduled tasks", role: Button }
   scheduled.set_up_manually:  { label: "Set up manually", role: Button }
 
-  # --- Customize: skills, connectors, plugins
+  # --- Customize: skills, connectors, plugins. In Code mode it manages Claude Code's plugins on this computer; in
+  # Chat mode, the account's, which follow the user to other devices (measured 2026-10-25). Pick the mode first.
+  # After "Sync" the new plugin's button reads "Add" or "Add <name>"; "Yours" is a flat list or grouped by
+  # marketplace ("<marketplace>, 1 plugin", opened first), depending on its sort.
   customize.skills_tab:       { label: "Skills", role: RadioButton }
   customize.connectors_tab:   { label: "Connectors", role: RadioButton }
   customize.plugins_tab:      { label: "Plugins", role: RadioButton }
@@ -109,6 +112,12 @@ elements:
   skills.add_skill:           { label: "Add skill", role: PopUpButton }
   connectors.add_connector:   { label: "Add connector", role: PopUpButton }
   plugins.add_plugin:         { label: "Add plugin", role: PopUpButton }
+  plugins.add_marketplace:    { label: "Add marketplace", role: MenuItem }
+  plugins.manage_marketplaces: { label: "Manage marketplaces", role: MenuItem }
+  marketplace.from_repository: { label: "Add from a repository", role: Button, prefix: true }
+  marketplace.url:            { label: "URL", role: ComboBox, prefix: true }     # "URL Select a repository", then "URL <the url>"
+  marketplace.sync:           { label: "Sync", role: Button }
+  marketplace.done:           { label: "Done", role: Button }                     # Manage marketplaces
 
   # --- new session (Code mode)
   code.prompt:                { label: "Prompt", role: Edit }
