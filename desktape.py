@@ -1029,8 +1029,9 @@ def select(elements, tree, label=None, role=None, prefix=False, id=None, field=N
         hits = [e for e in hits if e.get("element_index") in idx]
     if field is not None:
         area = lambda e: (e.get("frame") or {}).get("w", 0) * (e.get("frame") or {}).get("h", 0)
+        same = (lambda t: t.startswith(field)) if prefix and label is None else (lambda t: t == field)
         caps = sorted((e for e in elements if e.get("frame") and e.get("role") not in EDITABLE
-                       and caption_text(e.get("label")) == field), key=area)
+                       and same(caption_text(e.get("label")))), key=area)   # prefix: a tab "List (21)"
         if not caps:
             return []
         f = caps[0]["frame"]
@@ -1728,7 +1729,7 @@ class Runner:
         # a grid that is reloading (right after an import, measured) shows its headers and rows without values
         # for a moment: wait until a row carries its key
         end = time.time() + float(arg.get("timeout", 15))
-        while not ((table := grid()) and any(r.get(key) for r in table["rows"])) and time.time() < end:
+        while not ((table := grid()) and any(r.get(key) for r in table["rows"])) and self.busy_wait(end):
             time.sleep(1.0)
         if not table:
             raise AssertionError(f"check_table: no table in {self.title!r} has the columns {[key, *columns]}")
@@ -4264,6 +4265,12 @@ def selftest():
     els.append(fe(43, "Button", "Megnyitás", 1120, 309, 20, 24, actions=["invoke"]))
     assert [e["element_index"] for e in select(els, tree, field="Termék név", role="Button")] == [43]
     assert [e["element_index"] for e in select(els, tree, field="Termék név")] == [27]     # no role: inputs only
+    tabs = [fe(493, "TabItem", "Termékek listája (21)", 160, 190, 150, 20, actions=["select"]),
+            fe(494, "Button", "Bezárás", 290, 193, 14, 14, actions=["invoke"]),
+            fe(495, "TabItem", "Bejövő szállítólevelek listája (2)", 320, 190, 190, 20, actions=["select"]),
+            fe(496, "Button", "Bezárás", 490, 193, 14, 14, actions=["invoke"])]
+    assert [e["element_index"] for e in select(tabs, "", field="Bejövő szállítólevelek listája", prefix=True,
+                                               role="Button")] == [496]                    # that tab's own close
     assert [e["element_index"] for e in select(els, tree, id="lookUpEditProductNameSearch")] == [27]
     assert select(els, tree, id="lookUpEdit") == []                   # whole ids only
     assert spaces("14\u00a0040 Ft") == "14 040 Ft"
