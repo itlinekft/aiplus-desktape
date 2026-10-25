@@ -66,6 +66,29 @@ the `value`/`filled`/`enabled` outcomes, alone or with `label`, `role` and `nth`
 
 A selector with none of `label`, `id`, `field` or `role` stops the run before the first tool call.
 
+With `field:` and a `role:`, any control of that role inside the caption counts, not only inputs:
+`click: {field: Központi cím, role: Button}` is that field's own drop-down button.
+
+Values a program writes with a no-break space („14 040 Ft") match a `contains:`, `shows:` or `text:` typed
+with a plain space.
+
+### Repeating steps per row: `each`
+
+```yaml
+- each:
+    file: "${sorok}"                 # a .csv (`;` or `,`) or .xlsx, read on the controller
+    steps:
+      - click: {label: "Új (F7)", role: SplitButton, foreground: true, expect: {opens: "Tétel"}}
+      - type: {text: "${row.Termék név}", effect: none}
+      - set: {field: Mennyiség, value: "${row.Mennyiség}"}
+      - click: {id: simpleButtonOK, foreground: true, expect: {closes: "Tétel"}}
+```
+
+The steps run once per data row, in file order, with `${row.<column>}` replaced by that row's cell. The file is
+read before the run starts, so the log and `repair.md` show the real steps. An empty file, a column the file
+lacks, `${row.…}` outside an `each`, or an `each` inside an `each` stop the run before the first tool call. An
+uploaded file (`--var sorok=@lines.csv`) is read through `${sorok.local}`.
+
 `window:` sets the window's position and size through the driver and reads it back; a maximised window is
 restored first. Clicks by element work at any size (the Claude Desktop tour passes at 800×600 too), so
 pin the frame for videos, whose framing would otherwise depend on how the window was left.

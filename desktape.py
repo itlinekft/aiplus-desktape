@@ -661,6 +661,48 @@ def substitute(obj, values):
     return obj
 
 
+ROW_VAR = re.compile(r"\$\{row\.([^}]+)\}")
+
+
+def expand_each(steps, values):
+    """`each: {file, steps}` repeated once per data row of the file, `${row.<column>}` replaced by that row's
+    cell (row-loop). Expanded before the run, so the plan, the log and repair.md name the real steps; a missing
+    column, an empty file or a nested `each` stops before any tool call. The file is read on the controller:
+    `${name.local}` for an uploaded one."""
+    out = []
+    for i, st in enumerate(steps):
+        if not (isinstance(st, dict) and "each" in st):
+            if isinstance(st, dict) and ROW_VAR.search(json.dumps(st, ensure_ascii=False)):
+                raise ValueError(f"step {i}: ${{row.…}} outside an `each`")
+            out.append(st)
+            continue
+        arg = st["each"]
+        if not isinstance(arg, dict) or not arg.get("file") or not isinstance(arg.get("steps"), list):
+            raise ValueError(f"step {i}: each needs {{file, steps: [...]}}")
+        if any(isinstance(x, dict) and "each" in x for x in arg["steps"]):
+            raise ValueError(f"step {i}: an `each` inside an `each` is not supported")
+        path = substitute(arg["file"], values)
+        headers, rows = read_rows(path)
+        if not rows:
+            raise ValueError(f"step {i}: each: {path!r} has no data rows")
+        used = set(ROW_VAR.findall(json.dumps(arg["steps"], ensure_ascii=False)))
+        if used - set(headers):
+            raise ValueError(f"step {i}: each: {path!r} has no column {sorted(used - set(headers))[0]!r} "
+                             f"(its columns: {', '.join(headers)})")
+        def fill(obj, row):
+            if isinstance(obj, str):
+                return ROW_VAR.sub(lambda m: str(row.get(m.group(1), "")).strip(), obj)
+            if isinstance(obj, list):
+                return [fill(x, row) for x in obj]
+            if isinstance(obj, dict):
+                return {k: fill(v, row) for k, v in obj.items()}
+            return obj
+        for row in rows:
+            out += [fill(x, row) for x in arg["steps"]]
+        logger.info("each: %d row(s) of %s, %d step(s) each", len(rows), path, len(arg["steps"]))
+    return out
+
+
 def upload_vars(host, uploads, values):
     """Copy each @file to %USERPROFILE%\\desktape\\in on the target; its variable becomes that path. On a local
     target the file is used where it is."""
@@ -792,6 +834,11 @@ SELECTOR_KEYS = ("label", "id", "field", "role")
 SELECTOR_STEPS = ("click", "expect", "absent", "set")
 
 
+def spaces(text):
+    """Programs write „14 040 Ft" with a no-break space; a tape author types a plain one. Compare them as one."""
+    return text.replace("\u00a0", " ").replace("\u202f", " ")
+
+
 def sel_name(a):
     """How a step's selector is named in a message."""
     return a.get("label") or (a.get("id") and f"id={a['id']}") or (a.get("field") and f"field {a['field']}") \
@@ -826,8 +873,9 @@ def select(elements, tree, label=None, role=None, prefix=False, id=None, field=N
         f = caps[0]["frame"]
         inside = lambda e: (f["x"] <= e["frame"]["x"] + e["frame"]["w"] / 2 <= f["x"] + f["w"]
                             and f["y"] <= e["frame"]["y"] + e["frame"]["h"] / 2 <= f["y"] + f["h"])
-        hits = [e for e in hits if e is not caps[0] and e.get("frame") and inside(e)
-                and (e.get("role") in EDITABLE or (e.get("role") == "Pane" and "set_value" in (e.get("actions") or [])))]
+        hits = [e for e in hits if e is not caps[0] and e.get("frame") and inside(e)    # a role given: any of it,
+                and (role is not None or e.get("role") in EDITABLE                         # e.g. the field's own
+                     or (e.get("role") == "Pane" and "set_value" in (e.get("actions") or [])))]   # drop-down button
     return hits
 
 
@@ -1709,7 +1757,8 @@ class Runner:
             miss.append(f"the window {exp['opens']!r} did not open")
         if "closes" in exp and exp["closes"] in titles:
             miss.append(f"the window {exp['closes']!r} is still open")
-        if "shows" in exp and str(exp["shows"]) not in tree and not any(str(exp["shows"]) in t for t, _ in read.values()):
+        if "shows" in exp and spaces(str(exp["shows"])) not in spaces(tree) \
+                and not any(spaces(str(exp["shows"])) in spaces(t) for t, _ in read.values()):
             miss.append(f"{exp['shows']!r} did not appear in the program's windows")
         if "file" in exp:            # file-outcome-and-typing: checked last, it costs a round trip
             now = remote_file_state(self.cua.host, exp["file"]) if not miss else None
@@ -1736,7 +1785,7 @@ class Runner:
                 continue
             m = VALUE.search(lines[at])
             value = m.group(1) if m else ""
-            if key == "value" and str(sel.get("contains", "")) not in value:
+            if key == "value" and spaces(str(sel.get("contains", ""))) not in spaces(value):
                 miss.append(f"{name!r} shows {value!r}, not {sel.get('contains')!r}")
             if key == "enabled" and "actions=[" not in lines[at]:      # a disabled control has no actions
                 miss.append(f"{name!r} is still disabled")
@@ -1838,10 +1887,10 @@ class Runner:
             end = time.time() + arg.get("timeout", 8.0)      # data-driven-import: a message the program shows
             while True:
                 self.snapshot()
-                if arg["text"] in self.tree or time.time() > end:
+                if spaces(str(arg["text"])) in spaces(self.tree) or time.time() > end:
                     break
                 time.sleep(0.4)
-            if arg["text"] not in self.tree:
+            if spaces(str(arg["text"])) not in spaces(self.tree):
                 raise AssertionError(f"expected text {arg['text']!r} did not appear in {self.title!r}")
             logger.info("text found in %r: %s", self.title, arg["text"])
         elif kind == "expect":
@@ -2026,6 +2075,7 @@ def cmd_run(a):
     amap = load_map(tape.get("map"))
     values, uploads = parse_vars(a.var)
     values = tape_values(tape.get("vars"), values, uploads)
+    tape["steps"] = expand_each(tape["steps"], values)   # row-loop: one block per data row, before anything else
     # a misspelt @name or a missing variable stops here; substituted after resolving, so a map's `expect:`
     # default can use a variable (step-outcome-check D1)
     plan = [(substitute(s, values), e) for s, e in resolve_all(tape["steps"], amap)]
@@ -3048,8 +3098,12 @@ def selftest():
     assert [e["element_index"] for e in select(els, tree, field="Egységár", role="Edit")] == [5]
     assert [e["element_index"] for e in select(els, tree, field="Termék név")] == [27]
     assert select(els, tree, field="Nincs ilyen") == []
+    els.append(fe(43, "Button", "Megnyitás", 1120, 309, 20, 24, actions=["invoke"]))
+    assert [e["element_index"] for e in select(els, tree, field="Termék név", role="Button")] == [43]
+    assert [e["element_index"] for e in select(els, tree, field="Termék név")] == [27]     # no role: inputs only
     assert [e["element_index"] for e in select(els, tree, id="lookUpEditProductNameSearch")] == [27]
     assert select(els, tree, id="lookUpEdit") == []                   # whole ids only
+    assert spaces("14\u00a0040 Ft") == "14 040 Ft"
     assert caption_text("&Cikkszám:") == "Cikkszám" and sel_name({"field": "Mennyiség"}) == "field Mennyiség"
     rr = Runner.__new__(Runner)
     rr.elements, rr.tree = els, tree
@@ -3080,6 +3134,23 @@ def selftest():
             raise AssertionError(f"accepted {bad}")
         except ValueError:
             pass
+    # row-loop: one block per row, ${row.<column>} filled, the outer ${var} kept for later
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "sorok.csv")
+        open(f, "w", encoding="utf-8").write("Termék kód;Mennyiség;Nettó egységár\nPENB;50;96\nHFESTEK;12;83\n")
+        out = expand_each([{"focus": "W"}, {"each": {"file": "${sorok}", "steps": [
+            {"type": "${row.Termék kód}"}, {"set": {"field": "Mennyiség", "value": "${row.Mennyiség}"}}]}},
+            {"type": "${szam}"}], {"sorok": f})
+        assert out == [{"focus": "W"}, {"type": "PENB"}, {"set": {"field": "Mennyiség", "value": "50"}},
+                       {"type": "HFESTEK"}, {"set": {"field": "Mennyiség", "value": "12"}}, {"type": "${szam}"}], out
+        for bad in ([{"each": {"file": f, "steps": [{"type": "${row.Nincs}"}]}}],
+                    [{"type": "${row.Mennyiség}"}],
+                    [{"each": {"file": f, "steps": [{"each": {"file": f, "steps": []}}]}}]):
+            try:
+                expand_each(bad, {})
+                raise AssertionError(f"accepted {bad}")
+            except ValueError:
+                pass
     # a secret's substituted value never reaches repair.md
     with tempfile.TemporaryDirectory() as d:
         body = open(repair_bundle(os.path.join(d, "r.md"), "t", 0, {"type": {"text": "${pw}", "secret": True}},
