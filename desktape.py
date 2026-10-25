@@ -4508,9 +4508,9 @@ def selftest():
     argv, env = Target("user@host").mcp()
     assert argv[:3] == ["ssh", "-o", "BatchMode=yes"] and argv[-1].endswith(r'mcp --socket \\.\pipe\cua-driver') \
         and "set DO_NOT_TRACK=1&& " in argv[-1] and env is None, argv
-    if os.name != "nt":
+    if local_os() not in OSES:              # Linux: no local driver (Windows and macOS have one)
         try:
-            Target("local"); raise AssertionError("expected SystemExit off Windows")
+            Target("local"); raise AssertionError("expected SystemExit off Windows and macOS")
         except SystemExit:
             pass
     # The allowlist and the audit log, with a stand-in for the MCP session (no ssh).
