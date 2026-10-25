@@ -1075,6 +1075,28 @@ def select(elements, tree, label=None, role=None, prefix=False, id=None, field=N
     return hits
 
 
+TOAST_CLOSE = {"close", "bezárás", "x", "×", "dismiss", "elvetés"}   # not OK: a warning with OK is a question
+
+
+def is_toast(tree, title):
+    """tolerant-replay D3: the Window node titled `title` holds no button but close-like ones."""
+    lines, inside, depth = tree.splitlines(), False, None
+    for l in lines:
+        n = parse(l)
+        if not n:
+            continue
+        if not inside:
+            if n[1] == "Window" and n[2] == title:
+                inside, depth = True, n[0]
+            continue
+        if n[0] <= depth:
+            break
+        if n[1] in ("Button", "SplitButton", "MenuItem", "RadioButton", "CheckBox", "Edit", "ComboBox") and \
+                (n[2] or "").strip().lower() not in TOAST_CLOSE:
+            return False
+    return inside
+
+
 def check_selectors(plan):
     """Refuse a step whose selector names nothing to match (field-selectors), before any tool call."""
     for i, (s, _) in enumerate(plan):
@@ -1541,7 +1563,8 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
 
 # ---- the runner ---------------------------------------------------------------------------------
 
-BUSY_WAIT = 30.0        # busy-window: extra seconds for a program whose tree walk returns nothing yet
+BUSY_WAIT = 30.0            # busy-window: extra seconds for a program whose tree walk returns nothing yet
+SETTLE_MAX = 5.0            # tolerant-replay D2: the longest settle-wait after an action
 FOCUS_WAIT = 8.0        # focus: how long a window may take to appear or take its title
 EFFECT_WAIT = 3.0       # step-effect-check D2: how long a click or typed text has to show an effect
 CLOSE_LABELS = {"OK", "Cancel", "Close", "Save", "Yes", "No", "Igen", "Nem", "Mégse", "Bezárás", "Mentés"}
@@ -1779,7 +1802,12 @@ class Runner:
         found += [(w.get("title"), "window") for w in sc.get("windows", [])
                   if w.get("pid") == self.win["pid"] and w.get("window_id") != self.win["window_id"]
                   and w.get("window_id") not in self.baseline and w.get("title")]
-        bad = [f'{kind} "{title}"' for title, kind in found if not self.expected(title)]
+        toasts = [t for t, kind in found if kind == "dialog" and not self.expected(t) and is_toast(self.tree, t)]
+        for t in toasts:                         # tolerant-replay D3: a window without choices is information
+            if t not in getattr(self, "toasts_seen", set()):
+                logger.info("toast in %r: %s (no choices; not a failure)", self.title, t)
+                self.toasts_seen = getattr(self, "toasts_seen", set()) | {t}
+        bad = [f'{kind} "{title}"' for title, kind in found if not self.expected(title) and title not in toasts]
         self.check_covered(sc.get("windows", []))
         if bad:
             logger.warning("unexpected %s in %r (pid %s)", ", ".join(bad), self.title, self.win["pid"])
@@ -2422,6 +2450,28 @@ class Runner:
             raise OutcomeFailed(f"{what} could not be delivered: {self.describe_front(before)} "
                                 f"({cb.tool} waited {cb.waited:.1f} s)") from None
         self.after_action(what, exp, before)
+        self.settle()
+
+    def wait_default(self):
+        """tolerant-replay D2: an element wait's default is the tape's patience (8 s for bare Runners)."""
+        return float(getattr(self, "patience", 8.0))
+
+    def settle(self, patience=None):
+        """tolerant-replay D2: wait until two consecutive reads of the window show the same elements."""
+        if self.win is None or not getattr(self, "patience", None):
+            return
+        # at most SETTLE_MAX: a window that keeps changing (an assistant streaming) is not waited out; the next
+        # element wait carries the full patience
+        limit = min(float(patience or self.patience), SETTLE_MAX)
+        end, last = time.time() + limit, None
+        while time.time() < end:
+            self.snapshot()
+            sig = (getattr(self, "busy", False), tuple((e.get("role"), e.get("label")) for e in self.elements))
+            if sig == last and not sig[0]:
+                return
+            last = sig
+            time.sleep(0.3)
+        logger.debug("%r still changing after %.0f s; going on", self.title, limit)
 
     def program_windows(self, pid):
         sc, _ = self.cua.call("list_windows", {})
@@ -2503,9 +2553,12 @@ class Runner:
                 said = " / ".join(words[:8]) or "(its text is not readable)"
                 if failure_word(w["title"] + "\n" + "\n".join(words), self.failure_words, self.failure_ignore):
                     raise ProgramFailure(f"after {what}: {w.get('app_name') or 'the program'} said in {w['title']!r}: {said}")
+                buttons = [n[2] for n in map(parse, text.splitlines()) if n and n[1] == "Button" and n[2]]
+                if not [b for b in buttons if b.strip().lower() not in TOAST_CLOSE] and text:
+                    logger.info("after %s: a toast %r: %s (no choices; not a failure)", what, w["title"], said)
+                    continue                     # tolerant-replay D3
                 if not (w.get("title") == opens or (self.planned and self.planned(w["title"]))
                         or ("shows" in exp and exp["shows"] in text)):
-                    buttons = [n[2] for n in map(parse, text.splitlines()) if n and n[1] == "Button" and n[2]]
                     raise OutcomeFailed(f"after {what}: a window nobody planned opened: {w['title']!r} saying {said}"
                                         + (f"; its buttons: {', '.join(buttons[:6])}" if buttons else "")
                                         + " (name it in the step's `expect: {opens: …}` or the tape's `dialogs:`)")
@@ -2610,7 +2663,7 @@ class Runner:
             self.focus(arg)
         elif kind == "click":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            e = self.pick(a, float(a.get("timeout", 8.0)), enabled_only=True)   # timeout: a slow window
+            e = self.pick(a, float(a.get("timeout", self.wait_default())), enabled_only=True)   # timeout: a slow window
             if not e:
                 raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled)")
             label = e.get("label") or e.get("name") or ""
@@ -2697,11 +2750,11 @@ class Runner:
             logger.info("text found in %r: %s", self.title, arg["text"])
         elif kind == "expect":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            if not self.pick(a, a.get("timeout", 8.0)):
+            if not self.pick(a, a.get("timeout", self.wait_default())):
                 raise AssertionError(f"expected {a.get('role') or 'element'} {sel_name(a)!r} did not appear")
         elif kind == "absent":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            if not self.wait_gone(a.get("label"), a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
+            if not self.wait_gone(a.get("label"), a.get("role"), a.get("timeout", self.wait_default()), a.get("prefix", False),
                                   a.get("nth", 1), a.get("id"), a.get("field")):
                 raise AssertionError(f"{a.get('role') or 'element'} {sel_name(a)!r} did not go away")
         elif kind == "type":
@@ -2942,6 +2995,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                   "fired": False, "seen": False} for h in tape.get("_answers", [])]
     r.planned = r.expected                            # step-outcome-check D4: the same names, right after a step
     r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
+    r.patience = float(tape.get("patience", 30))      # tolerant-replay D2: settle-wait and default element waits
     r.cursor, r.glide_ms = tape.get("cursor", "agent"), int(tape.get("cursor_glide_ms", 500))
     bad = (f"tape: cursor is agent or person, not {r.cursor!r}" if r.cursor not in ("agent", "person") else
            "tape: cursor: person is for macOS targets; on Windows the agent cursor is desktape's signature in the "
@@ -4776,6 +4830,27 @@ def selftest():
             check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
             check_selectors(resolve_all(tape["steps"], m))
     assert real["window"] == "Claude"
+    # tolerant-replay D3: a window with only a close control is a toast; one with a real choice is not
+    toast = ('- Window "Claude"\n  - [1] Window "Plugin removed."\n    - [2] Text "Plugin removed."\n'
+             '    - [3] Button "Close"\n  - [4] Button "New"')
+    assert is_toast(toast, "Plugin removed.") and not is_toast(toast.replace('"Close"', '"Undo"'), "Plugin removed.")
+    warn = '- Window "W"\n  - [1] Window "Figyelmeztetés"\n    - [2] Button "OK"\n    - [3] Button "Bezárás"'
+    assert not is_toast(warn, "Figyelmeztetés")      # OK is a choice: the serial-number warning must stop a run
+    # tolerant-replay D2: settle returns once two reads agree, and goes on (does not fail) when they never do
+    class Settle(Runner):
+        def __init__(self, frames):
+            Runner.__init__(self, None, "test")
+            self.frames, self.win, self.patience, self.reads = list(frames), {"pid": 1}, 30.0, 0
+        def snapshot(self):
+            self.reads += 1
+            f = self.frames.pop(0) if len(self.frames) > 1 else self.frames[0]
+            self.elements, self.busy = [{"role": "Button", "label": l} for l in f], False
+    sleep, time.sleep = time.sleep, lambda _: None
+    try:
+        st = Settle([["a"], ["a", "b"], ["a", "b"], ["c"]]); st.settle()
+        assert st.reads == 3, st.reads
+    finally:
+        time.sleep = sleep
     # prompt-answers: an answer fires once in the middle of a wait, a missing one changes nothing, bad ones stop early
     class FakeR(Runner):
         def __init__(self, frames):
