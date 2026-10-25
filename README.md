@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/brand/desktape-dark-256.png">
+    <img src="site/brand/desktape-256.png" width="160" height="160" alt="desktape">
+  </picture>
+</p>
+
 # desktape
 
 Like VHS, but for desktop GUIs: record a desktop flow once with your agent, then replay it with zero model

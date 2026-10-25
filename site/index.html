@@ -7,7 +7,16 @@
 <meta name="description" content="Record a desktop flow once with your agent, then replay it with zero model tokens, as a test or as a captioned video.">
 <meta property="og:title" content="desktape">
 <meta property="og:description" content="Like VHS, but for desktop GUIs: record a flow once with your agent, replay it with zero model tokens.">
-<meta property="og:image" content="demo-poster.jpg">
+<meta property="og:image" content="https://itlinekft.github.io/desktape/brand/social-preview-1280x640.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://itlinekft.github.io/desktape/brand/social-preview-1280x640.png">
+<link rel="icon" href="brand/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="brand/favicon.ico" sizes="any">
+<link rel="icon" href="brand/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="brand/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
 <style>
   :root {
     --bg: #fbfaf7; --fg: #1d1c1a; --muted: #5f5b54; --line: #e4e0d8; --card: #ffffff;
@@ -31,7 +40,10 @@
   a { color: var(--accent); }
   .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
   header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
-  .mark { font: 600 20px/1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: var(--fg); text-decoration: none; }
+  .mark { font: 600 20px/1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: var(--fg); text-decoration: none;
+          display: inline-flex; align-items: center; gap: 10px; }
+  .mark img { width: 32px; height: 32px; border-radius: 6px; }
+  .mark b { font-weight: inherit; }
   .mark span { color: var(--accent); }
   nav a { margin-left: 20px; color: var(--muted); text-decoration: none; }
   nav a:hover { color: var(--fg); }
@@ -137,7 +149,7 @@
 <body>
 <div class="wrap">
   <header>
-    <a class="mark" href="./">desk<span>tape</span></a>
+    <a class="mark" href="./"><img src="brand/favicon.svg" alt="" width="32" height="32"><b>desk<span>tape</span></b></a>
     <nav>
       <a href="https://github.com/itlinekft/desktape/blob/main/docs/user-guide.md">Guide</a>
       <a class="wide" href="https://github.com/itlinekft/desktape/blob/main/docs/tape-format.md">Tape format</a>
@@ -148,7 +160,7 @@
   <div class="hero">
     <h1>Like VHS, but for desktop&nbsp;GUIs.</h1>
     <p class="lede">Record a desktop flow once with your agent, then replay it with zero model tokens, as a
-      test or as a captioned video. desktape drives a Windows desktop from Linux over SSH, through UI Automation.</p>
+      test or as a captioned video. desktape drives a Windows or macOS desktop, over SSH or on the machine itself, through its accessibility tree.</p>
     <div class="buttons">
       <a class="primary" href="https://github.com/itlinekft/desktape">View on GitHub</a>
       <a href="https://github.com/itlinekft/desktape/blob/main/docs/user-guide.md">Read the guide</a>
