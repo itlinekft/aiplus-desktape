@@ -337,3 +337,21 @@ An expander is a `PopUpButton` and a tab a `RadioButton` in Claude Desktop, so a
 (`maps/claude-desktop-mac.yaml`). The application menu bar is hidden from `look` and repair bundles; `--all`
 shows it, and a step can still click a `MenuItem`. `look --ocr` reads the focused window with Apple Vision.
 Hotkeys are the app's own: write `[cmd, …]` in a macOS tape.
+
+## Only the scene's programs on screen: `tidy`
+
+A recorded take shows only the programs its scene needs; every other window is closed, not minimised.
+A tape asks for that itself, usually as its first step:
+
+```yaml
+steps:
+  - tidy: { keep: [Claude] }        # a program name, or the start of a window title; timeout: 8 by default
+  - focus: "@window"
+```
+
+Every program with a titled window that is not kept is closed the way a person closes it: Cmd+Q on macOS
+(the whole program), Alt+F4 on Windows (each window). The system's own windows are never touched (Finder,
+the Dock, Explorer's desktop, the driver), and a macOS permission prompt is reported as left open. When
+a program answers with a question ("save changes?", "terminate running processes?"), the step fails,
+naming the program and quoting the question with its buttons; desktape never answers it and never
+force-kills a program. Between takes, `desktape.py tidy --keep Claude` does the same without a tape.

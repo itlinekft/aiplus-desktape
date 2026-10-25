@@ -1468,6 +1468,34 @@ def overlap(a, b):
             and min(a["y"] + a["height"], b["y"] + b["height"]) > max(a["y"], b["y"]))
 
 
+# scene-tidy D2: programs a `tidy` step never closes; macOS's permission prompts are reported as left open
+SYSTEM_APPS = {"Finder", "Dock", "SystemUIServer", "Control Center", "Notification Center", "loginwindow",
+               "WindowManager", "Window Server", "Cua Driver", "Universal Control", "Spotlight", "TextInputMenuAgent",
+               "explorer.exe", "cua-driver.exe", "TextInputHost.exe", "ShellExperienceHost.exe",
+               "StartMenuExperienceHost.exe", "SearchHost.exe"}
+PROMPT_APPS = {"universalAccessAuthWarn", "UserNotificationCenter", "CoreServicesUIAgent", "SecurityAgent"}
+TIDY_WAIT = 8.0
+
+
+def kept(w, keep):
+    """Is this window on a `tidy` keep list? An entry names the program, or the start of a window title."""
+    app, title = (w.get("app_name") or "").lower(), w.get("title") or ""
+    return any(app in (k.lower(), k.lower() + ".exe") or title.startswith(k) for k in keep)
+
+
+def own_pids():
+    """This process and its ancestors: a local `tidy` must not quit the terminal or app desktape runs in."""
+    pids, pid = set(), os.getpid()
+    while pid and pid not in pids and os.name != "nt":
+        pids.add(pid)
+        try:
+            pid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip() or 0)
+        except (OSError, ValueError) as e:
+            logger.warning("tidy: could not walk the process tree at pid %s: %s", pid, e)
+            break
+    return pids
+
+
 def screen_locked(host):
     """macOS: is the console session behind the lock screen? (macos-target D9; the session's own flag)"""
     try:
@@ -1556,6 +1584,7 @@ class Runner:
         self.dirty = False       # an action happened since the last snapshot
         self.typing, self.typing_cps = "fast", 12.0   # file-outcome-and-typing: the tape's typing mode
         self.front = None        # macOS: the driver's answer to the last bring_to_front (macos-target D8)
+        self.tidied = None       # scene-tidy: what the last `tidy` closed and left open
 
     def snapshot(self):
         sc, text = self.cua.call("get_window_state", dict(self.win))
@@ -1874,6 +1903,77 @@ class Runner:
         if w.get("minimized"):
             # runner-robustness D1: bring_to_front restores it at its previous frame
             logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
+
+    def tidy(self, arg):
+        """Only the programs the scene needs (scene-tidy): every other program with a titled window closes, the
+        way a person closes it (D1): Cmd+Q on macOS, Alt+F4 per window on Windows. A question it asks stops the
+        step, quoted and unanswered (D3); nothing is force-killed."""
+        a = arg if isinstance(arg, dict) else {"keep": arg}
+        keep = [str(k) for k in (a.get("keep") or [])]
+        timeout = float(a.get("timeout", TIDY_WAIT))
+        mine = own_pids() if self.cua.host == "local" else set()
+        wins = self.cua.call("list_windows", {})[0].get("windows", [])
+        keep_pids = {w.get("pid") for w in wins if kept(w, keep)} | mine
+        self.tidied = {"closed": [], "left": []}
+        targets = []                       # (program, pid, the windows to close)
+        for w in wins:
+            app = w.get("app_name") or ""
+            if not w.get("title") or w.get("pid") in keep_pids or (app, None) in SHELL_WINDOWS \
+                    or (app, w.get("title")) in SHELL_WINDOWS:
+                continue
+            if app in PROMPT_APPS:
+                if w.get("is_on_screen"):
+                    self.tidied["left"].append(f'"{w["title"]}" ({app})')
+                continue
+            if app in SYSTEM_APPS:
+                continue
+            hit = next((t for t in targets if t[1] == w["pid"]), None)   # per program: one Cmd+Q on macOS
+            if hit:
+                hit[2].append(w)
+                continue
+            targets.append((app, w["pid"], [w]))
+        for app, pid, ws in targets:
+            if self.mac:
+                self.close_program(app, pid, max(ws, key=lambda x: bool(x.get("is_on_screen"))), ["cmd", "q"], timeout, False)
+            else:
+                for w in ws:
+                    self.close_program(app, pid, w, ["alt", "f4"], timeout, True)
+            self.tidied["closed"].append(app)
+        if self.tidied["left"]:
+            logger.warning("tidy: left open (the system's own prompts): %s", ", ".join(self.tidied["left"]))
+        logger.info("tidy: closed %s; kept %s", ", ".join(self.tidied["closed"]) or "nothing",
+                    ", ".join(keep) or "nothing")
+
+    def close_program(self, app, pid, w, keys, timeout, window_only):
+        """Close one program (macOS) or one window (Windows) with its own shortcut; wait until it is gone."""
+        ids = {"pid": pid, "window_id": w["window_id"]}
+        mine = lambda: [x for x in self.cua.call("list_windows", {})[0].get("windows", []) if x.get("pid") == pid]
+        before = {x.get("window_id") for x in mine()}
+        try:
+            self.cua.call("bring_to_front", ids)
+        except (CallBlocked, RuntimeError) as e:
+            logger.warning("tidy: bring_to_front of %r (%s): %s", w.get("title"), app, e)
+        self.cua.call("hotkey", {**ids, "keys": keys, "delivery_mode": "foreground"})
+        end = time.time() + timeout
+        while True:
+            now = mine()
+            if (w["window_id"] not in {x.get("window_id") for x in now}) if window_only else not [x for x in now if x.get("title")]:
+                logger.info("tidy: %s %s", "closed" if window_only else "quit", f"{w.get('title')!r} ({app})" if window_only else app)
+                return
+            new = [x for x in now if x.get("window_id") not in before]
+            if new or time.time() > end:
+                break
+            time.sleep(0.4)
+        # D3: what it asks, quoted; a sheet sits inside the window, an alert is a window of its own
+        ask = new[0] if new else next((x for x in now if x.get("window_id") == w["window_id"]), w)
+        text, words = self.read_window(ask)
+        dialogs = [n[2] for n in map(parse, text.splitlines()) if n and n[1] == "Window" and n[0] > 0 and n[2]]
+        buttons = [n[2] for n in map(parse, text.splitlines()) if n and n[1] == "Button" and n[2]]
+        said = " / ".join(words[:8]) or "(its text is not readable)"
+        what = f"it asks in {ask.get('title') or (dialogs[0] if dialogs else '?')!r}: {said}" if (new or dialogs) else \
+            f"its window {w.get('title')!r} is still open after {timeout:g} s: {said}"
+        raise OutcomeFailed(f"tidy: {app} did not close; {what}" + (f"; its buttons: {', '.join(buttons[:6])}" if buttons else "")
+                            + f" (nothing was answered: answer it, or add {app!r} to `keep`)")
 
     def mac_open_file(self, arg):
         """A path into a macOS file panel (macos-target D5): the panel raised and verified in front, Cmd+Shift+G
@@ -2290,6 +2390,8 @@ class Runner:
                                     "the file was not opened")
         elif kind == "check_table":
             self.check_table(arg)
+        elif kind == "tidy":
+            self.tidy(arg)
         elif kind == "caption":
             if self.t_rec is not None:
                 self.captions.append((time.time() - self.t_rec, arg))
@@ -2687,6 +2789,27 @@ def act_step(a, step, amap, s, entry, deny, lk=None, tape=None):
     return 0
 
 
+def cmd_tidy(a):
+    """scene-tidy: the `tidy` step outside a tape, between takes."""
+    with box_lock(a.host, "tidy") as lk:
+        run_dir = new_run_dir("tidy", "adhoc")
+        cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
+        r = Runner(cua, "test")
+        try:
+            r.tidy({"keep": a.keep, "timeout": a.timeout})
+        except OutcomeFailed as e:
+            print(f"FAILED: {e}")
+            if r.tidied and r.tidied["closed"]:
+                print(f"closed before that: {', '.join(r.tidied['closed'])}")
+            lk.status(state="ok", step="tidy", error=str(e)[:300])
+            return 1
+        finally:
+            cua.close()
+        print(f"closed: {', '.join(r.tidied['closed']) or 'nothing'}" +
+              (f"\nleft open (the system's own prompts): {', '.join(r.tidied['left'])}" if r.tidied["left"] else ""))
+        return 0
+
+
 def cmd_lock(a):
     lk = BoxLock(a.host)
     cur = lk.read()
@@ -2849,6 +2972,49 @@ def cmd_unlock(a):
 
 
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_tidy():
+    """scene-tidy: kept and system windows stay, a program quits, a program that asks stops the step unanswered."""
+    class TidyCua:
+        host, audit = "me@mac", None
+        def __init__(self, mac, wins, asks=()):
+            self.mac, self.wins, self.asks, self.keys = mac, wins, set(asks), []
+        def call(self, tool, args, secret=False, timeout=None):
+            if tool == "list_windows":
+                return {"windows": [dict(w) for w in self.wins]}, ""
+            if tool == "hotkey":
+                self.keys.append((args["pid"], tuple(args["keys"])))
+                if args["pid"] not in self.asks:      # it closes: the window (Windows) or the program (macOS)
+                    self.wins = [w for w in self.wins if not (w["pid"] == args["pid"] and
+                                 (self.mac or w["window_id"] == args["window_id"]))]
+                return {}, ""
+            if tool == "get_window_state":
+                return {}, ('- Window "Doc"\n  - [1] Window "Do you want to keep this document?"\n'
+                            '    - [2] Button "Don\'t Save" [actions=[press]]\n    - [3] Button "Save" [actions=[press]]')
+            return {}, ""
+    w = lambda pid, wid, app, title, on=True: {"pid": pid, "window_id": wid, "app_name": app, "title": title,
+                                               "is_on_screen": on, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}
+    mac = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(2, 20, "Notes", "Notes"), w(2, 21, "Notes", "Shopping", False),
+                         w(3, 30, "Finder", "Desktop"), w(4, 40, "universalAccessAuthWarn", "Screen Recording"),
+                         w(5, 50, "Cua Driver", ""), w(6, 60, "Terminal", "")])
+    r = Runner(mac, "test")
+    level = logger.level; logger.setLevel(logging.ERROR)      # the "left open" warning is expected
+    r.tidy({"keep": ["Claude"], "timeout": 1})
+    logger.setLevel(level)
+    assert r.tidied == {"closed": ["Notes"], "left": ['"Screen Recording" (universalAccessAuthWarn)']}, r.tidied
+    assert mac.keys == [(2, ("cmd", "q"))], mac.keys                  # one Cmd+Q for the program, not per window
+    asks = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(7, 70, "TextEdit", "Doc")], asks=[7])
+    try:
+        Runner(asks, "test").tidy({"keep": ["Claude"], "timeout": 0.5}); raise AssertionError("expected OutcomeFailed")
+    except OutcomeFailed as e:
+        assert "TextEdit did not close" in str(e) and "Don't Save" in str(e) and "nothing was answered" in str(e), e
+    assert asks.keys == [(7, ("cmd", "q"))]                           # nothing answered: no second key, no click
+    win = TidyCua(False, [w(1, 10, "Claude.exe", "Claude"), w(8, 80, "notepad.exe", "a.txt - Notepad"),
+                          w(8, 81, "notepad.exe", "b.txt - Notepad"), w(9, 90, "explorer.exe", "Program Manager")])
+    r = Runner(win, "test")
+    r.tidy({"keep": ["Claude"]})
+    assert win.keys == [(8, ("alt", "f4")), (8, ("alt", "f4"))] and r.tidied["closed"] == ["notepad.exe"], (win.keys, r.tidied)
+
 
 def selftest_macos():
     """macos-target: OS per target, the tree normalised, the menu bar hidden, the front verdict, doctor rows."""
@@ -3638,6 +3804,7 @@ def selftest():
                                 platform="win32")[2]
     assert ok and "not on this shell's PATH" in said, said
     selftest_macos()
+    selftest_tidy()
     print("selftest ok")
     return 0
 
@@ -3670,6 +3837,9 @@ def main():
     p = sub.add_parser("doctor", help="what this machine still needs, with the command that installs each")
     p.add_argument("--local", action="store_true", help="a Windows target on this machine")
     p.add_argument("--video", action="store_true", help="recording videos too")
+    p = sub.add_parser("tidy", help="close every program with a window except the kept ones (scene-tidy)")
+    p.add_argument("--keep", action="append", default=[], metavar="NAME", help="a program name or a window title's start")
+    p.add_argument("--timeout", type=float, default=TIDY_WAIT, help="seconds each program has to close")
     p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
     p.add_argument("--json", action="store_true")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
@@ -3692,7 +3862,7 @@ def main():
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "
                      f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
-                "status": cmd_status}[a.cmd](a)
+                "status": cmd_status, "tidy": cmd_tidy}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
         return 3
