@@ -1226,6 +1226,7 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
 
 # ---- the runner ---------------------------------------------------------------------------------
 
+FOCUS_WAIT = 8.0        # focus: how long a window may take to appear or take its title
 EFFECT_WAIT = 3.0       # step-effect-check D2: how long a click or typed text has to show an effect
 CLOSE_LABELS = {"OK", "Cancel", "Close", "Save", "Yes", "No", "Igen", "Nem", "Mégse", "Bezárás", "Mentés"}
 INDEX = re.compile(r"\[\d+\] ")      # element indices change between snapshots; they are not an effect
@@ -1559,15 +1560,24 @@ class Runner:
                              enabled_only, a.get("id"), a.get("field"))
 
     def focus(self, title):
-        sc, _ = self.cua.call("list_windows", {})
-        if isinstance(title, dict):              # {title: "Accounting", prefix: true}: the rest of the title varies (an edition name)
-            pre = title["title"]
-            title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
-                          and w.get("is_on_screen", True)), pre)
-        wins = [w for w in sc.get("windows", []) if w.get("title") == title]
-        w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
+        # a window that is still opening, or whose title changes a moment after typing (a form named after the
+        # record: "Ügyfél" → "Ügyfél - <name>"), is waited for (measured: a rehearsal failed on exactly that)
+        want, start = title, time.time()
+        end = start + float(want.get("timeout", FOCUS_WAIT) if isinstance(want, dict) else FOCUS_WAIT)
+        while True:
+            sc, _ = self.cua.call("list_windows", {})
+            title = want
+            if isinstance(want, dict):           # {title: "Accounting", prefix: true}: the rest of the title varies
+                pre = want["title"]
+                title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
+                              and w.get("is_on_screen", True)), pre)
+            wins = [w for w in sc.get("windows", []) if w.get("title") == title]
+            w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
+            if w or time.time() > end:
+                break
+            time.sleep(0.4)
         if not w:
-            raise RuntimeError(f"no window titled {title!r}")
+            raise RuntimeError(f"no window titled {title!r} (waited {end - start:.0f} s)")
         self.win, self.title = {"pid": w["pid"], "window_id": w["window_id"]}, title
         self.baseline = {x.get("window_id") for x in sc.get("windows", []) if x.get("pid") == w["pid"]}
         area = lambda x: (x.get("bounds") or {}).get("width", 0) * (x.get("bounds") or {}).get("height", 0)
