@@ -22,6 +22,13 @@ targets:
     call_deadline: 2                    # optional: a slower machine; doubles every driver call's deadline
     alert_cmd: 'notify-send desktape "$DESKTAPE_ALERT"'   # optional: runs when a session is blocked or stuck
 
+  mac-mini:
+    host: mac-mini.example.lan
+    user: desktape
+    os: macos                           # optional: windows or macos; without it desktape asks the host once
+    label: "Mac mini, macOS 26"
+    note: "Keep the screen unlocked during runs (docs/macos-setup.md step 5)."
+
   this-machine:
-    host: local                         # desktape running on the Windows target itself
+    host: local                         # desktape running on the target itself (Windows or macOS)
     label: "This Windows machine"

@@ -6,7 +6,7 @@ tokens, as a test or as a captioned video.
 [Watch the 70-second demo](site/demo.mp4): recorded by `tapes/claude-desktop-demo.yaml`, 43 steps, no model
 calls. The landing page is `site/`, published to GitHub Pages.
 
-desktape drives a remote desktop (Windows today, macOS next) from a Linux machine. An AI agent looks at the
+desktape drives a remote desktop (Windows or macOS) from a Linux machine, or the desktop it runs on. An AI agent looks at the
 screen cheaply, acts one step at a time, and keeps the steps that worked as a YAML **tape**. The same tape
 then runs as a fast test or as a slow, captioned screen recording, without calling a model.
 
@@ -52,11 +52,15 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 - **Controller (where desktape runs):** Linux, or Windows from the user's desktop session; Python 3.9+,
   PyYAML (`pip install -r requirements.txt`), and an OpenSSH client with key login to the target.
 - **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
-  session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md);
-  every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
-- An RDP client must stay connected and visible on the target during a run, because Windows stops
+  session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
+  Or macOS (tested on macOS 26.4, Apple Silicon) with Remote Login, Cua Driver 0.34.1 and its permissions
+  granted once by a person, and `ffmpeg-full` for video mode: [`docs/macos-setup.md`](docs/macos-setup.md).
+  Every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
+- An RDP client must stay connected and visible on a Windows target during a run, because Windows stops
   rendering a minimised or disconnected session. Holding the session headless from Linux is the next change
   (`openspec/changes/headless-session`).
+- A macOS target needs no viewer window, but its screen must be unlocked during a run: macOS hides every
+  window from Accessibility behind the lock screen.
 
 ## Install as a Claude plugin
 
@@ -102,7 +106,8 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
   Claude Desktop's main screens that doubles as the map's regression test, and
   `claude-desktop-incognito-ask.yaml`, which asks one question in an incognito chat and waits for the answer,
   and `claude-desktop-demo.yaml`, which records the public demo with the user's content covered.
-- `windows/` — scripts desktape copies to the target (the OCR, run as a one-off interactive task).
+- `windows/` — scripts desktape copies to a Windows target (the OCR, run as a one-off interactive task).
+- `macos/` — the pinned driver install for a Mac, and the Vision OCR helper desktape compiles there.
 - `docs/` — setup, the tape format, and measured results.
 - `site/` — the landing page and the demo video (GitHub Pages, `.github/workflows/pages.yml`).
 - `openspec/` — requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).
@@ -112,7 +117,7 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
 
 - Headless session keeper: FreeRDP on Xvfb, so a run needs no person's RDP window.
 - desktape as a local MCP server, so Claude Desktop and Cowork can call `look`, `act` and `run`.
-- macOS targets through Cua's AX backend.
+- Linux targets, on the same platform layer as Windows and macOS.
 
 How desktape relates to VHS, Playwright, Cua Driver, OpenAdapt, Terminator and others:
 [`docs/related-work.md`](docs/related-work.md).

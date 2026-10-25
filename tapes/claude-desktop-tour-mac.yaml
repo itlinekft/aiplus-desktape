@@ -1,0 +1,49 @@
+# Claude Desktop (macOS): a read-only tour of the main screens through the map. Changes nothing and sends
+# nothing; doubles as the map's regression test and as the macOS backend's (macos-target task 5.1).
+name: claude-desktop-tour-mac
+app: Claude Desktop (macOS)
+map: claude-desktop-mac
+video_pause: 1.0
+dialogs: ["Search"]                  # the command palette, opened on purpose; any other dialog stops the run
+steps:
+  - focus: "@window"
+  - click: "@sidebar.search"         # a fixed starting point whatever screen Claude was left on
+  - expect: "@search.tab.sessions"
+  - caption: "Claude Desktop on macOS, read by desktape: every main screen by role and label"
+  - click: "@search.close"
+  - click: { label: "New", role: Button, effect: none }   # already on a new chat after the palette closes
+  - expect: "@chat.prompt"
+  - click: "@model.picker"
+  - expect: "@model.opus"
+  - caption: "The model picker"
+  - key: escape
+  - click: "@chat.add"
+  - expect: "@chat.add.upload"
+  - caption: "Files, connectors, skills and plugins"
+  - key: escape
+  - click: "@sidebar.projects"
+  - expect: "@projects.tab.yours"
+  - caption: "Projects"
+  - click: "@sidebar.artifacts"
+  - expect: "@artifacts.tab.shared"
+  - caption: "Artifacts"
+  - click: "@sidebar.scheduled"
+  - expect: "@scheduled.templates_tab"
+  - caption: "Scheduled tasks"
+  - click: "@sidebar.customize"
+  - click: "@customize.connectors_tab"
+  - expect: "@connectors.add_connector"
+  - caption: "Customize: skills, connectors and plugins"
+  - click: "@customize.plugins_tab"
+  - expect: "@plugins.add_plugin"
+  - click: "@mode.code"
+  - expect: "@code.prompt"
+  - expect: "@code.terminal"
+  - caption: "Code mode: terminal, browser, environment and permissions"
+  - click: "@mode.chat"
+  - expect: "@sidebar.new"
+  - click: "@sidebar.search"
+  - expect: "@search.tab.sessions"
+  - click: "@search.close"
+  - click: { label: "New", role: Button, effect: none }   # already on a new chat after the palette closes
+  - expect: "@chat.prompt"

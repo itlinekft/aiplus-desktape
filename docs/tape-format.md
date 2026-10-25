@@ -212,7 +212,7 @@ for another desktape run to finish: `expect: { file: "C:\\Work\\.desktape\\runs\
 
 `typing: human` types at about `typing_cps` characters a second, by the clock, so a slow driver call sends a
 few characters at once instead of slowing the pace. It applies in video mode only; a test types fast.
-`typing: paste` puts the text on the target's clipboard and pastes it with Ctrl+V: long text goes in at once,
+`typing: paste` puts the text on the target's clipboard and pastes it with Ctrl+V (Cmd+V on macOS): long text goes in at once,
 the way a person pastes it. A secret is never pasted, because it would stay on the clipboard. A step's own
 `typing:` overrides the tape's:
 
@@ -260,16 +260,21 @@ steps:
 ```
 
 - **`${name}`** is replaced in every step before the run starts. `--var name=value` sets it, and
-  `--var name=@local/file` copies the file to the target (`%USERPROFILE%\desktape\in\`) and passes the
+  `--var name=@local/file` copies the file to the target (`%USERPROFILE%\desktape\in\`, on macOS
+  `~/desktape/in/`) and passes the
   target's path; `${name.local}` is the controller's path. A variable with no value stops the run before any
   tool call. `act` takes `--var` too, and appends the step with `${name}` kept.
 - **`foreground: true`** on a click uses the driver's foreground delivery.
 - **`open_file`** fills the standard Windows file dialog's file name box through the dialog's own controls,
   reads it back and presses OK, with no focus and no keyboard, so it works in any language. It fails when
-  the dialog stays open, quoting a message box that came up instead.
+  the dialog stays open, quoting a message box that came up instead. On macOS (`dialog:` defaults to
+  `Open`) it raises the file panel, checks that it is in front, and types the path into Cmd+Shift+G
+  "Go to Folder", then presses Return twice; `~/` and `$HOME` in the path are expanded.
 - **`into: <title>`** on `type` and `key` goes to the window in front, after checking that it is the one named.
   With **`os: true`**, it goes through Windows itself (SendKeys, from a one-off task in the desktop session).
-  The keys reach whatever control has the keyboard focus in that window.
+  The keys reach whatever control has the keyboard focus in that window. On macOS `into` always raises the
+  named window, takes the driver's verdict that it is in front, and sends through the driver's foreground
+  delivery; `os: true` changes nothing there.
 - **`env` / `file`** on `type` read the text on the controller when the step runs. `secret: true` is required,
   so a password is never in the tape, the audit, a report or a caption.
 - **`check_table`** reads a grid's headers and rows (each cell by its column's name) and compares the named
@@ -322,3 +327,13 @@ fails on a map entry, the repair bundle names the entry, so the fix lands in the
 
 On the target, nothing that shows the screen is left behind: the recordings are deleted once they have
 been copied, and `look --ocr` deletes its screenshot and its text output after reading them.
+
+## macOS targets
+
+The same tapes and steps work on a macOS target (`docs/macos-setup.md`). desktape reads the macOS tree in the
+Windows vocabulary: roles without the `AX` prefix (`Button`, `Window`, `MenuItem`), a static text as `Text`,
+a text field as `Edit`, a sheet as a dialog, and an element known only by its description labelled with it.
+An expander is a `PopUpButton` and a tab a `RadioButton` in Claude Desktop, so a map is written per OS
+(`maps/claude-desktop-mac.yaml`). The application menu bar is hidden from `look` and repair bundles; `--all`
+shows it, and a step can still click a `MenuItem`. `look --ocr` reads the focused window with Apple Vision.
+Hotkeys are the app's own: write `[cmd, …]` in a macOS tape.

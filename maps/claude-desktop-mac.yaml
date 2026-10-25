@@ -1,0 +1,117 @@
+# Claude Desktop on macOS: named selectors for tapes (`click: "@sidebar.search"`).
+# Mapped 2026-10-25 on macOS 26.4 with Cua Driver 0.34.1, with `look --new` on every main screen and menu
+# (docs/spike-2026-10-25-macos.md). desktape already reads the macOS tree in the Windows vocabulary (roles
+# without `AX`, a description as the label; macos-target D3), so most labels match the Windows map. The
+# differences: an expander is a PopUpButton (Windows: a Button with action expand), tabs are RadioButtons, and a
+# click is AXPress (no `action:` needed). Only fixed UI is named here: never a user's chats, projects,
+# artifacts or account. The app's menu bar is hidden by desktape itself on macOS.
+app: Claude Desktop
+version: "macOS, 2026-10-25"
+window: Claude
+# A chat's text is content, not a failure (as on Windows).
+failure_lines: false
+
+# Hidden from `look` and repair bundles (`look --all` shows them), named by fixed elements only.
+ignore:
+  # Sidebar: pinned and recent chats (Chat mode), pinned and the sessions (Code mode), and the account button
+  - { from: { role: Heading, label: "Pinned" }, until: { role: Link, label: "Get apps and extensions" } }
+  - { from: { role: Heading, label: "Pinned" }, until: { role: Splitter, label: "Resize sidebar" } }
+  - { from: { role: Heading, label: "Recent artifacts" } }      # the new-chat screen's artifact list
+  - { from: { role: List, label: "Command palette options" }, until: { role: Button, label: "Compose" } }  # search: recent sessions
+  - { subtree: { role: List, label: "Artifacts" } }              # Artifacts page: the user's artifacts
+  - { subtree: { role: List, label: "Projects" } }               # Projects page: the user's projects
+  - { subtree: { role: List, label: "Upload or add files" } }    # the in-app file picker: Drive and artifact names
+
+elements:
+  # --- mode switch (top of the sidebar)
+  mode.chat:                  { label: "Claude", role: RadioButton }
+  mode.code:                  { label: "Code", role: RadioButton }
+
+  # --- sidebar, fixed navigation
+  sidebar.new:                { label: "New", role: Button }
+  sidebar.search:             { label: "Search", role: Button }
+  sidebar.projects:           { label: "Projects", role: Button, prefix: true }   # "Projects" / "Projects New" / "Projects Beta"
+  sidebar.create_project:     { label: "Create project", role: PopUpButton }
+  sidebar.artifacts:          { label: "Artifacts", role: Button }
+  sidebar.new_from_template:  { label: "New from a template", role: PopUpButton }
+  sidebar.scheduled:          { label: "Scheduled", role: Button }        # Chat mode
+  sidebar.new_task:           { label: "New task", role: PopUpButton }    # Chat mode
+  sidebar.design:             { label: "Design", role: Button }           # Chat mode
+  sidebar.customize:          { label: "Customize", role: Button }
+  sidebar.more:               { label: "More navigation items", role: PopUpButton }
+  sidebar.hide:               { label: "Hide sidebar", role: Button }
+
+  # --- new chat (Chat mode)
+  chat.prompt:                { label: "Write your prompt to Claude", role: Edit }
+  chat.add:                   { label: "Add files, connectors, and more", role: PopUpButton }
+  chat.add.upload:            { label: "Upload or add files", role: MenuItem }   # an in-app picker, not the macOS panel
+  upload.from_computer:       { label: "Upload from computer", role: Text }        # in that picker: the macOS file panel (unmeasured)
+  upload.close:               { label: "Close", role: Button }
+  chat.add.folder:            { label: "Add folder", role: MenuItem }
+  chat.add.skills:            { label: "Skills", role: MenuItem }
+  chat.add.connectors:        { label: "Connectors", role: MenuItem }
+  chat.add.plugins:           { label: "Plugins", role: MenuItem }
+  chat.add.research:          { label: "Research", role: MenuItem }
+  chat.project_or_folder:     { label: "Project or folder", role: PopUpButton }
+  chat.permission_mode:       { label: "Auto", role: PopUpButton }        # label is the current mode
+  chat.incognito:             { label: "Use incognito", role: Button }
+  chat.browser:               { label: "Browser", role: CheckBox }
+  chat.dictate:               { label: "Dictate", role: Button }
+  chat.voice:                 { label: "Use voice mode", role: Button }
+  chat.recent_artifacts:      { label: "Recent artifacts", role: Button }
+  chat.exit_incognito:        { label: "Exit incognito", role: Button }
+  chat.send:                  { label: "Send message", role: Button }     # appears once the prompt has text
+  chat.stop:                  { label: "Stop response", role: Button }    # only while Claude is answering
+
+  # --- model picker (both modes); its label carries the current model ("Model: Opus 5.5 Medium")
+  model.picker:               { label: "Model:", role: PopUpButton, prefix: true }
+  model.fable:                { label: "Fable", role: MenuItem, prefix: true }
+  model.opus:                 { label: "Opus", role: MenuItem, prefix: true }
+  model.sonnet:               { label: "Sonnet", role: MenuItem, prefix: true }
+  model.haiku:                { label: "Haiku", role: MenuItem, prefix: true }
+  model.effort:               { label: "Effort", role: MenuItem, prefix: true }
+  model.more:                 { label: "More models", role: MenuItem }
+
+  # --- search (the command palette)
+  search.field:               { label: "Search", role: Edit }
+  search.close:               { label: "Close", role: Button }
+  search.tab.all:             { label: "All", role: RadioButton }
+  search.tab.sessions:        { label: "Sessions", role: RadioButton }
+  search.tab.projects:        { label: "Projects", role: RadioButton }
+
+  # --- Projects page
+  projects.tab.yours:         { label: "Your projects", role: RadioButton }
+  projects.tab.archived:      { label: "Archived", role: RadioButton }
+  projects.search:            { label: "Search projects", role: Button }
+  projects.new:               { label: "New project", role: Button }
+
+  # --- Artifacts page
+  artifacts.tab.all:          { label: "All", role: RadioButton }
+  artifacts.tab.yours:        { label: "Yours", role: RadioButton }
+  artifacts.tab.shared:       { label: "Shared with you", role: RadioButton }
+  artifacts.search:           { label: "Search your artifacts", role: Button }
+  artifacts.new:              { label: "New", role: PopUpButton }
+
+  # --- Scheduled page
+  scheduled.templates_tab:    { label: "Templates", role: RadioButton }
+  scheduled.search:           { label: "Search scheduled tasks", role: Button }
+  scheduled.set_up_manually:  { label: "Set up manually", role: Button }
+
+  # --- Customize: skills, connectors, plugins
+  customize.skills_tab:       { label: "Skills", role: RadioButton }
+  customize.connectors_tab:   { label: "Connectors", role: RadioButton }
+  customize.plugins_tab:      { label: "Plugins", role: RadioButton }
+  customize.discover_tab:     { label: "Discover", role: RadioButton }
+  skills.add_skill:           { label: "Add skill", role: PopUpButton }
+  connectors.add_connector:   { label: "Add connector", role: PopUpButton }
+  plugins.add_plugin:         { label: "Add plugin", role: PopUpButton }
+
+  # --- new session (Code mode)
+  code.prompt:                { label: "Prompt", role: Edit }
+  code.add:                   { label: "Add", role: PopUpButton }
+  code.terminal:              { label: "Terminal", role: CheckBox }
+  code.browser:               { label: "Browser", role: CheckBox }
+  code.environment:           { label: "Environment:", role: PopUpButton, prefix: true }
+  code.folder:                { label: "Folder:", role: PopUpButton, prefix: true }
+  code.permissions:           { label: "Permissions:", role: PopUpButton, prefix: true }
+  usage.indicator:            { label: "Usage:", role: PopUpButton, prefix: true }

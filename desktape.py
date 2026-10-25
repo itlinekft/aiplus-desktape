@@ -49,7 +49,8 @@ def host_default():
 # ---- named targets (target-profiles) ----------------------------------------------------------------
 
 SSH_OPTS = {}         # host string -> extra ssh/scp options, from the target's profile (an identity file)
-TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline"}
+HOMES = {}            # host string -> the target user's home folder, asked once
+TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os"}
 
 
 def targets_path():
@@ -76,6 +77,8 @@ def load_targets(path=None):
         extra = set(t) - TARGET_FIELDS
         if extra:
             raise ValueError(f"{path}: target {name!r} has unknown fields {sorted(extra)}; known: {sorted(TARGET_FIELDS)}")
+        if t.get("os") is not None and t["os"] not in OSES:
+            raise ValueError(f"{path}: target {name!r} has os {t['os']!r}; known: {', '.join(OSES)}")
     if doc.get("default") and doc["default"] not in targets:
         raise ValueError(f"{path}: default {doc['default']!r} is not a target; known: {sorted(targets)}")
     return {"default": doc.get("default"), "targets": targets, "path": path}
@@ -114,6 +117,8 @@ def choose_target(cli_host=None, cli_target=None, env=None, cfg=None):
         env.setdefault("DESKTAPE_ALERT_CMD", str(t["alert_cmd"]))
     if t.get("call_deadline"):
         env.setdefault("DESKTAPE_CALL_DEADLINE", str(t["call_deadline"]))
+    if t.get("os") and host != "local":
+        TARGET_OS[host] = t["os"]                  # macos-target D2: declared, so nothing is asked over SSH
     logger.debug("target %s: %s (%s)", name, host, t.get("label") or "no label")
     return host, name
 
@@ -126,34 +131,90 @@ PIPE = r"\\.\pipe\cua-driver"
 # the default terminal (Windows 11), `-WindowStyle Hidden` still flashed a terminal window on screen, and into a
 # recording (measured: 8 flashes in one take; one hosted the driver and could be closed by mistake).
 HIDDEN = "conhost.exe --headless "
+# macos-target D1: on a Mac the installer links this into /Applications/CuaDriver.app; `mcp` proxies to the app's
+# daemon, which holds the Accessibility and Screen Recording grants (not SSH, not this process)
+MAC_DRIVER = "~/.local/bin/cua-driver"
+OSES = ("windows", "macos")
+TARGET_OS = {}        # host string -> "windows" | "macos": a profile's `os:`, or asked once (macos-target D2)
+
+
+def local_os():
+    return "windows" if os.name == "nt" else "macos" if sys.platform == "darwin" else sys.platform
+
+
+def target_os(host, opts=None):
+    """The target's OS (macos-target D2): a profile's `os:`, the controller's own for `local`, else `uname -s`
+    over SSH once per host and process. Windows' cmd.exe has no `uname`, so a host that answers without it is
+    Windows."""
+    if host == "local":
+        return local_os()
+    if host in TARGET_OS:
+        return TARGET_OS[host]
+    try:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", *(opts or []), host, "uname -s"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=30)
+    except subprocess.TimeoutExpired:
+        logger.warning("could not ask %s for its OS (ssh timed out); assuming Windows", host)
+        return "windows"
+    if r.returncode == 255:      # ssh itself failed: the driver connection will say why; do not remember a guess
+        logger.warning("could not ask %s for its OS (%s); assuming Windows", host, r.stderr.strip()[:200])
+        return "windows"
+    name = r.stdout.strip()
+    if name == "Linux":
+        raise SystemExit(f"desktape: {host} is a Linux machine; Linux targets are not supported yet")
+    TARGET_OS[host] = "macos" if name == "Darwin" else "windows"
+    logger.info("target %s runs %s (uname: %r)", host, TARGET_OS[host], name or "none")
+    return TARGET_OS[host]
 
 
 class Target:
-    """Where the driver runs (runner-robustness D6): another machine over SSH (`user@host`), or this
-    Windows machine (`local`). Commands are cmd.exe command lines either way; paths are relative to the
-    target user's profile."""
+    """Where the driver runs (runner-robustness D6): another machine over SSH (`user@host`), or this machine
+    (`local`). On Windows, commands are cmd.exe command lines; on macOS, sh (macos-target D1). Paths are
+    relative to the target user's home folder."""
 
     def __init__(self, host):
         self.host, self.local = host, host == "local"
         self.opts = SSH_OPTS.get(host, [])      # target-profiles: the profile's identity file
-        if self.local and os.name != "nt":
-            raise SystemExit("desktape: --host local drives the driver on this machine, which must be Windows")
+        if self.local and local_os() not in OSES:
+            raise SystemExit("desktape: --host local drives the driver on this machine, which must be Windows or macOS")
+        self.os = target_os(host, self.opts)
+        self.mac = self.os == "macos"
 
     def mcp(self):
         """(argv, env) that start `cua-driver mcp` speaking MCP on stdio."""
+        if self.mac:
+            if self.local:
+                return [os.path.expanduser(MAC_DRIVER), "mcp"], {**os.environ, **DRIVER_ENV}
+            sets = "".join(f"{k}={v} " for k, v in DRIVER_ENV.items())
+            return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f"{MAC_DRIVER} mcp"], None
         if self.local:
             return [os.path.expandvars(EXE), "mcp", "--socket", PIPE], {**os.environ, **DRIVER_ENV}
         sets = "".join(f"set {k}={v}&& " for k, v in DRIVER_ENV.items())
         return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f'"{EXE}" mcp --socket {PIPE}'], None
 
-    def sh(self, cmd, check=False):
-        kw = dict(check=check, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    def sh(self, cmd, check=False, input=None):
+        kw = dict(check=check, capture_output=True, text=True, encoding="utf-8", errors="replace", input=input)
         if self.local:
             return subprocess.run(cmd, shell=True, **kw)
         return subprocess.run(["ssh", "-o", "BatchMode=yes", *self.opts, self.host, cmd], **kw)
 
+    def home(self):
+        """The target user's home folder, as the target writes it (cached per host)."""
+        if self.host not in HOMES:
+            HOMES[self.host] = (os.path.expanduser("~") if self.mac else os.environ.get("USERPROFILE", "")) \
+                if self.local else self.sh("echo $HOME" if self.mac else "echo %USERPROFILE%").stdout.strip()
+        return HOMES[self.host]
+
+    def mkdir(self, rel):
+        """A folder under the home folder, made if missing."""
+        if self.mac:
+            self.sh(f'mkdir -p "$HOME/{rel}"')
+        else:
+            win = rel.replace("/", "\\")
+            self.sh(f"if not exist %USERPROFILE%\\{win} mkdir %USERPROFILE%\\{win}")
+
     def path(self, rel):
-        return os.path.join(os.environ.get("USERPROFILE", ""), *rel.split("/"))
+        return os.path.join(os.path.expanduser("~") if self.mac else os.environ.get("USERPROFILE", ""), *rel.split("/"))
 
     def put(self, local_path, rel):
         if self.local:
@@ -190,13 +251,20 @@ class CallBlocked(RuntimeError):
 
 
 NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
+MAC_NO_DAEMON = "daemon is not running"                 # … and on macOS
 FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
+SETUP_DOC = {"windows": "docs/windows-setup.md section 3", "macos": "docs/macos-setup.md steps 2 and 3"}
 
 
 def start_daemon(host):
-    """Start the driver daemon in the target's desktop session (driver-autostart), with the same one-off
-    `/it` task the OCR uses; the task is deleted once the daemon runs."""
+    """Start the driver daemon in the target's desktop session (driver-autostart). Windows: the same one-off
+    `/it` task the OCR uses, deleted once the daemon runs. macOS: through LaunchServices, so macOS attributes it
+    to CuaDriver.app and its grants (macos-target D1); `cua-driver mcp` usually starts it itself (measured)."""
     t = Target(host)
+    if t.mac:
+        t.sh("open -n -g -a CuaDriver --args serve", check=True)
+        time.sleep(2)
+        return
     t.sh("if not exist %USERPROFILE%\\desktape mkdir %USERPROFILE%\\desktape")
     t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
     tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\desktape\\cua-serve.ps1"
@@ -213,10 +281,12 @@ class Cua:
     def __init__(self, host, audit_path):
         self.audit = open(audit_path, "a", encoding="utf-8")
         self.host, self.on_blocked = host, None     # on_blocked(tool, args, waited): the status hook (D5)
+        t = Target(host)
+        self.mac, self.last = t.mac, {}
         try:
             self._connect(host)
         except RuntimeError as e:
-            if NO_DAEMON not in str(e):
+            if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e):
                 raise
             logger.warning("no driver daemon on %s (after a logout or reboot?); starting it in the desktop session",
                            host)
@@ -224,7 +294,7 @@ class Cua:
             try:
                 self._connect(host)
             except RuntimeError as e2:
-                raise RuntimeError(f"{e2}; start the daemon by hand: docs/windows-setup.md section 3") from e2
+                raise RuntimeError(f"{e2}; start the daemon by hand: {SETUP_DOC[t.os]}") from e2
             logger.info("driver daemon started on %s", host)
 
     def _connect(self, host):
@@ -274,6 +344,9 @@ class Cua:
         if tool not in ALLOWED:
             raise PermissionError(f"tool {tool!r} is not on the allowlist")
         t0 = time.time()
+        mac = getattr(self, "mac", False)     # a test may build the object without __init__
+        if mac and tool == "get_window_state" and args.get("include_accessibility_tree") is not False:
+            args = {"include_screenshot": False, **args}   # macOS sends a screenshot unless told not to; a tree read needs none
         logged = {**args, **{k: "<redacted>" for k in ("text", "value") if k in args}} if secret else args
         try:
             r = self._rpc("tools/call", {"name": tool, "arguments": args}, timeout=timeout or deadline(tool, args))
@@ -299,7 +372,13 @@ class Cua:
         self.audit.flush()
         if not ok:
             raise RuntimeError(f"{tool} failed: {text[:300] or r.get('error')}")
-        return res.get("structuredContent") or {}, text
+        self.last = res                           # the whole result, for a screenshot (macos-target D4)
+        sc = res.get("structuredContent") or {}
+        if mac and tool == "get_window_state":
+            text = mac_tree(sc.get("tree_markdown") or text)     # macos-target D3: the Windows vocabulary
+            for e in sc.get("elements") or []:
+                mac_element(e)
+        return sc, text
 
     def reconnect(self):
         """Drop a connection whose call hangs (the driver keeps serving other connections) and open a new one."""
@@ -714,12 +793,12 @@ def upload_vars(host, uploads, values):
             values[name] = os.path.abspath(path)
             logger.info("local target: ${%s} is %s, used in place", name, values[name])
         return values
-    t.sh(r"if not exist %USERPROFILE%\desktape\in mkdir %USERPROFILE%\desktape\in")
-    profile = t.sh("echo %USERPROFILE%").stdout.strip() if not t.local else os.environ.get("USERPROFILE", "")
+    t.mkdir("desktape/in")
+    profile = t.home()
     for name, path in uploads.items():
         base = os.path.basename(path)
         t.put(path, f"desktape/in/{base}")
-        values[name] = profile + "\\desktape\\in\\" + base
+        values[name] = profile + ("/desktape/in/" if t.mac else "\\desktape\\in\\") + base
         logger.info("uploaded %s to %s as ${%s}", path, values[name], name)
     return values
 
@@ -824,6 +903,76 @@ def parse(line):
         return None
     a = ACTIONS.search(m.group(4) or "")
     return len(m.group(1)), m.group(2), m.group(3) or "", a.group(1) if a else ""
+
+
+# macos-target D3: the driver's macOS tree in the Windows vocabulary, so the core needs no OS checks. Measured on
+# Claude Desktop: `- [5] AXButton (Hide sidebar) [actions=[press,showmenu,scrolltovisible]]`,
+# `- [4] AXStaticText = "Claude" [actions=[…]]`, `- [267] AXMenuItem "x" [id=itemSelected: actions=[cancel,press,pick]]`.
+MAC_ROLES = {"StaticText": "Text", "Sheet": "Window",     # the same thing under its Windows name; a sheet is a dialog
+             "TextField": "Edit", "TextArea": "Edit"}
+MAC_NON_ACTIONS = {"showmenu", "scrolltovisible", "raise"}   # on every web element: not something to click
+MAC_LINE = re.compile(r'^(\s*- )(\[\d+\] )?AX(\w+)(.*)$')
+MAC_BRACKET = re.compile(r'\s\[([a-z_]+=.*)\]\s*$')
+MAC_IGNORE = [{"subtree": {"role": "MenuBar"}}]       # the app menu bar: 161 items measured, recent file names among them
+
+
+def mac_role(role):
+    r = role[2:] if role and role.startswith("AX") else role
+    return MAC_ROLES.get(r, r)
+
+
+def mac_line(line):
+    """One macOS tree line rewritten: role without `AX`, the description as the label when there is none, a
+    text's value as its label, `= "v"` as `[value="v" …]`, and the non-actions dropped."""
+    m = MAC_LINE.match(line)
+    if not m:
+        return line
+    head, idx, role, rest = m.groups()
+    role = mac_role("AX" + role)
+    label = value = desc = None
+    bracket = ""
+    b = MAC_BRACKET.search(rest)
+    if b:
+        bracket, rest = b.group(1), rest[:b.start()]
+    rest = rest.strip()
+    while rest:
+        if (q := re.match(r'"((?:[^"\\]|\\.)*)"\s*', rest)) and label is None:
+            label = q.group(1)
+        elif q := re.match(r'=\s*"((?:[^"\\]|\\.)*)"\s*', rest):
+            value = q.group(1)
+        elif rest.startswith("(") and rest.endswith(")"):
+            desc, q = rest[1:-1], None
+            break
+        else:
+            break                                 # something this rewrite does not know: keep the line's meaning
+        rest = rest[q.end():]
+    if not label:
+        label = desc or (value if role == "Text" else None)
+    a = ACTIONS.search(bracket)
+    if a:
+        acts = [x for x in a.group(1).split(",") if x and x not in MAC_NON_ACTIONS]
+        bracket = (bracket[:a.start()] + (f"actions=[{','.join(acts)}]" if acts else "") + bracket[a.end():]).strip()
+        bracket = re.sub(r":?\s*$", "", bracket) if not acts else bracket
+    inner = " ".join(x for x in ((f'value="{value}"' if value is not None else ""), bracket) if x)
+    return f'{head}{idx or ""}{role}' + (f' "{label}"' if label else "") + (f" [{inner}]" if inner else "")
+
+
+def mac_tree(text):
+    return "\n".join(mac_line(l) for l in text.splitlines())
+
+
+def mac_element(e):
+    """A structured element in the same vocabulary as its line (the label is already the description)."""
+    e["role"] = mac_role(e.get("role") or "")
+    if not e.get("label") and e["role"] == "Text" and e.get("value"):
+        e["label"] = e["value"]
+    return e
+
+
+def ignores(amap, host):
+    """The map's ignore regions, plus the menu bar on a macOS target (macos-target D3)."""
+    own = list((amap or {}).get("ignore") or [])
+    return own + MAC_IGNORE if host and Target(host).mac else own
 
 
 # ---- selectors: label, automation id, caption (field-selectors) ------------------------------------------
@@ -1072,8 +1221,50 @@ def compact(tree_text, texts=False):
     return out
 
 
-def ocr_lines(host):
-    """Windows OCR in the interactive session (design D4): a one-off task, deleted after the run."""
+MAC_OCR_SRC = os.path.join(HERE, "macos", "desktape-ocr.swift")
+
+
+def mac_ocr(cua, win):
+    """OCR of one window on macOS (macos-target D4): the driver takes the screenshot with its own Screen Recording
+    grant, and Apple Vision reads the file on the target, which needs no permission. Lines are `x,y text` in
+    screen points, top to bottom."""
+    t = Target(cua.host)
+    sc, _ = cua.call("get_window_state", {"pid": win["pid"], "window_id": win["window_id"],
+                                          "include_accessibility_tree": False, "max_image_dimension": 0})
+    img = next((c for c in cua.last.get("content", []) if c.get("type") == "image"), None)
+    if not img:
+        raise RuntimeError("OCR: the driver returned no screenshot of the window")
+    import hashlib
+    exe = "desktape/bin/desktape-ocr-" + hashlib.sha256(open(MAC_OCR_SRC, "rb").read()).hexdigest()[:12]
+    t.mkdir("desktape/bin")
+    if t.sh(f'test -x "$HOME/{exe}" && echo yes').stdout.strip() != "yes":   # compiled once per source version
+        t.put(MAC_OCR_SRC, "desktape/desktape-ocr.swift")
+        r = t.sh(f'swiftc -O -o "$HOME/{exe}" "$HOME/desktape/desktape-ocr.swift"')
+        if r.returncode:
+            raise RuntimeError("OCR: compiling the Vision helper failed (Xcode or the Command Line Tools: "
+                               f"xcode-select --install): {r.stderr.strip()[-300:]}")
+        logger.info("compiled the OCR helper on %s: ~/%s", cua.host, exe)
+    with tempfile.TemporaryDirectory() as d:
+        shot = os.path.join(d, "ocr-shot.png")
+        open(shot, "wb").write(base64.b64decode(img["data"]))
+        t.put(shot, "desktape/ocr-shot.png")
+    try:
+        r = t.sh(f'"$HOME/{exe}" "$HOME/desktape/ocr-shot.png"')
+    finally:
+        t.sh('rm -f "$HOME/desktape/ocr-shot.png"')        # no screenshot of the desktop is left behind
+    if r.returncode:
+        raise RuntimeError(f"OCR: {r.stderr.strip()[-300:] or 'the Vision helper failed'}")
+    found = json.loads(r.stdout or "[]")
+    b, scale = sc.get("window_bounds") or {"x": 0, "y": 0}, float(sc.get("screenshot_scale") or 1.0)
+    found.sort(key=lambda l: (l["y"], l["x"]))
+    return [f'{int(b["x"] + l["x"] / scale)},{int(b["y"] + l["y"] / scale)} {l["text"]}' for l in found]
+
+
+def ocr_lines(host, cua=None, win=None):
+    """OCR (design D4). Windows: the whole screen, in the interactive session, through a one-off task deleted
+    after the run. macOS: the window `win`, through the driver connection `cua` (macos-target D4)."""
+    if cua is not None and cua.mac:
+        return mac_ocr(cua, win)
     t, remote = Target(host), "desktape"
     # The parentheses matter: in cmd, `if … mkdir … & del …` puts the del inside the if, and a stale
     # ocr-done.txt from the previous run then returned the previous OCR result.
@@ -1143,9 +1334,22 @@ def sendkeys_text(text):
     return "".join("{" + c + "}" if c in "+^%~(){}[]" else c for c in text)
 
 
+def mac_path(t, path):
+    """A macOS path with `~/`, `$HOME` and `${HOME}` expanded to the target user's home (macos-target D6)."""
+    home = t.home()
+    p = home + path[1:] if path == "~" or path.startswith("~/") else path
+    return p.replace("${HOME}", home).replace("$HOME", home)
+
+
 def remote_file_state(host, path):
     """(size, last write ticks) of a file on the target, or None (file-outcome-and-typing D1). Environment
-    variables in the path are expanded there."""
+    variables in the path are expanded there; on macOS `~/` and `$HOME` (macos-target D6)."""
+    t = Target(host)
+    if t.mac:
+        import shlex
+        q = shlex.quote(mac_path(t, path))
+        out = t.sh(f"test -f {q} && stat -f '%z %m' {q}").stdout.strip().split()
+        return (int(out[0]), int(out[1])) if len(out) == 2 and all(x.isdigit() for x in out) else None
     ps = ("$p=[Environment]::ExpandEnvironmentVariables('" + path.replace("'", "''") + "');"
           "$f=Get-Item -LiteralPath $p -ErrorAction SilentlyContinue;"
           "if($f -and -not $f.PSIsContainer){'' + $f.Length + ' ' + $f.LastWriteTimeUtc.Ticks}")
@@ -1155,7 +1359,22 @@ def remote_file_state(host, path):
 
 
 def os_clipboard(host, text, audit=None):
-    """The target's clipboard, in the desktop session (file-outcome-and-typing D3)."""
+    """The target's clipboard, in the desktop session (file-outcome-and-typing D3). On macOS `pbcopy` from SSH
+    reaches the logged-in user's pasteboard (measured); the text goes on stdin, never on a command line, in
+    UTF-8 whatever the SSH session's locale, and is read back (macos-target D6)."""
+    t = Target(host)
+    if t.mac:
+        t0 = time.time()
+        t.sh("LANG=en_US.UTF-8 pbcopy", input=text)
+        back = t.sh("LANG=en_US.UTF-8 pbpaste").stdout
+        out = {"clip": back == text}
+        if audit:
+            audit.write(json.dumps({"ts": round(t0, 3), "tool": "pbcopy", "args": {"clip": f"{len(text)} characters"},
+                                    "ok": out["clip"], "ms": int((time.time() - t0) * 1000)}) + "\n")
+            audit.flush()
+        if not out["clip"]:
+            raise AssertionError(f"paste: the clipboard did not take the text (it reads back {len(back)} characters)")
+        return out
     out = os_input(host, "", "", audit, clip=text)
     if not out.get("clip"):
         raise AssertionError(f"paste: the clipboard did not take the text ({out.get('error') or 'no reason given'})")
@@ -1240,12 +1459,28 @@ def shape(tree_text):
 
 # covered-window-guard: windows that are always on top and cover nothing a person would close
 SHELL_WINDOWS = {("cua-driver.exe", None), ("TextInputHost.exe", None), ("explorer.exe", "Program Manager"),
-                 ("explorer.exe", "PopupHost")}
+                 ("explorer.exe", "PopupHost"),
+                 ("Cua Driver", ""), ("loginwindow", "")}      # macOS: the driver's cursor overlay; the login shield
 
 
 def overlap(a, b):
     return (a and b and min(a["x"] + a["width"], b["x"] + b["width"]) > max(a["x"], b["x"])
             and min(a["y"] + a["height"], b["y"] + b["height"]) > max(a["y"], b["y"]))
+
+
+def screen_locked(host):
+    """macOS: is the console session behind the lock screen? (macos-target D9; the session's own flag)"""
+    try:
+        return '"CGSSessionScreenIsLocked"=Yes' in Target(host).sh("ioreg -n Root -d1").stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("could not ask %s whether its screen is locked: %s", host, e)
+        return False
+
+
+def front_ok(r, window_id):
+    """macOS: did bring_to_front leave this window in front? (the driver verifies it itself; measured)"""
+    seen = (r.get("observed") or {}).get("frontmost_ordinary_window_id")
+    return seen == window_id if seen is not None else bool((r.get("exact_window_effect") or {}).get("verified"))
 
 
 # ---- step-outcome-check: what a step is for, and the program's own failures --------------------------
@@ -1320,6 +1555,7 @@ class Runner:
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
         self.typing, self.typing_cps = "fast", 12.0   # file-outcome-and-typing: the tape's typing mode
+        self.front = None        # macOS: the driver's answer to the last bring_to_front (macos-target D8)
 
     def snapshot(self):
         sc, text = self.cua.call("get_window_state", dict(self.win))
@@ -1347,8 +1583,23 @@ class Runner:
             logger.warning("unexpected %s in %r (pid %s)", ", ".join(bad), self.title, self.win["pid"])
             raise AssertionError(f"unexpected {', '.join(bad)}: name it in the tape's `dialogs:` if it is planned")
 
+    @property
+    def mac(self):
+        return getattr(self.cua, "mac", False)
+
+    def mac_cover(self, windows):
+        """macOS (macos-target D8): `z_index` is not the stacking order there (measured), so the verdict is the
+        driver's own answer to the last bring_to_front: the window in front, or what is in front instead."""
+        if not self.front or front_ok(self.front, self.win["window_id"]):
+            return []
+        fid = (self.front.get("observed") or {}).get("frontmost_ordinary_window_id")
+        w = next((w for w in windows if w.get("window_id") == fid), None)
+        return [f'"{w.get("title")}" ({w.get("app_name")})' if w else f"window {fid}"]
+
     def covering(self, windows):
         """Other programs' windows on screen above the focused one and overlapping it (covered-window-guard)."""
+        if self.mac:
+            return self.mac_cover(windows)
         me = next((w for w in windows if w.get("window_id") == self.win["window_id"]), None)
         if not me or me.get("z_index") is None:
             return []
@@ -1413,7 +1664,7 @@ class Runner:
         """Bring the focused window to the top before input aimed at a screen point; fail, naming the window
         on top, when another program's window still covers it."""
         try:
-            self.cua.call("bring_to_front", dict(self.win))
+            self.front = self.cua.call("bring_to_front", dict(self.win))[0]
         except (CallBlocked, RuntimeError) as e:
             logger.warning("bring_to_front of %r before pointer input: %s", self.title, e)
         cover = self.covering(self.cua.call("list_windows", {})[0].get("windows", []))
@@ -1433,8 +1684,22 @@ class Runner:
 
     def check_front(self, title):
         """`into`: the topmost real window must be the named one (data-driven-import), so foreground input
-        cannot land elsewhere. Read from the window list only: the dialog's own UI Automation may not answer."""
+        cannot land elsewhere. Read from the window list only: the dialog's own UI Automation may not answer.
+        macOS (macos-target D5): the named window is raised and the driver's verdict decides; returns its ids,
+        which the input then goes to."""
         sc, _ = self.cua.call("list_windows", {})
+        if self.mac:
+            w = next((w for w in sc.get("windows", []) if w.get("title") == title and w.get("on_current_space", True)), None)
+            if not w:
+                raise AssertionError(f"into {title!r}: no window has that title; nothing was sent")
+            ids = {"pid": w["pid"], "window_id": w["window_id"]}
+            r, _ = self.cua.call("bring_to_front", ids)
+            if not front_ok(r, w["window_id"]):
+                fid = (r.get("observed") or {}).get("frontmost_ordinary_window_id")
+                top = next((x for x in sc.get("windows", []) if x.get("window_id") == fid), {})
+                raise AssertionError(f"into {title!r}: the window in front is \"{top.get('title')}\" "
+                                     f"({top.get('app_name')}); nothing was sent")
+            return ids
         wins = [w for w in sc.get("windows", []) if w.get("is_on_screen") and not w.get("minimized")
                 and (w.get("app_name"), None) not in SHELL_WINDOWS and (w.get("app_name"), w.get("title")) not in SHELL_WINDOWS]
         top = max(wins, key=lambda w: w.get("z_index") or -1, default=None)
@@ -1564,6 +1829,7 @@ class Runner:
         # record: "Ügyfél" → "Ügyfél - <name>"), is waited for (measured: a rehearsal failed on exactly that)
         want, start = title, time.time()
         end = start + float(want.get("timeout", FOCUS_WAIT) if isinstance(want, dict) else FOCUS_WAIT)
+        locked = None
         while True:
             sc, _ = self.cua.call("list_windows", {})
             title = want
@@ -1572,11 +1838,17 @@ class Runner:
                 title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
                               and w.get("is_on_screen", True)), pre)
             wins = [w for w in sc.get("windows", []) if w.get("title") == title]
+            wins.sort(key=lambda w: not w.get("on_current_space", True))      # macOS: this Space's window first
             w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
-            if w or time.time() > end:
+            if not w and self.mac and locked is None:
+                locked = screen_locked(self.cua.host)      # macos-target D9: every window list is empty; no wait
+            if w or locked or time.time() > end:
                 break
             time.sleep(0.4)
         if not w:
+            if locked:
+                raise RuntimeError(f"no window titled {title!r}: the screen is locked; unlock it "
+                                   "(docs/macos-setup.md step 5)")
             raise RuntimeError(f"no window titled {title!r} (waited {end - start:.0f} s)")
         self.win, self.title = {"pid": w["pid"], "window_id": w["window_id"]}, title
         self.baseline = {x.get("window_id") for x in sc.get("windows", []) if x.get("pid") == w["pid"]}
@@ -1586,7 +1858,7 @@ class Runner:
         self.dirty = True        # a new window: the next dialog check needs its own snapshot (measured)
         self.blocked_by = None
         try:
-            self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})
+            self.front = self.cua.call("bring_to_front", {"pid": w["pid"], "window_id": w["window_id"]})[0]
         except CallBlocked:
             # step-outcome-check: a modal window of the program holds it; its tree is still readable, so `look`
             # still works (it is what clears a stuck state), and an action names the window in front itself
@@ -1603,6 +1875,28 @@ class Runner:
             # runner-robustness D1: bring_to_front restores it at its previous frame
             logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
 
+    def mac_open_file(self, arg):
+        """A path into a macOS file panel (macos-target D5): the panel raised and verified in front, Cmd+Shift+G
+        ("Go to Folder"), the path typed, Return to go there, Return to open; done when the panel is gone."""
+        dialog = arg.get("dialog", "Open")
+        ids = self.check_front(dialog)
+        path = mac_path(Target(self.cua.host), arg["path"])
+        self.cua.call("hotkey", {**ids, "keys": ["cmd", "shift", "g"], "delivery_mode": "foreground"})
+        time.sleep(0.6)
+        self.cua.call("type_text", {**ids, "text": path, "delivery_mode": "foreground"})
+        self.cua.call("press_key", {**ids, "key": "return", "delivery_mode": "foreground"})
+        time.sleep(0.8)
+        self.cua.call("press_key", {**ids, "key": "return", "delivery_mode": "foreground"})
+        self.dirty = True
+        end = time.time() + 5.0
+        while time.time() < end:
+            if not any(w.get("window_id") == ids["window_id"] for w in self.cua.call("list_windows", {})[0].get("windows", [])):
+                logger.info("open_file: %r opened %s", dialog, path)
+                return
+            time.sleep(0.4)
+        raise OutcomeFailed(f"opening {arg['path']!r}: the file panel {dialog!r} is still open after Return; "
+                            "the file was not opened")
+
     def set_frame(self, frame):
         """Pin the window's frame (runner-robustness D2); a maximised window is restored first."""
         want = {"x": int(frame.get("x", 0)), "y": int(frame.get("y", 0)),
@@ -1610,7 +1904,7 @@ class Runner:
         try:
             self.cua.call("set_window_frame", {**self.win, **want})
         except RuntimeError as e:
-            if "maximized" not in str(e):
+            if "maximized" not in str(e) or self.mac:
                 raise
             logger.info("window is maximised; restoring it with Win+Down before setting %s", want)
             self.cua.call("hotkey", {**self.win, "keys": ["win", "down"], "delivery_mode": "foreground"})
@@ -1684,10 +1978,10 @@ class Runner:
         words = tree_words(text)
         if not words and w.get("is_on_screen", True) and w.get("bounds") and self.cua.host:
             # its UI Automation does not answer (a message box over a file dialog, measured): read the screen
-            # inside its frame with Windows' own OCR
+            # inside its frame with Windows' own OCR; on macOS the window itself (macos-target D4)
             b = w["bounds"]
             try:
-                for line in ocr_lines(self.cua.host):
+                for line in ocr_lines(self.cua.host, self.cua, w):
                     xy, _, said = line.partition(" ")
                     x, y = (float(v) for v in xy.split(","))
                     if b["x"] <= x < b["x"] + b["width"] and b["y"] <= y < b["y"] + b["height"] and said.strip():
@@ -1916,6 +2210,12 @@ class Runner:
             a = arg if isinstance(arg, dict) else {"text": arg}
             if "env" in a or "file" in a:
                 a = {**a, "text": secret_text(a)}    # read now, on the controller; the step keeps only the name
+            if a.get("into") and self.mac:       # macos-target D5: raised, verified in front, the driver types
+                ids = self.check_front(a["into"])
+                self.cua.call("type_text", {**ids, "text": a["text"], "delivery_mode": "foreground"},
+                              secret=a.get("secret", False))
+                self.dirty = True
+                return
             if a.get("into") and a.get("os"):    # the driver cannot type there at all: Windows' own input
                 os_input(self.cua.host, a["into"], sendkeys_text(a["text"]), self.cua.audit, a.get("secret", False),
                          a.get("at"))
@@ -1938,7 +2238,8 @@ class Runner:
                 before = self.signature()
             if mode == "paste":
                 os_clipboard(self.cua.host, a["text"], self.cua.audit)
-                self.cua.call("hotkey", {**self.win, "keys": ["ctrl", "v"], "delivery_mode": "foreground"})
+                self.cua.call("hotkey", {**self.win, "keys": ["cmd" if self.mac else "ctrl", "v"],
+                                         "delivery_mode": "foreground"})
             elif mode == "human" and self.mode == "video":
                 self.type_like_a_person(a["text"], float(a.get("typing_cps", self.typing_cps)), a.get("secret", False))
             else:
@@ -1950,7 +2251,10 @@ class Runner:
             self.cua.call("hotkey", {**self.win, "keys": list(arg), "delivery_mode": "foreground"})
         elif kind == "key":
             a = arg if isinstance(arg, dict) else {"key": arg}
-            if a.get("into") and a.get("os"):
+            if a.get("into") and self.mac:       # macos-target D5
+                ids = self.check_front(a["into"])
+                self.cua.call("press_key", {**ids, "key": a["key"], "delivery_mode": "foreground"})
+            elif a.get("into") and a.get("os"):
                 os_input(self.cua.host, a["into"], SENDKEYS_NAMES.get(a["key"].lower(), a["key"]), self.cua.audit,
                          at=a.get("at"))
             elif a.get("into"):
@@ -1966,6 +2270,8 @@ class Runner:
                 raise RuntimeError(f"set: {sel_name(arg)!r} not found (enabled)")
             self.cua.call("set_value", {**self.win, "element_token": e["element_token"], "value": str(arg["value"])},
                           secret=arg.get("secret", False))
+        elif kind == "open_file" and self.mac:
+            self.mac_open_file(arg)
         elif kind == "open_file":
             # the standard Windows file dialog through its own controls (data-driven-import): no UI Automation,
             # no keyboard focus, no locale-dependent accelerator
@@ -2042,7 +2348,11 @@ def caption_spans(captions, total):
             for i, (t, txt) in enumerate(captions) if txt]
 
 
-def video_filters(captions, spans, total):
+FFMPEG_MAC = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"   # keg-only; the plain formula has no drawtext (measured)
+FONT = {"windows": "C\\:/Windows/Fonts/segoeui.ttf", "macos": "/System/Library/Fonts/SFNS.ttf"}
+
+
+def video_filters(captions, spans, total, font=FONT["windows"]):
     """The ffmpeg filter chain: redaction boxes first, so a caption stays readable over one."""
     def when(t0, t1):
         if t1 is None:
@@ -2052,7 +2362,7 @@ def video_filters(captions, spans, total):
              for t0, t1, b in spans]
     for t, end, txt in caption_spans(captions, total):
         safe = txt.replace("\\", "\\\\").replace(":", "\\:").replace("'", "’").replace(",", "\\,")
-        parts.append(f"drawtext=fontfile='C\\:/Windows/Fonts/segoeui.ttf':text='{safe}':"
+        parts.append(f"drawtext=fontfile='{font}':text='{safe}':"
                      f"enable='between(t\\,{t:.2f}\\,{end:.2f})':x=(w-text_w)/2:y=h-110:"
                      f"fontsize=40:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=16")
     return ",\n".join(parts) or "null"
@@ -2061,14 +2371,21 @@ def video_filters(captions, spans, total):
 def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name):
     """Burn boxes and captions with the Windows host's ffmpeg (full build has drawtext; the local one may
     not). The filter goes in a script file, so no caption text passes through cmd quoting."""
-    flt = os.path.join(local_dir, "captions.ffscript")
-    open(flt, "w", encoding="utf-8").write(video_filters(captions, spans, total))
-    open(os.path.join(local_dir, f"{name}.srt"), "w", encoding="utf-8").write(srt(captions, total))
     t = Target(host)
+    flt = os.path.join(local_dir, "captions.ffscript")
+    open(flt, "w", encoding="utf-8").write(video_filters(captions, spans, total, FONT[t.os]))
+    open(os.path.join(local_dir, f"{name}.srt"), "w", encoding="utf-8").write(srt(captions, total))
     t.put(flt, f"{rec_rel}/captions.ffscript")
-    win = rec_rel.replace("/", "\\")
-    t.sh(f'cd /d %USERPROFILE%\\{win} && "{FFMPEG_WIN}" -y -loglevel error -i recording.mp4 '
-         f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
+    if t.mac:                                 # macos-target D7: Homebrew's ffmpeg-full on the Mac
+        r = t.sh(f'cd "$HOME/{rec_rel}" && {FFMPEG_MAC} -y -loglevel error -i recording.mp4 '
+                 f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4')
+        if r.returncode:
+            raise RuntimeError(f"ffmpeg on the Mac failed ({r.stderr.strip()[-200:] or r.returncode}); "
+                               "it needs `brew install ffmpeg-full` (docs/macos-setup.md step 6)")
+    else:
+        win = rec_rel.replace("/", "\\")
+        t.sh(f'cd /d %USERPROFILE%\\{win} && "{FFMPEG_WIN}" -y -loglevel error -i recording.mp4 '
+             f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
     out = os.path.join(local_dir, f"{name}.mp4")
     t.get(f"{rec_rel}/captioned.mp4", out)
     return out
@@ -2117,10 +2434,11 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     r.failure_lines = (amap or {}).get("failure_lines", True) is not False
     rec_dir = rec_rel = None
     if a.mode == "video":
-        # The daemon has no HOME on Windows, so the recording directory must be absolute.
-        profile = Target(a.host).sh("echo %USERPROFILE%").stdout.strip()
+        # The daemon has no HOME on Windows, so the recording directory must be absolute (macOS: the same rule).
+        tt = Target(a.host)
+        profile = tt.home()
         rec_rel = f"desktape/rec/{stamp}"
-        rec_dir = profile + "\\" + rec_rel.replace("/", "\\")
+        rec_dir = profile + "/" + rec_rel if tt.mac else profile + "\\" + rec_rel.replace("/", "\\")
     t0 = time.time(); failed = None; done = 0; repair = None; frame_set = False
     logger.info("tape %s, mode %s, %d steps, run dir %s", tape["name"], a.mode, len(plan), run_dir)
     try:
@@ -2149,8 +2467,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                     except Exception as e2:
                         logger.warning("no snapshot for the repair bundle: %s", e2)
                 repair = repair_bundle(os.path.join(run_dir, "repair.md"), tape["name"], i, tape["steps"][i],
-                                       s, entry, e, r.tree, (amap or {}).get("ignore"))
-                st = strike(lk, a.host, desc, e, run_dir, r.tree, (amap or {}).get("ignore")) if lk else {}
+                                       s, entry, e, r.tree, ignores(amap, a.host))
+                st = strike(lk, a.host, desc, e, run_dir, r.tree, ignores(amap, a.host)) if lk else {}
                 if st.get("state") not in ("stuck", "blocked"):    # step-outcome-check D5: they alerted already
                     alert(f"desktape {a.host}: run {tape['name']} stopped at {failed}")
                 break
@@ -2170,7 +2488,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                 logger.error("tape failed %s", failed)
                 repair = repair_bundle(os.path.join(run_dir, "repair.md"), tape["name"], len(plan),
                                        {"after": "the last step"}, {"after": "the last step"}, None, e, r.tree,
-                                       (amap or {}).get("ignore"))
+                                       ignores(amap, a.host))
     finally:
         total = time.time() - (r.t_rec or t0)
         if r.t_rec is not None:
@@ -2201,7 +2519,10 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             summary["video"] = burn_captions_remote(a.host, rec_rel, r.captions, spans, total, run_dir,
                                                     tape["name"])
             # The recordings show the whole screen: once both are here, none stays on the target.
-            Target(a.host).sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+            if Target(a.host).mac:
+                Target(a.host).sh(f'rm -rf "$HOME/{rec_rel}"')        # rec_rel is desktape/rec/<stamp>, never empty
+            else:
+                Target(a.host).sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
             logger.info("removed the target's copy of the recording: %s", rec_rel)
         except Exception as e:
             logger.warning("video post-processing failed, the recording stays on the target in %s: %s", rec_rel, e)
@@ -2251,19 +2572,23 @@ def cmd_look(a):
 def look(a):
     run_dir = new_run_dir("look", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
+    mac_ocr_out = None
     try:
         r = Runner(cua, "test")
         r.focus(window_title(a))
         r.snapshot()
+        if a.ocr and cua.mac:                    # macOS reads the window through this connection (macos-target D4)
+            mac_ocr_out = ocr_lines(a.host, cua, r.win)
     finally:
         cua.close()
     title = window_title(a)
     amap = load_map(a.map)
     state = os.path.join(RUNS, ".look", re.sub(r"[^\w.-]+", "_", title) + ("-text" if a.text else "") + ".txt")
-    lines, hidden, unchanged = look_lines(r.tree, None if a.all else (amap or {}).get("ignore"), full=a.full,
+    lines, hidden, unchanged = look_lines(r.tree, None if a.all else ignores(amap, a.host), full=a.full,
                                           texts=a.text, new=a.new, grep=a.grep, state=state)
     what = "tree lines" if a.full else "elements and dialogs" + (" and texts" if a.text else "")
-    extra = (f", {hidden} hidden by the map's ignore regions (--all shows them)" if hidden else "") + \
+    where = "the map's ignore regions and the menu bar" if cua.mac else "the map's ignore regions"
+    extra = (f", {hidden} hidden by {where} (--all shows them)" if hidden else "") + \
             (f", {unchanged} unchanged since the last look left out" if unchanged is not None else "")
     logger.debug("look %s: %d lines printed, %d hidden, unchanged %s", title, len(lines), hidden, unchanged)
     print(f"# {title}: {len(lines)} {what}{extra}")
@@ -2271,7 +2596,7 @@ def look(a):
         print(f"# not in front: {r.blocked_by}")
     print("\n".join(lines))
     if a.ocr:
-        o = ocr_lines(a.host)
+        o = mac_ocr_out if mac_ocr_out is not None else ocr_lines(a.host)
         print(f"\n# OCR: {len(o)} lines (x,y text)")
         print("\n".join(o))
     return 0
@@ -2342,12 +2667,12 @@ def act_step(a, step, amap, s, entry, deny, lk=None, tape=None):
             except Exception as e2:
                 logger.warning("no snapshot for the repair bundle: %s", e2)
         p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", 0, step, s, entry, e, r.tree,
-                          (amap or {}).get("ignore"))
+                          ignores(amap, a.host))
         print(f"FAILED: {e}\nrepair bundle: {p}")
         if isinstance(e, ProgramFailure):            # step-outcome-check D5: the program said so; say it now
             alert(f"desktape {a.host}: {e}")
         if lk:
-            st = strike(lk, a.host, desc, e, run_dir, r.tree, (amap or {}).get("ignore"))
+            st = strike(lk, a.host, desc, e, run_dir, r.tree, ignores(amap, a.host))
             if st["state"] == "stuck":
                 print(f"STUCK: {st['strikes']} failed steps in a row; report: {st['stuck']}")
         return 1
@@ -2401,14 +2726,60 @@ INSTALL = {
     "pyyaml": {"any": "uv run desktape.py …  (uv brings PyYAML; without uv: python -m pip install --user pyyaml)"},
     "ssh": {"win32": "Settings › System › Optional features › OpenSSH Client", "darwin": "(built in)",
             "linux": "sudo apt install openssh-client  (or your distribution's package)"},
-    "driver": {"win32": "the pinned Cua Driver install, in the desktop session, not over SSH: docs/windows-setup.md §2"},
-    "ffmpeg": {"win32": "winget install --id Gyan.FFmpeg -e"},
+    "driver": {"win32": "the pinned Cua Driver install, in the desktop session, not over SSH: docs/windows-setup.md §2",
+               "darwin": "bash macos/cua-setup.sh  (docs/macos-setup.md step 2)"},
+    "daemon": {"darwin": "open -n -g -a CuaDriver --args serve"},
+    "grants": {"darwin": "~/.local/bin/cua-driver permissions grant, by a person at the Mac (docs/macos-setup.md step 3)"},
+    "swiftc": {"darwin": "xcode-select --install"},
+    "ffmpeg": {"win32": "winget install --id Gyan.FFmpeg -e", "darwin": "brew install ffmpeg-full"},
 }
+MAC_APP = "/Applications/CuaDriver.app"
+DRIVER_VERSION = "0.34.1"
 
 
-def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.exists, platform=sys.platform):
-    """[(ok, piece, detail)] for what this machine needs (claude-plugin): the controller always; a Windows
-    target on this machine with `local`; recording with `video`."""
+def mac_permissions(driver=MAC_DRIVER):
+    """The daemon's own answer about its grants (`cua-driver permissions status --json`), or {} when it gives none."""
+    try:
+        r = subprocess.run([os.path.expanduser(driver), "permissions", "status", "--json"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=20)
+        return json.loads(r.stdout[r.stdout.index("{"):]) if "{" in r.stdout else {}
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        logger.warning("cua-driver permissions status did not answer: %s", e)
+        return {}
+
+
+def mac_app_version(app=MAC_APP):
+    import plistlib
+    try:
+        return plistlib.load(open(os.path.join(app, "Contents", "Info.plist"), "rb")).get("CFBundleShortVersionString")
+    except (OSError, ValueError) as e:
+        logger.debug("no version of %s: %s", app, e)
+        return None
+
+
+def doctor_mac(rows, video, which, exists, how, perms, version):
+    """macos-target: the driver app, its daemon, its grants, the OCR compiler and, for video, ffmpeg-full."""
+    v = version() if exists(MAC_APP) else None
+    rows.append((v == DRIVER_VERSION and exists(os.path.expanduser(MAC_DRIVER)), f"Cua Driver {DRIVER_VERSION}",
+                 f"{MAC_APP} {v}" if v == DRIVER_VERSION else
+                 (f"{MAC_APP} is {v}, not {DRIVER_VERSION}: " if v else "") + how("driver")))
+    p = perms() if v else {}
+    running = bool(p.get("daemon_running", "accessibility" in p))
+    rows.append((running, "driver daemon", "running" if running else how("daemon")))
+    if running:
+        for key, piece in (("accessibility", "Accessibility"), ("screen_recording", "Screen Recording")):
+            ok = p.get(key) is True
+            rows.append((ok, f"{piece} for CuaDriver", "granted" if ok else
+                         ("not known yet: " if p.get("status") == "unknown" else "not granted: ") + how("grants")))
+    rows.append((bool(which("swiftc")), "swiftc (OCR)", "found" if which("swiftc") else how("swiftc")))
+    if video:
+        rows.append((exists(FFMPEG_MAC), "ffmpeg-full (video)", "found" if exists(FFMPEG_MAC) else how("ffmpeg")))
+
+
+def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.exists, platform=sys.platform,
+                  perms=mac_permissions, version=mac_app_version):
+    """[(ok, piece, detail)] for what this machine needs (claude-plugin): the controller always; a Windows or
+    macOS target on this machine with `local`; recording with `video`."""
     osname = "win32" if platform.startswith("win") else "darwin" if platform == "darwin" else "linux"
     how = lambda piece: INSTALL[piece].get(osname) or INSTALL[piece].get("any") or "see docs/install.md"
     rows = [(sys.version_info >= (3, 9), "Python 3.9+", f"{sys.version.split()[0]}" if sys.version_info >= (3, 9)
@@ -2422,8 +2793,11 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
                  f"{off_path} (not on this shell's PATH: call it by that path, or open a new terminal)" if off_path
                  else how("uv")))
     if local:
-        if osname != "win32":
-            rows.append((False, "Windows", "--local drives the driver on this machine, which must be Windows"))
+        if osname == "darwin":
+            doctor_mac(rows, video, which, exists, how, perms, version)
+        elif osname != "win32":
+            rows.append((False, "Windows or macOS",
+                         "--local drives the driver on this machine, which must be Windows or macOS"))
         else:
             rows.append((exists(os.path.expandvars(EXE)), "Cua Driver 0.34.1", os.path.expandvars(EXE)
                          if exists(os.path.expandvars(EXE)) else how("driver")))
@@ -2476,7 +2850,90 @@ def cmd_unlock(a):
 
 # ---- offline selftest --------------------------------------------------------------------------
 
+def selftest_macos():
+    """macos-target: OS per target, the tree normalised, the menu bar hidden, the front verdict, doctor rows."""
+    # D3: lines measured on Claude Desktop, rewritten to the Windows vocabulary
+    raw = ('- [0] AXWindow "Claude" [actions=[raise]]\n'
+           '  - [2] AXWebArea "New session - Claude" [actions=[showmenu,scrolltovisible]]\n'
+           '    - [5] AXButton (Hide sidebar) [actions=[press,showmenu,scrolltovisible]]\n'
+           '    - AXButton (Back)\n'
+           '      - [4] AXStaticText = "Claude" [actions=[showmenu,scrolltovisible]]\n'
+           '    - [6] AXTextArea = "hi" (Write your prompt) [actions=[press,showmenu,scrolltovisible]]\n'
+           '    - [7] AXSheet "Save changes?"\n'
+           '  - [9] AXMenuBar\n'
+           '    - [10] AXMenuBarItem "File" [actions=[press]]\n'
+           '      - [11] AXMenuItem "Recent file.md" [id=itemSelected: actions=[cancel,press,pick]]')
+    tree = mac_tree(raw)
+    lines = tree.splitlines()
+    assert lines[0] == '- [0] Window "Claude"', lines[0]
+    assert lines[2] == '    - [5] Button "Hide sidebar" [actions=[press]]', lines[2]
+    assert lines[4] == '      - [4] Text "Claude" [value="Claude"]', lines[4]
+    assert lines[5] == '    - [6] Edit "Write your prompt" [value="hi" actions=[press]]', lines[5]
+    assert parse(lines[3]) == (4, "Button", "Back", "")
+    c = compact(tree)
+    assert 'Button "Hide sidebar" (press)' in c and 'Dialog "Save changes?"' in c, c
+    assert not any("WebArea" in l or l.startswith("Text") for l in c), c        # non-actions are not actions
+    TARGET_OS["me@mac"] = "macos"
+    kept, hidden = apply_ignore(tree.splitlines(), ignores(None, "me@mac"))
+    assert hidden == 2 and not any("Recent file.md" in l for l in kept), (hidden, kept)   # the menu bar is hidden
+    assert ignores(None, "user@box") == []                                                # … only on macOS
+    assert mac_element({"role": "AXStaticText", "value": "x"}) == {"role": "Text", "value": "x", "label": "x"}
+    # D1, D2: a macOS target's driver connection; a declared OS; a bad one refused
+    argv, env = Target("me@mac").mcp()
+    assert argv[-1].endswith("~/.local/bin/cua-driver mcp") and "CUA_DRIVER_RS_TELEMETRY_ENABLED=false" in argv[-1], argv
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "t.yaml")
+        open(p, "w").write("targets:\n  m: {host: m.lan, os: macos}\n  w: {host: w.lan}\n")
+        assert choose_target(None, "m", {}, load_targets(p)) == ("m.lan", "m") and TARGET_OS["m.lan"] == "macos"
+        open(p, "w").write("targets:\n  m: {host: m.lan, os: linux}\n")
+        try:
+            load_targets(p); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "os 'linux'" in str(e), e
+    HOMES["me@mac"] = "/Users/me"
+    assert mac_path(Target("me@mac"), "~/out/a.xlsx") == "/Users/me/out/a.xlsx"
+    assert mac_path(Target("me@mac"), "$HOME/a") == "/Users/me/a"
+    # D8: on macOS the cover verdict is bring_to_front's own answer, not z_index
+    class MacCua:
+        mac, host = True, "me@mac"
+    r = Runner(MacCua(), "test")
+    r.win = {"pid": 1, "window_id": 10}
+    wins = [{"window_id": 10, "pid": 1, "z_index": 1, "title": "Claude"},
+            {"window_id": 20, "pid": 2, "z_index": 99, "title": "Notes", "app_name": "Notes", "is_on_screen": True}]
+    r.front = {"observed": {"frontmost_ordinary_window_id": 10}}
+    assert r.covering(wins) == [], r.covering(wins)                     # higher z_index, but Claude is in front
+    r.front = {"observed": {"frontmost_ordinary_window_id": 20}}
+    assert r.covering(wins) == ['"Notes" (Notes)'], r.covering(wins)
+    assert front_ok({"exact_window_effect": {"verified": True}}, 10) and not front_ok({}, 10)
+    # D9: a locked screen is named
+    real = globals()["screen_locked"]
+    globals()["screen_locked"] = lambda host: True
+    class Empty(MacCua):
+        def call(self, tool, args, **kw):
+            return {"windows": []}, ""
+    try:
+        Runner(Empty(), "test").focus("Claude"); raise AssertionError("expected RuntimeError")
+    except RuntimeError as e:
+        assert "the screen is locked" in str(e), e
+    finally:
+        globals()["screen_locked"] = real
+    # doctor on a Mac
+    perms = lambda: {"daemon_running": True, "accessibility": True, "screen_recording": False}
+    rows = doctor_report(local=True, video=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: "ffmpeg-full" not in p,
+                         platform="darwin", perms=perms, version=lambda: DRIVER_VERSION)
+    bad = {p: d for ok, p, d in rows if not ok}
+    assert set(bad) == {"Screen Recording for CuaDriver", "ffmpeg-full (video)"}, bad
+    assert "permissions grant" in bad["Screen Recording for CuaDriver"] and bad["ffmpeg-full (video)"] == "brew install ffmpeg-full"
+    rows = doctor_report(local=True, which=lambda x: None, exists=lambda p: False, platform="darwin",
+                         perms=perms, version=lambda: None)
+    bad = {p: d for ok, p, d in rows if not ok}
+    assert "macos/cua-setup.sh" in bad["Cua Driver 0.34.1"] and "driver daemon" in bad and "swiftc (OCR)" in bad, bad
+    assert "SFNS.ttf" in video_filters([(0.0, "a")], [], 2.0, FONT["macos"])
+
+
 def selftest():
+    # offline: a made-up host is Windows unless a test declares it (no `uname` over SSH)
+    globals()["target_os"] = lambda host, opts=None: local_os() if host == "local" else TARGET_OS.get(host, "windows")
     amap = {"app": "X", "window": "Win", "elements": {"a.b": {"label": "Add", "role": "Button"}}}
     assert resolve({"click": "@a.b"}, amap) == ({"click": {"label": "Add", "role": "Button"}}, "a.b")
     assert resolve({"focus": "@window"}, amap) == ({"focus": "Win"}, "window")
@@ -3173,13 +3630,14 @@ def selftest():
     assert set(bad) == {"uv", "Cua Driver 0.34.1", "ffmpeg (video)"}, bad
     assert bad["uv"].startswith("winget install --id astral-sh.uv") and "windows-setup.md" in bad["Cua Driver 0.34.1"]
     rows = doctor_report(local=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: True, platform="linux")
-    assert [p for ok, p, _ in rows if not ok] == ["Windows"], rows
+    assert [p for ok, p, _ in rows if not ok] == ["Windows or macOS"], rows
     rows = doctor_report(which=lambda x: "/bin/" + x, platform="darwin")
     assert all(ok for ok, _, _ in rows) and {p for _, p, _ in rows} == {"Python 3.9+", "PyYAML", "uv", "ssh client"}, rows
     assert doctor_report(which=lambda x: None, exists=lambda p: False, platform="darwin")[2][2] == "brew install uv"
     ok, _, said = doctor_report(which=lambda x: None, exists=lambda p: p.endswith(os.path.join(".local", "bin", "uv.exe")),
                                 platform="win32")[2]
     assert ok and "not on this shell's PATH" in said, said
+    selftest_macos()
     print("selftest ok")
     return 0
 
