@@ -105,6 +105,18 @@ Measured: 2026-10-25, macOS 26.4, Cua Driver 0.34.1.
 
 Measured: 2026-10-25, macOS 26.4.
 
+## The shell: zsh turns a word starting with "=" into a command lookup
+
+macOS's default shell is zsh, and its EQUALS option is on: a word that starts with `=` is replaced by the path
+of the command it names. So `echo =====` fails with "==== not found", and an assistant that prints a separator
+line between two `cat`s gets a "1 failed" mark on a command whose real work succeeded.
+
+- Add `setopt no_equals` to `~/.zshenv`. Every zsh reads that file, including the non-interactive ones an
+  assistant's shell tool starts. Check it: `zsh -c 'echo ====='` prints `=====`.
+- In your own tapes and scripts, quote such words (`echo '====='`) instead of relying on the setting.
+
+Measured: 2026-10-25, macOS 26.4, zsh 5.9, Claude Code's shell tool in Claude Desktop.
+
 ## Recording the screen
 
 - The driver's native recorder writes H.264 at the screen's size with a variable frame rate: few frames on a
