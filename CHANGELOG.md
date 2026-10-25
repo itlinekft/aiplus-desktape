@@ -12,6 +12,53 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   `claude plugin install aiplus-desktape@aiplus-plugins`). desktape's own marketplace is unaffected.
 - The plugin's homepage is https://www.itline.hu/ai-plus/desktape/.
 
+## [0.4.3] - 2026-10-25
+
+### Fixed
+- A last step whose click closes the tape's own window (a "Run" that starts an installer) no longer crashes the
+  run after it: the check for unplanned dialogs skips the closed window, and the run ends with its summary.
+- Windows' shell host (`ShellExperienceHost.exe`), listed over the desktop on some Windows 11 builds, no longer
+  counts as covering a tape's window.
+
+## [0.4.2] - 2026-10-25
+
+### Fixed
+- The settle-wait after an action no longer fails a step whose click closed its own window (a form's
+  save-and-close).
+
+## [0.4.1] - 2026-10-25
+
+### Fixed
+- `check_table` reads the grid that is on screen (a program may keep a closed list's grid in its tree, off
+  screen), aims its scroll at it, and pages up before paging down, so a grid left at its last page is read whole.
+
+## [0.4.0] - 2026-10-25
+
+### Added
+- Settle-wait: after every action the runner waits until the window stops changing (at most 5 s), and element
+  waits default to the tape's `patience:` (30 s).
+- A window with no button but a close control (an install toast) is logged as information, not an unplanned
+  dialog.
+- A `label` or `field` ending in `*` matches by its start („Ügyfelek listája*” for a tab with a row count).
+- `run --repair model` (opt in): a selector that matches nothing is given once to a small model; desktape uses
+  its answer only if it matches exactly one element, then writes the fix into the map. Without the flag no model
+  is called.
+
+## [0.3.1] - 2026-10-25
+
+### Added
+- `click` takes a `timeout:`: how long it waits for its target.
+
+## [0.3.0] - 2026-10-25
+
+### Changed
+- The plugin is AI+ desktape, id `aiplus-desktape`; the repository is `itlinekft/aiplus-desktape`. The command and
+  the skill stay `desktape`.
+
+### Added
+- A tape's `answers:`: prompts (a permission question, a confirmation) answered whenever they appear while the
+  runner waits, not only at a planned step.
+
 ## [0.2.1] - 2026-10-25
 
 ### Changed
