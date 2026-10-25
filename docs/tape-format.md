@@ -12,6 +12,7 @@ map: claude-desktop-win               # optional: maps/<name>.yaml, or a path
 video_pause: 1.2                      # optional: seconds after each step in video mode (default 1.2)
 typing: fast                          # optional: fast (default), human (a person's pace, video mode only) or paste
 typing_cps: 7                         # optional: characters a second for `human` (default 12)
+cursor: agent                         # optional: agent (default) or person (macOS, video mode only; see below)
 window: { width: 1280, height: 800 }  # optional: pin the window's frame (x, y default 0) after the first focus
 redact:                               # optional: boxes covered for the whole video, in screen pixels
   - { x: 0, y: 282, w: 286, h: 750 }
@@ -385,3 +386,21 @@ folder, deletes the target's copy, and records `recording_started_at` (UTC, to t
 `summary.json`, as a video run's summary does too, so the edit lines the two videos up. On macOS the
 recorder writes a frame when the screen changes (2.8 frames a second on a still screen, measured): normalise
 the frame rate in the edit.
+
+## A person's pointer: `cursor: person` (macOS)
+
+By default the driver draws its agent cursor, which glides to each element it acts on; on the Windows box
+that is desktape's visible signature in a video. When a macOS screen plays the person at the computer, the
+tape says so:
+
+```yaml
+cursor: person            # the agent cursor hidden; the real pointer glides to each element before the click
+cursor_glide_ms: 500      # optional: how long each glide takes (default 500)
+typing: human
+typing_cps: 7
+```
+
+In a video run the agent cursor is hidden for that run's own session only, and before each click the real
+pointer moves smoothly to the element's centre (a small helper, `macos/desktape-pointer.swift`, compiled on
+the Mac once). The click itself is unchanged, and a glide that fails is a warning, not a failure. In test
+mode the setting changes nothing; on a Windows target the run stops before its first step.

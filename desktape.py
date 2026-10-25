@@ -38,7 +38,8 @@ EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msv
 ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_text", "press_key",
            "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state",
            "set_window_frame",   # geometry only, for a tape's `window:` (runner-robustness D2)
-           "set_value"}          # a field's value, like typing, where a control hides its items (data-driven-import D1)
+           "set_value",          # a field's value, like typing, where a control hides its items (data-driven-import D1)
+           "set_agent_cursor_enabled"}   # only to hide the agent cursor for a `cursor: person` video (person-cursor D1)
 DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
@@ -347,6 +348,8 @@ class Cua:
         mac = getattr(self, "mac", False)     # a test may build the object without __init__
         if mac and tool == "get_window_state" and args.get("include_accessibility_tree") is not False:
             args = {"include_screenshot": False, **args}   # macOS sends a screenshot unless told not to; a tree read needs none
+        if getattr(self, "session", None):    # person-cursor D1: the run's own session, which the hidden cursor belongs to
+            args = {**args, "session": self.session}
         logged = {**args, **{k: "<redacted>" for k in ("text", "value") if k in args}} if secret else args
         try:
             r = self._rpc("tools/call", {"name": tool, "arguments": args}, timeout=timeout or deadline(tool, args))
@@ -392,6 +395,14 @@ class Cua:
         self.err.close()
         self._connect(self.host)
         logger.info("new driver connection to %s (the hung one, pid %s, was terminated)", self.host, old.pid)
+        if getattr(self, "session", None):    # person-cursor D1: an ended session's label cannot be reused
+            self.hide_agent_cursor()
+
+    def hide_agent_cursor(self):
+        """person-cursor D1: a fresh session label for every later call, and that session's agent cursor hidden."""
+        self.session = f"desktape-{os.getpid()}-{int(time.time() * 1000)}"
+        self.call("set_agent_cursor_enabled", {"enabled": False})
+        logger.info("agent cursor hidden for session %s on %s", self.session, self.host)
 
     def close(self):
         self.p.stdin.close(); self.p.terminate(); self.audit.close(); self.err.close()
@@ -1237,6 +1248,33 @@ def compact(tree_text, texts=False):
 
 
 MAC_OCR_SRC = os.path.join(HERE, "macos", "desktape-ocr.swift")
+MAC_POINTER_SRC = os.path.join(HERE, "macos", "desktape-pointer.swift")
+
+
+def mac_helper(t, src):
+    """A Swift helper compiled on the target once per source version; returns its path under $HOME."""
+    import hashlib
+    name = os.path.splitext(os.path.basename(src))[0]
+    exe = f"desktape/bin/{name}-" + hashlib.sha256(open(src, "rb").read()).hexdigest()[:12]
+    t.mkdir("desktape/bin")
+    if t.sh(f'test -x "$HOME/{exe}" && echo yes').stdout.strip() != "yes":
+        t.put(src, f"desktape/{name}.swift")
+        r = t.sh(f'swiftc -O -o "$HOME/{exe}" "$HOME/desktape/{name}.swift"')
+        if r.returncode:
+            raise RuntimeError(f"compiling {name} failed (Xcode or the Command Line Tools: xcode-select --install): "
+                               f"{r.stderr.strip()[-300:]}")
+        logger.info("compiled %s on %s: ~/%s", name, t.host, exe)
+    return exe
+
+
+def pointer_glide(host, x, y, ms):
+    """person-cursor D2: the real pointer to (x, y) screen points in `ms`, smoothly."""
+    t = Target(host)
+    exe = mac_helper(t, MAC_POINTER_SRC)
+    r = t.sh(f'"$HOME/{exe}" {float(x):.0f} {float(y):.0f} {int(ms)}')
+    if r.returncode:
+        raise RuntimeError(r.stderr.strip()[-300:] or f"the pointer helper exited {r.returncode}")
+    return r.stdout.strip()
 
 
 def mac_ocr(cua, win):
@@ -1249,16 +1287,7 @@ def mac_ocr(cua, win):
     img = next((c for c in cua.last.get("content", []) if c.get("type") == "image"), None)
     if not img:
         raise RuntimeError("OCR: the driver returned no screenshot of the window")
-    import hashlib
-    exe = "desktape/bin/desktape-ocr-" + hashlib.sha256(open(MAC_OCR_SRC, "rb").read()).hexdigest()[:12]
-    t.mkdir("desktape/bin")
-    if t.sh(f'test -x "$HOME/{exe}" && echo yes').stdout.strip() != "yes":   # compiled once per source version
-        t.put(MAC_OCR_SRC, "desktape/desktape-ocr.swift")
-        r = t.sh(f'swiftc -O -o "$HOME/{exe}" "$HOME/desktape/desktape-ocr.swift"')
-        if r.returncode:
-            raise RuntimeError("OCR: compiling the Vision helper failed (Xcode or the Command Line Tools: "
-                               f"xcode-select --install): {r.stderr.strip()[-300:]}")
-        logger.info("compiled the OCR helper on %s: ~/%s", cua.host, exe)
+    exe = mac_helper(t, MAC_OCR_SRC)                     # compiled once per source version
     with tempfile.TemporaryDirectory() as d:
         shot = os.path.join(d, "ocr-shot.png")
         open(shot, "wb").write(base64.b64decode(img["data"]))
@@ -1655,6 +1684,7 @@ class Runner:
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
         self.typing, self.typing_cps = "fast", 12.0   # file-outcome-and-typing: the tape's typing mode
+        self.cursor, self.glide_ms = "agent", 500       # person-cursor: the tape's cursor
         self.front = None        # macOS: the driver's answer to the last bring_to_front (macos-target D8)
         self.tidied = None       # scene-tidy: what the last `tidy` closed and left open
 
@@ -1825,6 +1855,17 @@ class Runner:
         sc, _ = self.cua.call("list_windows", {})
         return {(w.get("window_id"), w.get("title"), w.get("is_on_screen"), w.get("minimized"))
                 for w in sc.get("windows", []) if w.get("pid") == self.win["pid"]}
+
+    def glide_to(self, e, what):
+        """person-cursor D2: the real pointer to the element's centre first; the click does not depend on it."""
+        f = e.get("frame") or {}
+        if not f:
+            logger.warning("%s: no frame, so the pointer stays where it is", what)
+            return
+        try:
+            pointer_glide(self.cua.host, f["x"] + f["w"] / 2, f["y"] + f["h"] / 2, self.glide_ms)
+        except Exception as ex:
+            logger.warning("%s: the pointer glide failed (%s); clicking anyway", what, ex)
 
     def type_like_a_person(self, text, cps, secret=False):
         """At about `cps` characters a second by the clock (file-outcome-and-typing D2): each call sends what is
@@ -2377,6 +2418,8 @@ class Runner:
             if a.get("foreground"):              # data-driven-import: for controls that drop posted input
                 args["delivery_mode"] = "foreground"
             what = f'click on {e.get("role")} "{label}"'
+            if self.cursor == "person" and self.mode == "video":
+                self.glide_to(e, what)
             before = self.signature()
             try:
                 self.cua.call("click", args)
@@ -2675,6 +2718,15 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     r.deny, r.expected = deny, expected_dialogs(tape, amap, plan)
     r.planned = r.expected                            # step-outcome-check D4: the same names, right after a step
     r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
+    r.cursor, r.glide_ms = tape.get("cursor", "agent"), int(tape.get("cursor_glide_ms", 500))
+    bad = (f"tape: cursor is agent or person, not {r.cursor!r}" if r.cursor not in ("agent", "person") else
+           "tape: cursor: person is for macOS targets; on Windows the agent cursor is desktape's signature in the "
+           "video (person-cursor D3)" if r.cursor == "person" and not getattr(cua, "mac", False) else None)
+    if bad:
+        cua.close()
+        raise ValueError(bad)
+    if r.cursor == "person" and a.mode == "video":
+        cua.hide_agent_cursor()
     r.failure_words += (amap or {}).get("failure_words") or []
     r.failure_ignore = (amap or {}).get("failure_ignore") or []
     r.failure_lines = (amap or {}).get("failure_lines", True) is not False
@@ -3359,6 +3411,43 @@ def cmd_unlock(a):
 
 
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_person_cursor():
+    """person-cursor: one session label on every call, the agent cursor hidden, a glide to the centre first."""
+    class PC:
+        host, mac, audit, last = "me@mac", True, None, {}
+        def __init__(self):
+            self.sent, self.p = [], None
+        def _rpc(self, method, params, timeout=None):
+            self.sent.append((params["name"], params["arguments"]))
+            return {"result": {"content": [{"type": "text", "text": "ok"}], "structuredContent": {}}}
+    pc = PC(); pc.audit = open(os.devnull, "w")
+    Cua.call(pc, "list_windows", {})
+    assert pc.sent[-1] == ("list_windows", {}), pc.sent                      # no label: nothing added
+    pc.call = lambda tool, args, **kw: Cua.call(pc, tool, args, **kw)
+    Cua.hide_agent_cursor(pc)
+    label = pc.session
+    assert pc.sent[-1] == ("set_agent_cursor_enabled", {"enabled": False, "session": label}), pc.sent
+    Cua.call(pc, "click", {"pid": 1, "window_id": 2, "element_token": "t"})
+    assert pc.sent[-1][1]["session"] == label and label.startswith("desktape-")
+    glides, real = [], globals()["pointer_glide"]
+    try:
+        globals()["pointer_glide"] = lambda host, x, y, ms: glides.append((x, y, ms))
+        r = Runner(pc, "video"); r.cursor, r.glide_ms = "person", 450
+        r.glide_to({"frame": {"x": 8.0, "y": 113.0, "w": 337.0, "h": 32.0}}, "click")
+        assert glides == [(176.5, 129.0, 450)], glides
+        def broken(*a):
+            raise RuntimeError("no helper")
+        globals()["pointer_glide"] = broken
+        level = logger.level; logger.setLevel(logging.ERROR)
+        r.glide_to({"frame": {"x": 0, "y": 0, "w": 2, "h": 2}}, "click")          # D2: a warning, never a failure
+        r.glide_to({}, "click")
+        logger.setLevel(level)
+    finally:
+        globals()["pointer_glide"] = real
+    src = open(MAC_POINTER_SRC, encoding="utf-8").read()
+    assert "mouseMoved" in src and src.isascii()
+
 
 def selftest_pairing():
     """target-pairing: LAN addresses only, the line, the profile round trip, removal by comment, unpair's refusal."""
@@ -4356,6 +4445,7 @@ def selftest():
     selftest_tidy()
     selftest_record()
     selftest_pairing()
+    selftest_person_cursor()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
