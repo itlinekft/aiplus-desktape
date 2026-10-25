@@ -29,6 +29,21 @@ open.
 - **`uv` cannot start its managed Python from an SSH logon** (os error 448: its folder sits behind a junction
   the SSH logon cannot follow). Run desktape commands that need it in the desktop session; plain PowerShell
   over SSH is not affected. Measured: 2026-10-25.
+- **`timeout /t N` fails over SSH** ("Input redirection is not supported"). Wait on the controller side, or use
+  `ping -n N 127.0.0.1 >nul` inside a script. Measured on two machines: 2026-10-25.
+- **The SSH session sees a different screen.** `[System.Windows.Forms.Screen]::AllScreens` reports 1024x768 there
+  while the desktop is 1920x1080. Read the desktop's size through the driver (the bounds of "Program Manager").
+  Measured: 2026-10-25.
+- **Quoting PowerShell inside `ssh … 'powershell -Command "…"'` breaks** on `''`, `@{n=…}` and `-like '…'`
+  (cmd strips the quotes). Copy a `.ps1` file over and run it with `-File` instead.
+
+## Settings a script cannot change
+
+- **The taskbar's Widgets (weather and news) button.** Both `HKCU\…\Explorer\Advanced\TaskbarDa` and the policy
+  `HKLM\SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` answer "Access denied" when written over SSH, also
+  for an administrator (Windows 11, build 26300). What works: open `ms-settings:taskbar` in the desktop session (a
+  one-off `/it` task running `explorer.exe ms-settings:taskbar`) and click its Widgets toggle; `TaskbarDa` then
+  reads 0. Change it only with the machine owner's yes: it is a Windows setting. Measured: 2026-10-25.
 
 ## Closing windows
 
