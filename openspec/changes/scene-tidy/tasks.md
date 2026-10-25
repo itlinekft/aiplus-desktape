@@ -5,6 +5,9 @@
 - [x] 1.2 A question or a window that stays fails the step, quoting it; never force [REQ: a-tape-can-clear-the-screen-of-other-programs]
 - [x] 1.3 `desktape.py tidy --keep NAME …` [REQ: a-tape-can-clear-the-screen-of-other-programs]
 
+- [x] 1.4 Guards: the driver's process tree, remote access, minimised windows; reported, never closed [REQ: tidy-never-closes-the-driver-s-host-remote-access-or-a-minimised-window]
+- [ ] 1.5 Measure the guards on the Windows box (by the session that drives it) [REQ: tidy-never-closes-the-driver-s-host-remote-access-or-a-minimised-window]
+
 ## 2. Tests and docs
 - [x] 2.1 Selftest: the keep list, the system list, a program that quits, a program that asks [REQ: a-tape-can-clear-the-screen-of-other-programs]
 - [ ] 2.2 Measure on the Mac mini, and add `tidy` to the macOS tour tape (2026-10-25 09:37: `tidy --keep Claude --keep Terminal` quit Audio MIDI Setup in 1.3 s and reported the stray permission prompt; the tape has the step; the "asks" path is measured by the selftest only, not yet live) [REQ: a-tape-can-clear-the-screen-of-other-programs]

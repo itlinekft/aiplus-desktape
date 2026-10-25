@@ -24,3 +24,14 @@ and SHALL NOT answer a question the program asks.
 
 - **WHEN** the screen shows the Finder desktop, the Dock and a macOS permission prompt
 - **THEN** none of them is closed, and the prompt is reported as left open
+
+### Requirement: Tidy never closes the driver's host, remote access, or a minimised window
+
+A `tidy` step SHALL NOT close a window of a process in the driver's process tree, a remote-access program,
+or a minimised window (on macOS, a window that is not on screen; its program SHALL NOT be quit). It SHALL
+list each of them with the reason. When the driver's process tree cannot be read, it SHALL close nothing.
+
+#### Scenario: the terminal that hosts the driver
+
+- **WHEN** a minimised terminal window on Windows is the ancestor of `cua-driver serve`, and RustDesk is open
+- **THEN** `tidy` closes neither, and reports both with "it hosts the driver" and "remote access"

@@ -1474,7 +1474,29 @@ SYSTEM_APPS = {"Finder", "Dock", "SystemUIServer", "Control Center", "Notificati
                "explorer.exe", "cua-driver.exe", "TextInputHost.exe", "ShellExperienceHost.exe",
                "StartMenuExperienceHost.exe", "SearchHost.exe"}
 PROMPT_APPS = {"universalAccessAuthWarn", "UserNotificationCenter", "CoreServicesUIAgent", "SecurityAgent"}
+# scene-tidy D4: remote-access programs carry a person's own session to the machine; never closed
+REMOTE_APPS = {"rustdesk", "teamviewer", "anydesk", "screen sharing", "mstsc", "parsec", "splashtop"}
 TIDY_WAIT = 8.0
+
+
+def driver_pids(host):
+    """The driver's processes and every ancestor (scene-tidy D4): a window in that tree hosts the driver, and
+    closing it stops the driver (measured on Windows: a terminal that hosted `cua-driver serve`). Raises when
+    the tree cannot be read, so `tidy` closes nothing rather than guess."""
+    t = Target(host)
+    if t.mac:
+        out = t.sh("for p in $(pgrep -f 'cua-driver'); do while [ \"${p:-1}\" -gt 1 ]; do echo $p; "
+                   "p=$(ps -o ppid= -p $p | tr -d ' '); done; done").stdout
+    else:
+        ps = ("$a=Get-CimInstance Win32_Process|Select ProcessId,ParentProcessId,Name;$s=@{};"
+              "foreach($p in ($a|?{$_.Name -like 'cua-driver*'})){$c=$p;while($c -and -not $s[$c.ProcessId]){"
+              "$s[$c.ProcessId]=1;$c=$a|?{$_.ProcessId -eq $c.ParentProcessId}|Select -First 1}};'ok '+($s.Keys -join ' ')")
+        out = t.sh(f"powershell -NoProfile -EncodedCommand {base64.b64encode(ps.encode('utf-16-le')).decode()}").stdout
+        if not out.strip().startswith("ok"):
+            raise RuntimeError(f"tidy: could not read the target's process tree ({out.strip()[:200] or 'no answer'}); "
+                               "nothing was closed")
+        out = out.strip()[2:]
+    return {int(x) for x in out.split() if x.isdigit()}
 
 
 def kept(w, keep):
@@ -1912,26 +1934,35 @@ class Runner:
         keep = [str(k) for k in (a.get("keep") or [])]
         timeout = float(a.get("timeout", TIDY_WAIT))
         mine = own_pids() if self.cua.host == "local" else set()
+        host_of_driver = driver_pids(self.cua.host)      # D4: read first; unreadable means nothing is closed
         wins = self.cua.call("list_windows", {})[0].get("windows", [])
         keep_pids = {w.get("pid") for w in wins if kept(w, keep)} | mine
         self.tidied = {"closed": [], "left": []}
         targets = []                       # (program, pid, the windows to close)
+        hidden = set()                     # macOS: programs with a window off screen (minimised, another Space)
         for w in wins:
             app = w.get("app_name") or ""
+            name = app.lower().removesuffix(".exe")
             if not w.get("title") or w.get("pid") in keep_pids or (app, None) in SHELL_WINDOWS \
-                    or (app, w.get("title")) in SHELL_WINDOWS:
+                    or (app, w.get("title")) in SHELL_WINDOWS or app in SYSTEM_APPS:
                 continue
-            if app in PROMPT_APPS:
-                if w.get("is_on_screen"):
-                    self.tidied["left"].append(f'"{w["title"]}" ({app})')
-                continue
-            if app in SYSTEM_APPS:
+            why = ("a system prompt" if app in PROMPT_APPS else "it hosts the driver" if w.get("pid") in host_of_driver
+                   else "remote access" if any(name.startswith(r) for r in REMOTE_APPS)
+                   else "minimised" if w.get("minimized") or (self.mac and w.get("is_on_screen") is False) else None)
+            if why:                        # D4: never closed, only reported
+                if why != "a system prompt" or w.get("is_on_screen"):
+                    self.tidied["left"].append(f'"{w["title"]}" ({app}: {why})')
+                if self.mac and why == "minimised":
+                    hidden.add(w.get("pid"))          # Cmd+Q would take the hidden window with it
                 continue
             hit = next((t for t in targets if t[1] == w["pid"]), None)   # per program: one Cmd+Q on macOS
             if hit:
                 hit[2].append(w)
                 continue
             targets.append((app, w["pid"], [w]))
+        for app, pid, ws in [t for t in targets if t[1] in hidden]:
+            self.tidied["left"] += [f'"{w["title"]}" ({app}: it also has a minimised window)' for w in ws]
+        targets = [t for t in targets if t[1] not in hidden]
         for app, pid, ws in targets:
             if self.mac:
                 self.close_program(app, pid, max(ws, key=lambda x: bool(x.get("is_on_screen"))), ["cmd", "q"], timeout, False)
@@ -1940,7 +1971,7 @@ class Runner:
                     self.close_program(app, pid, w, ["alt", "f4"], timeout, True)
             self.tidied["closed"].append(app)
         if self.tidied["left"]:
-            logger.warning("tidy: left open (the system's own prompts): %s", ", ".join(self.tidied["left"]))
+            logger.warning("tidy: left open, never closed by tidy: %s", ", ".join(self.tidied["left"]))
         logger.info("tidy: closed %s; kept %s", ", ".join(self.tidied["closed"]) or "nothing",
                     ", ".join(keep) or "nothing")
 
@@ -2806,7 +2837,7 @@ def cmd_tidy(a):
         finally:
             cua.close()
         print(f"closed: {', '.join(r.tidied['closed']) or 'nothing'}" +
-              (f"\nleft open (the system's own prompts): {', '.join(r.tidied['left'])}" if r.tidied["left"] else ""))
+              (f"\nleft open (never closed by tidy): {', '.join(r.tidied['left'])}" if r.tidied["left"] else ""))
         return 0
 
 
@@ -2992,29 +3023,44 @@ def selftest_tidy():
                 return {}, ('- Window "Doc"\n  - [1] Window "Do you want to keep this document?"\n'
                             '    - [2] Button "Don\'t Save" [actions=[press]]\n    - [3] Button "Save" [actions=[press]]')
             return {}, ""
-    w = lambda pid, wid, app, title, on=True: {"pid": pid, "window_id": wid, "app_name": app, "title": title,
-                                               "is_on_screen": on, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}
-    mac = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(2, 20, "Notes", "Notes"), w(2, 21, "Notes", "Shopping", False),
-                         w(3, 30, "Finder", "Desktop"), w(4, 40, "universalAccessAuthWarn", "Screen Recording"),
-                         w(5, 50, "Cua Driver", ""), w(6, 60, "Terminal", "")])
-    r = Runner(mac, "test")
-    level = logger.level; logger.setLevel(logging.ERROR)      # the "left open" warning is expected
-    r.tidy({"keep": ["Claude"], "timeout": 1})
-    logger.setLevel(level)
-    assert r.tidied == {"closed": ["Notes"], "left": ['"Screen Recording" (universalAccessAuthWarn)']}, r.tidied
-    assert mac.keys == [(2, ("cmd", "q"))], mac.keys                  # one Cmd+Q for the program, not per window
-    asks = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(7, 70, "TextEdit", "Doc")], asks=[7])
+    w = lambda pid, wid, app, title, on=True, mini=None: {"pid": pid, "window_id": wid, "app_name": app, "title": title,
+        "is_on_screen": on, "minimized": mini, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}
+    real, level = globals()["driver_pids"], logger.level
+    logger.setLevel(logging.ERROR)                             # the "left open" warnings are expected
     try:
-        Runner(asks, "test").tidy({"keep": ["Claude"], "timeout": 0.5}); raise AssertionError("expected OutcomeFailed")
-    except OutcomeFailed as e:
-        assert "TextEdit did not close" in str(e) and "Don't Save" in str(e) and "nothing was answered" in str(e), e
-    assert asks.keys == [(7, ("cmd", "q"))]                           # nothing answered: no second key, no click
-    win = TidyCua(False, [w(1, 10, "Claude.exe", "Claude"), w(8, 80, "notepad.exe", "a.txt - Notepad"),
-                          w(8, 81, "notepad.exe", "b.txt - Notepad"), w(9, 90, "explorer.exe", "Program Manager")])
-    r = Runner(win, "test")
-    r.tidy({"keep": ["Claude"]})
-    assert win.keys == [(8, ("alt", "f4")), (8, ("alt", "f4"))] and r.tidied["closed"] == ["notepad.exe"], (win.keys, r.tidied)
-
+        globals()["driver_pids"] = lambda host: set()
+        mac = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(2, 20, "Notes", "Notes"), w(2, 21, "Notes", "Shopping"),
+                             w(3, 30, "Finder", "Desktop"), w(4, 40, "universalAccessAuthWarn", "Screen Recording"),
+                             w(5, 50, "Cua Driver", ""), w(6, 60, "Terminal", ""),
+                             w(7, 70, "Preview", "a.pdf"), w(7, 71, "Preview", "b.pdf", on=False)])
+        r = Runner(mac, "test")
+        r.tidy({"keep": ["Claude"], "timeout": 1})
+        assert r.tidied["closed"] == ["Notes"], r.tidied            # one Cmd+Q for the program, not per window
+        assert mac.keys == [(2, ("cmd", "q"))], mac.keys
+        assert set(r.tidied["left"]) == {'"Screen Recording" (universalAccessAuthWarn: a system prompt)',
+                                         '"b.pdf" (Preview: minimised)', '"a.pdf" (Preview: it also has a minimised window)'}, r.tidied
+        asks = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(7, 70, "TextEdit", "Doc")], asks=[7])
+        try:
+            Runner(asks, "test").tidy({"keep": ["Claude"], "timeout": 0.5}); raise AssertionError("expected OutcomeFailed")
+        except OutcomeFailed as e:
+            assert "TextEdit did not close" in str(e) and "Don't Save" in str(e) and "nothing was answered" in str(e), e
+        assert asks.keys == [(7, ("cmd", "q"))]                       # nothing answered: no second key, no click
+        # Windows (scene-tidy D4): the driver's host, remote access and minimised windows stay, reported
+        globals()["driver_pids"] = lambda host: {11, 15}
+        win = TidyCua(False, [w(1, 10, "Claude.exe", "Claude"), w(8, 80, "notepad.exe", "a.txt - Notepad"),
+                              w(8, 81, "notepad.exe", "b.txt - Notepad"), w(9, 90, "explorer.exe", "Program Manager"),
+                              w(11, 110, "WindowsTerminal.exe", "Windows PowerShell", mini=True),
+                              w(15, 150, "powershell.exe", "Administrator: console"),
+                              w(12, 120, "RustDesk.exe", "RustDesk"), w(14, 140, "SystemSettings.exe", "Gépház", mini=True)])
+        r = Runner(win, "test")
+        r.tidy({"keep": ["Claude"]})
+        assert win.keys == [(8, ("alt", "f4")), (8, ("alt", "f4"))] and r.tidied["closed"] == ["notepad.exe"], (win.keys, r.tidied)
+        assert r.tidied["left"] == ['"Windows PowerShell" (WindowsTerminal.exe: it hosts the driver)',
+                                    '"Administrator: console" (powershell.exe: it hosts the driver)',
+                                    '"RustDesk" (RustDesk.exe: remote access)', '"Gépház" (SystemSettings.exe: minimised)'], r.tidied
+    finally:
+        globals()["driver_pids"] = real
+        logger.setLevel(level)
 
 def selftest_macos():
     """macos-target: OS per target, the tree normalised, the menu bar hidden, the front verdict, doctor rows."""

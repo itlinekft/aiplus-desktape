@@ -351,7 +351,9 @@ steps:
 
 Every program with a titled window that is not kept is closed the way a person closes it: Cmd+Q on macOS
 (the whole program), Alt+F4 on Windows (each window). The system's own windows are never touched (Finder,
-the Dock, Explorer's desktop, the driver), and a macOS permission prompt is reported as left open. When
+the Dock, Explorer's desktop, the driver), and these are only reported, never closed: a macOS permission prompt,
+any window of the process tree that hosts the driver, remote-access programs (RustDesk, TeamViewer, AnyDesk …),
+and minimised windows (on macOS, a program with a window off screen is not quit at all). When
 a program answers with a question ("save changes?", "terminate running processes?"), the step fails,
 naming the program and quoting the question with its buttons; desktape never answers it and never
 force-kills a program. Between takes, `desktape.py tidy --keep Claude` does the same without a tape.

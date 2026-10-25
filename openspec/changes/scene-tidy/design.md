@@ -29,3 +29,19 @@ If a new window of that program appears instead (a save sheet, a "terminate proc
 windows stay, the step fails. The failure names the program and quotes what the new window says, read from
 its tree, or by OCR when the tree is unreadable. The question stays on screen for a person, or for the tape
 to answer explicitly with its own steps.
+
+## D4. Guards: what tidy never closes, only reports
+
+Measured on the Windows box (2026-10-25, reported by the session that drives it): a terminal window that
+hosted `cua-driver serve` was closed once, and the driver stopped. Two windows titled "Claude" belonged to two
+different programs, one of them the owner's own, minimised. Some windows were the owner's own, opened over
+remote access. So `tidy` leaves the following alone and lists each in its report with the reason:
+
+- **the driver's host:** every window of a process in the driver's process tree (its processes and their
+  ancestors, read on the target with `Get-CimInstance Win32_Process` or `ps`). If the tree cannot be read,
+  `tidy` closes nothing;
+- **remote access:** RustDesk, TeamViewer, AnyDesk, Screen Sharing, mstsc, Parsec, Splashtop;
+- **minimised windows:** on macOS, a window not on screen (minimised, hidden, another Space). On macOS
+  Cmd+Q would take such a window with it, so its program is not quit at all; its windows are reported.
+
+Windows are closed by window id, never by title, so two windows with one title cannot be confused.
