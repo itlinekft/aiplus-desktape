@@ -1,6 +1,6 @@
 {
   "name": "aiplus-desktape",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "ITLine AI+ desktape: asztali program vezérlése Windowson és macOS-en, ha a programnak nincs API-ja: a Claude egy felvett lépéssort (tape) futtat le kattintással és gépeléssel a Cua Driveren keresztül, minden lépés eredményét ellenőrzi, és az adatokat érték szerint olvassa vissza. Egy gép egy másikat is vezérelhet, egy csak kulccsal működő párosítás után. A futtató soha nem hív AI-modellt. Ha egy lépés nem sikerül, javítási jegyzetet hagy. English: Drive a Windows or macOS desktop program that has no API: Claude runs a recorded YAML tape of clicks and typing through Cua Driver, checks each step's outcome and reads results back by value. One computer can drive another after a key-only pairing. The runner never calls a model; a failed step leaves a repair note.",
   "author": {
     "name": "ITLine Kft.",
