@@ -266,6 +266,8 @@ steps:
   target's path; `${name.local}` is the controller's path. A variable with no value stops the run before any
   tool call. `act` takes `--var` too, and appends the step with `${name}` kept.
 - **`foreground: true`** on a click uses the driver's foreground delivery.
+- **`timeout:`** on a click is how long it waits for its target (default 8 s), for a window that stays busy
+  for a while after a save (measured: an accounting program's list tab, 10+ s after its form closed).
 - **`open_file`** fills the standard Windows file dialog's file name box through the dialog's own controls,
   reads it back and presses OK, with no focus and no keyboard, so it works in any language. It fails when
   the dialog stays open, quoting a message box that came up instead. On macOS (`dialog:` defaults to

@@ -2610,7 +2610,7 @@ class Runner:
             self.focus(arg)
         elif kind == "click":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            e = self.pick(a, enabled_only=True)
+            e = self.pick(a, float(a.get("timeout", 8.0)), enabled_only=True)   # timeout: a slow window
             if not e:
                 raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled)")
             label = e.get("label") or e.get("name") or ""
