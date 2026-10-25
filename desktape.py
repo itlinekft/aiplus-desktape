@@ -664,7 +664,7 @@ def load_map(name):
 
 def on_screen_table(tables, elements, bounds):
     """Of the tables that fit, the one whose rows are on screen. A program may keep a closed list's grid in its
-    tree with its rows at negative screen points (measured: Kulcs, after a list was opened and closed), and the
+    tree with its rows at negative screen points (measured: an accounting program, after a list was opened and closed), and the
     tree text alone cannot tell the two apart; with none on screen, the first one, as before."""
     if len(tables) < 2:
         return tables[0] if tables else None
