@@ -61,3 +61,11 @@ Measured 2026-10-25 on the Mac mini, with a target at a documentation-only addre
 line (both LAN addresses, no tailnet) and the profile; `unpair --local-only` removed all three and left
 `known_hosts` as it was. The removal on a macOS target was run on a scratch `authorized_keys`: only the line
 with the exact comment went, not one whose comment merely starts the same way.
+
+Rehearsed 2026-10-25 from the Mac mini to the Windows box, with the owner's yes for the key: the fingerprint
+matched on both screens, `--check` logged in and the driver answered, a `look` read the target's window, and
+`unpair` removed the line (`left 0`) and left the Mac with no key, profile or host key.
+
+On Windows, run the target's `pair --accept` in the user's desktop session, where the target's Claude runs:
+over SSH, `uv` cannot start its managed Python there (os error 448, measured). `unpair`'s removal is plain
+PowerShell over SSH and is not affected.
