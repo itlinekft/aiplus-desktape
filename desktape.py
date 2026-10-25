@@ -50,7 +50,7 @@ def host_default():
 
 SSH_OPTS = {}         # host string -> extra ssh/scp options, from the target's profile (an identity file)
 HOMES = {}            # host string -> the target user's home folder, asked once
-TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os"}
+TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os", "paired"}
 
 
 def targets_path():
@@ -2995,6 +2995,186 @@ def cmd_record(a):
     return 0
 
 
+# ---- target-pairing: a controller's own key on a target, and taking it back --------------------------------
+
+PAIR_OPTS = "no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty"
+# D2: LAN only. Python knows the private ranges; these private-looking ones are not a LAN (documentation, benchmark,
+# IETF); a tailnet (100.64/10) and a public address are not private at all
+NOT_LAN = ("0.0.0.0/8", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24")
+NAME_OK = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def pair_key(name):
+    if not NAME_OK.fullmatch(name):
+        raise ValueError(f"pair: a target name is letters, digits, '.', '_' or '-', not {name!r}")
+    return os.path.expanduser(f"~/.ssh/desktape_{name}_ed25519")
+
+
+def controller_name():
+    import socket
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", socket.gethostname().split(".")[0]) or "controller"
+
+
+def pair_comment(name):
+    return f"desktape-pair-{name}@{controller_name()}"
+
+
+def lan_addresses(text=None):
+    """The controller's private IPv4 addresses, every interface (target-pairing D2)."""
+    import ipaddress
+    if text is None:
+        cmd = ["ipconfig"] if os.name == "nt" else ["ifconfig"] if sys.platform == "darwin" else ["ip", "-4", "-o", "addr"]
+        try:
+            text = subprocess.run(cmd, capture_output=True, text=True, errors="replace").stdout
+        except OSError as e:
+            logger.warning("pair: could not list this machine's addresses (%s): %s", " ".join(cmd), e)
+            text = ""
+    skip = [ipaddress.ip_network(n) for n in NOT_LAN]
+    found = []
+    for ip in re.findall(r"(?:inet |IPv4[^:]*:\s*)(\d+\.\d+\.\d+\.\d+)", text):
+        a = ipaddress.ip_address(ip)
+        if a.is_private and not (a.is_loopback or a.is_link_local or a.is_reserved or any(a in n for n in skip)) \
+                and ip not in found:
+            found.append(ip)
+    return found
+
+
+def pair_line(pub, addrs, comment):
+    """The one authorized_keys line a target accepts (target-pairing D2)."""
+    kind, blob = pub.split()[:2]
+    if kind != "ssh-ed25519":
+        raise ValueError(f"pair: expected an ed25519 key, got {kind}")
+    if not addrs:
+        raise ValueError("pair: this machine has no private LAN address to put in from=; give --from")
+    return f'from="{",".join(addrs)}",{PAIR_OPTS} {kind} {blob} {comment}'
+
+
+def write_profile(path, name, profile):
+    """Add a target to the targets file, keeping a copy of the old file (target-pairing D3)."""
+    doc = (yaml.safe_load(open(path, encoding="utf-8")) or {}) if os.path.exists(path) else {}
+    targets = doc.setdefault("targets", {}) or {}
+    doc["targets"] = targets
+    if name in targets:
+        return False
+    targets[name] = profile
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        shutil.copyfile(path, path + ".bak")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# desktape targets on this controller (not in git); `desktape.py pair` adds to it.\n")
+        yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False)
+    return True
+
+
+def remove_profile(path, name):
+    doc = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    if name not in (doc.get("targets") or {}):
+        return False
+    shutil.copyfile(path, path + ".bak")
+    del doc["targets"][name]
+    if doc.get("default") == name:
+        doc["default"] = None
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# desktape targets on this controller (not in git); `desktape.py pair` adds to it.\n")
+        yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False)
+    return True
+
+
+def fingerprint(pub_path):
+    return subprocess.run(["ssh-keygen", "-lf", pub_path], capture_output=True, text=True).stdout.strip()
+
+
+def cmd_pair(a):
+    """target-pairing: the controller half. Nothing reaches the target until a person accepts the printed line."""
+    key = pair_key(a.name)
+    if a.check:
+        host, _ = choose_target(None, a.name)
+        SSH_OPTS[host] = SSH_OPTS.get(host, []) + ["-o", "StrictHostKeyChecking=accept-new"]   # first contact: learn the key
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", *SSH_OPTS[host], host, "echo ok"], capture_output=True, text=True)
+        if r.stdout.strip() != "ok":
+            print(f"FAILED: key login to {a.name} ({host}): {r.stderr.strip()[-300:] or r.returncode}")
+            return 1
+        kh = subprocess.run(["ssh-keygen", "-F", host.split("@")[-1]], capture_output=True, text=True).stdout
+        print(f"key login to {a.name} ok; its host key is now known ({len(kh.splitlines()) and 'recorded in known_hosts'})")
+        run_dir = new_run_dir("pair-check", "adhoc")
+        cua = Cua(host, os.path.join(run_dir, "audit.jsonl"))
+        try:
+            wins = [w for w in cua.call("list_windows", {})[0].get("windows", []) if w.get("title")]
+        finally:
+            cua.close()
+        print(f"the driver on {a.name} answers: {len(wins)} titled windows")
+        return 0
+    if not a.host:
+        raise ValueError("pair: give --host ADDR (and --user)")
+    if not os.path.exists(key):
+        os.makedirs(os.path.dirname(key), exist_ok=True)
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", pair_comment(a.name), "-f", key], check=True)
+        logger.info("pair: made %s", key)
+    else:
+        print(f"# {key} exists: reused (pairing again, for example after the addresses changed)")
+    addrs = a.from_addr.split(",") if a.from_addr else lan_addresses()
+    pub = open(key + ".pub", encoding="utf-8").read()
+    line = pair_line(pub, addrs, pair_comment(a.name))
+    path = targets_path()
+    profile = {"host": a.host, "user": a.user, "identity": key.replace(os.path.expanduser("~"), "~", 1),
+               "os": a.os, "label": a.label or f"paired from {controller_name()}",
+               "paired": time.strftime("%Y-%m-%d %H:%M")}
+    profile = {k: v for k, v in profile.items() if v}
+    added = write_profile(path, a.name, profile)
+    print(f"key: {key}\nfingerprint: {fingerprint(key + '.pub')}")
+    print(f"target {a.name!r} " + (f"added to {path}" if added else f"is already in {path}: left as it is"))
+    print(f"\nOn {a.name}, accept this ONE line (the target's own `pair --accept`, or the user's authorized_keys):\n\n{line}\n")
+    print(f"Then: desktape.py pair {a.name} --check      Undo: desktape.py unpair {a.name}")
+    return 0
+
+
+def remove_line_cmd(os_name, comment):
+    """The command that takes the paired line out of the target user's authorized_keys (target-pairing D4)."""
+    if os_name == "windows":
+        # a placeholder until the Windows session's measured command (target-pairing task 2.2): last field, exactly
+        ps = ("$c='" + comment + "';$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys';if(Test-Path $f){"
+              "$l=@(Get-Content $f|?{($_ -split ' ')[-1] -ne $c});[IO.File]::WriteAllLines($f,[string[]]$l)};"
+              "'left '+@(Get-Content $f -EA 0|?{($_ -split ' ')[-1] -eq $c}).Count")
+        return f"powershell -NoProfile -EncodedCommand {base64.b64encode(ps.encode('utf-16-le')).decode()}"
+    import shlex
+    c = shlex.quote(comment)            # the line's LAST field, exactly: not a prefix of another comment
+    return (f"f=~/.ssh/authorized_keys; if [ -f $f ]; then awk -v c={c} '$NF != c' $f > $f.desktape && "
+            f"cat $f.desktape > $f; rm -f $f.desktape; fi; echo left $(awk -v c={c} '$NF == c {{n++}} END {{print n+0}}' $f 2>/dev/null || echo 0)")
+
+
+def cmd_unpair(a):
+    """target-pairing D4: the target's line first, over the same key; then the key, the profile, known_hosts."""
+    key, comment, path = pair_key(a.name), pair_comment(a.name), targets_path()
+    cfg = load_targets(path)
+    t = cfg["targets"].get(a.name)
+    if t is not None and not t.get("paired"):
+        raise ValueError(f"unpair: target {a.name!r} was not made by `pair`; it is left as it is")
+    remote_ok = a.local_only
+    if t is not None and not a.local_only:
+        host = ssh_host(t)
+        SSH_OPTS[host] = ["-i", key, "-o", "IdentitiesOnly=yes"]
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", *SSH_OPTS[host], host,
+                            remove_line_cmd(t.get("os") or "windows", comment)], capture_output=True, text=True, errors="replace")
+        left = re.search(r"left (\d+)", r.stdout)
+        remote_ok = r.returncode == 0 and left and left.group(1) == "0"
+        if remote_ok:
+            print(f"removed the line '… {comment}' from {a.name}")
+        else:
+            print(f"could NOT remove it on {a.name} ({(r.stderr or r.stdout).strip()[-200:] or r.returncode}).\n"
+                  f"Remove by hand the line ending in ' {comment}' from the user's authorized_keys on {a.name}, "
+                  f"then run: desktape.py unpair {a.name} --local-only")
+            return 1
+    for p in (key, key + ".pub"):
+        if os.path.exists(p):
+            os.remove(p)
+    removed = remove_profile(path, a.name) if t is not None else False
+    if t is not None:
+        subprocess.run(["ssh-keygen", "-R", t["host"]], capture_output=True)
+    print(f"deleted {key}; " + (f"removed target {a.name!r} from {path}" if removed else "no profile to remove") +
+          ("; its host key forgotten" if t is not None else ""))
+    return 0
+
+
 def cmd_tidy(a):
     """scene-tidy: the `tidy` step outside a tape, between takes."""
     with box_lock(a.host, "tidy") as lk:
@@ -3178,6 +3358,53 @@ def cmd_unlock(a):
 
 
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_pairing():
+    """target-pairing: LAN addresses only, the line, the profile round trip, removal by comment, unpair's refusal."""
+    mac_if = ("lo0: flags\n\tinet 127.0.0.1 netmask 0xff000000\nen0: flags\n\tinet 192.168.1.50 netmask 0xffffff00\n"
+              "en1: flags\n\tinet 10.0.0.12 netmask\nutun4: flags\n\tinet 100.101.7.9 --> 100.101.7.9\n"
+              "en5: flags\n\tinet 203.0.113.5 netmask\nen6: flags\n\tinet 169.254.3.4 netmask\nen7: flags\n\tinet 8.8.4.4\n")
+    assert lan_addresses(mac_if) == ["192.168.1.50", "10.0.0.12"], lan_addresses(mac_if)   # no tailnet, public, test-net
+    assert lan_addresses("2: eth0    inet 10.1.2.3/24 brd\n3: docker0    inet 172.17.0.1/16") == ["10.1.2.3", "172.17.0.1"]
+    assert lan_addresses("   IPv4 Address. . . . . . . . . . . : 192.168.1.50\n") == ["192.168.1.50"]
+    line = pair_line("ssh-ed25519 AAAAC3Nza key-comment\n", ["192.168.1.50", "10.0.0.12"], "desktape-pair-box1@mini")
+    assert line == ('from="192.168.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty '
+                    'ssh-ed25519 AAAAC3Nza desktape-pair-box1@mini'), line
+    for bad in (lambda: pair_line("ssh-rsa AAAA x", ["10.0.0.1"], "c"), lambda: pair_line("ssh-ed25519 AAAA x", [], "c"),
+                lambda: pair_key("../x")):
+        try:
+            bad(); raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "targets.yaml")
+        open(path, "w").write("default: hand\ntargets:\n  hand: {host: h.lan}\n")
+        assert write_profile(path, "box1", {"host": "box1.local", "os": "windows", "paired": "2026-10-25 10:00"})
+        assert not write_profile(path, "box1", {"host": "other"})                          # an existing one is left
+        cfg = load_targets(path)
+        assert cfg["targets"]["box1"]["host"] == "box1.local" and cfg["default"] == "hand" and os.path.exists(path + ".bak")
+        try:
+            os.environ["DESKTAPE_TARGETS"], old = path, os.environ.get("DESKTAPE_TARGETS")
+            cmd_unpair(argparse.Namespace(name="hand", local_only=False)); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "not made by `pair`" in str(e), e                                        # a hand-made target stays
+        finally:
+            if old is None:
+                os.environ.pop("DESKTAPE_TARGETS", None)
+            else:
+                os.environ["DESKTAPE_TARGETS"] = old
+        assert remove_profile(path, "box1") and "box1" not in load_targets(path)["targets"]
+        # the macOS/Linux removal, run for real on a scratch home: only the line with that exact comment goes
+        if os.name != "nt":
+            os.makedirs(os.path.join(d, ".ssh"))
+            ak = os.path.join(d, ".ssh", "authorized_keys")
+            open(ak, "w").write("ssh-ed25519 AAA1 me@laptop\nfrom=\"10.0.0.1\" ssh-ed25519 AAA2 desktape-pair-box1@mini\n"
+                                "ssh-ed25519 AAA3 desktape-pair-box1@mini-other\n")
+            out = subprocess.run(["sh", "-c", remove_line_cmd("macos", "desktape-pair-box1@mini")], capture_output=True,
+                                 text=True, env={**os.environ, "HOME": d}).stdout
+            assert "left 0" in out and open(ak).read() == "ssh-ed25519 AAA1 me@laptop\nssh-ed25519 AAA3 desktape-pair-box1@mini-other\n", (out, open(ak).read())
+    assert "EncodedCommand" in remove_line_cmd("windows", "desktape-pair-box1@mini")
+
 
 def selftest_record():
     """screen-record: start, stop on the stop file, download, delete the target's copy, the summary."""
@@ -4121,6 +4348,10 @@ def selftest():
     selftest_macos()
     selftest_tidy()
     selftest_record()
+    selftest_pairing()
+    for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair"):
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
+        assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     print("selftest ok")
     return 0
 
@@ -4153,6 +4384,13 @@ def main():
     p = sub.add_parser("doctor", help="what this machine still needs, with the command that installs each")
     p.add_argument("--local", action="store_true", help="a Windows target on this machine")
     p.add_argument("--video", action="store_true", help="recording videos too")
+    p = sub.add_parser("pair", help="pair this controller with a target: its own key, one restricted line (target-pairing)")
+    p.add_argument("name")                                    # --host (common) is the target's address here
+    p.add_argument("--user"); p.add_argument("--os", choices=list(OSES)); p.add_argument("--label")
+    p.add_argument("--from", dest="from_addr", metavar="IP,IP", help="the addresses for from= (default: this machine's LAN IPv4)")
+    p.add_argument("--check", action="store_true", help="key login, then the driver's window list")
+    p = sub.add_parser("unpair", help="take a paired target's line back, then the key and the profile")
+    p.add_argument("name"); p.add_argument("--local-only", action="store_true", help="the target's line was removed by hand")
     p = sub.add_parser("record", help="record the target's whole screen on its own, until Ctrl+C, a stop file or --seconds")
     p.add_argument("--seconds", type=float, help=f"stop after this many seconds (at most {RECORD_MAX:.0f})")
     p.add_argument("--until-file", metavar="PATH", help="stop when this file exists on the controller")
@@ -4178,6 +4416,8 @@ def main():
             return cmd_targets(a)
         if a.cmd == "doctor":
             return cmd_doctor(a)
+        if a.cmd in ("pair", "unpair"):                         # target-pairing: the name is the target
+            return cmd_pair(a) if a.cmd == "pair" else cmd_unpair(a)
         a.host, a.target = choose_target(a.host, a.target)     # target-profiles
         if not a.host:
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "

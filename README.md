@@ -88,6 +88,7 @@ python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml        
 python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml --mode video
 python3 desktape.py tidy --keep Claude --minimize Terminal   # only the scene's programs on screen
 python3 desktape.py record --until-file /tmp/take-done        # the target's whole screen, beside a run on another machine
+python3 desktape.py pair box1 --host box1.local --user demo   # this machine's own key for a target: docs/pairing.md
 ```
 
 Authoring a tape: `look`, then `act` one step at a time with `--append`; a step is appended only if it
