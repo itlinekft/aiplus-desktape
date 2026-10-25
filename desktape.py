@@ -703,7 +703,7 @@ def check_tape_deny(plan, entries):
     for i, (s, _) in enumerate(plan):
         if "click" in s:
             a = s["click"] if isinstance(s["click"], dict) else {"label": s["click"]}
-            if not a.get("prefix") and (d := denied(plain, a["label"], a.get("role"))):
+            if a.get("label") is not None and not a.get("prefix") and (d := denied(plain, a["label"], a.get("role"))):
                 raise DeniedClick(f"step {i}: click {a['label']!r} is denied by the map: {d}")
 
 
@@ -763,6 +763,64 @@ def parse(line):
         return None
     a = ACTIONS.search(m.group(4) or "")
     return len(m.group(1)), m.group(2), m.group(3) or "", a.group(1) if a else ""
+
+
+# ---- selectors: label, automation id, caption (field-selectors) ------------------------------------------
+
+TREE_ID = re.compile(r'^\s*- \[(\d+)\] .*?\bid=([^\s\]]+)')
+EDITABLE = {"Edit", "Spinner", "ComboBox", "CheckBox", "RadioButton", "Document"}
+SELECTOR_KEYS = ("label", "id", "field", "role")
+SELECTOR_STEPS = ("click", "expect", "absent", "set")
+
+
+def sel_name(a):
+    """How a step's selector is named in a message."""
+    return a.get("label") or (a.get("id") and f"id={a['id']}") or (a.get("field") and f"field {a['field']}") \
+        or a.get("role") or "?"
+
+
+def caption_text(label):
+    """A layout caption as a person reads it: the access-key `&` and a trailing colon dropped."""
+    return re.sub(r"&(.)", r"\1", label or "").strip().rstrip(":").strip()
+
+
+def select(elements, tree, label=None, role=None, prefix=False, id=None, field=None):
+    """The elements matching every key given, in tree order. `id` is the automation id the tree prints as
+    `[N] … id=X` (the driver labels a nameless control with it, but not a named one). `field` is the editable
+    controls whose centre lies inside the smallest caption element reading that text (measured on a DevExpress
+    layout: each caption's frame holds exactly its own input)."""
+    hits = elements
+    if label is not None:
+        hits = [e for e in hits if ((e.get("label") or e.get("name") or "").startswith(label) if prefix
+                                    else (e.get("label") or e.get("name") or "") == label)]
+    if role is not None:
+        hits = [e for e in hits if e.get("role") == role]
+    if id is not None:
+        idx = {int(m.group(1)) for m in map(TREE_ID.match, (tree or "").splitlines()) if m and m.group(2) == id}
+        hits = [e for e in hits if e.get("element_index") in idx]
+    if field is not None:
+        area = lambda e: (e.get("frame") or {}).get("w", 0) * (e.get("frame") or {}).get("h", 0)
+        caps = sorted((e for e in elements if e.get("frame") and e.get("role") not in EDITABLE
+                       and caption_text(e.get("label")) == field), key=area)
+        if not caps:
+            return []
+        f = caps[0]["frame"]
+        inside = lambda e: (f["x"] <= e["frame"]["x"] + e["frame"]["w"] / 2 <= f["x"] + f["w"]
+                            and f["y"] <= e["frame"]["y"] + e["frame"]["h"] / 2 <= f["y"] + f["h"])
+        hits = [e for e in hits if e is not caps[0] and e.get("frame") and inside(e)
+                and (e.get("role") in EDITABLE or (e.get("role") == "Pane" and "set_value" in (e.get("actions") or [])))]
+    return hits
+
+
+def check_selectors(plan):
+    """Refuse a step whose selector names nothing to match (field-selectors), before any tool call."""
+    for i, (s, _) in enumerate(plan):
+        kind, arg = next(iter(s.items()))
+        if kind in SELECTOR_STEPS and isinstance(arg, dict) and not any(arg.get(k) is not None for k in SELECTOR_KEYS) \
+                and not (kind == "expect" and ("text" in arg or "file" in arg)):     # expect's own non-element forms
+            raise ValueError(f"step {i}: {kind} needs a label, id, field or role to find its element")
+        if kind == "set" and not isinstance(arg, dict):
+            raise ValueError(f"step {i}: set needs {{label|id|field, value}}")
 
 
 # ---- tables: a grid on screen, a file on disk (data-driven-import) --------------------------------------
@@ -1384,33 +1442,36 @@ class Runner:
             "the text does not show and nothing changed" if text is not None else "nothing changed"
         raise NoEffect(f"no effect: {what}: {need} after {EFFECT_WAIT:.1f} s (add `effect: none` if that is right)")
 
-    def find(self, label, role=None, prefix=False, nth=1, enabled_only=False):
-        """The `nth` element (1-based, negative from the end, in tree order) matching role and label."""
-        hits = [e for e in self.elements
-                if ((e.get("label") or e.get("name") or "").startswith(label) if prefix
-                    else (e.get("label") or e.get("name") or "") == label)
-                and (role is None or e.get("role") == role)
-                and not (enabled_only and e.get("enabled") is False)]
+    def find(self, label, role=None, prefix=False, nth=1, enabled_only=False, id=None, field=None):
+        """The `nth` element (1-based, negative from the end, in tree order) matching role, label, automation id
+        and caption (field-selectors); a key left as None does not filter."""
+        hits = select(self.elements, self.tree, label, role, prefix, id, field)
+        hits = [e for e in hits if not (enabled_only and e.get("enabled") is False)]
         i = nth - 1 if nth > 0 else len(hits) + nth
         return hits[i] if 0 <= i < len(hits) else None
 
-    def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False):
+    def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False, id=None, field=None):
         end = time.time() + timeout
         while True:
             self.snapshot()
-            e = self.find(label, role, prefix, nth, enabled_only)
+            e = self.find(label, role, prefix, nth, enabled_only, id, field)
             if e or time.time() > end:
                 return e
             time.sleep(0.4)
 
-    def wait_gone(self, label, role=None, timeout=8.0, prefix=False, nth=1):
+    def wait_gone(self, label, role=None, timeout=8.0, prefix=False, nth=1, id=None, field=None):
         """True once no element matches (design D5 of runner-robustness)."""
         end = time.time() + timeout
         while True:
             self.snapshot()
-            if not self.find(label, role, prefix, nth) or time.time() > end:
-                return not self.find(label, role, prefix, nth)
+            if not self.find(label, role, prefix, nth, id=id, field=field) or time.time() > end:
+                return not self.find(label, role, prefix, nth, id=id, field=field)
             time.sleep(0.4)
+
+    def pick(self, a, timeout=8.0, enabled_only=False):
+        """wait_for with a step's selector dict."""
+        return self.wait_for(a.get("label"), a.get("role"), timeout, a.get("prefix", False), a.get("nth", 1),
+                             enabled_only, a.get("id"), a.get("field"))
 
     def focus(self, title):
         sc, _ = self.cua.call("list_windows", {})
@@ -1624,10 +1685,15 @@ class Runner:
                 continue
             sel = exp[key] if isinstance(exp[key], dict) else {"label": exp[key]}
             lines = tree.splitlines()
-            at = next((i for i, l in enumerate(lines) if (n := parse(l)) and (sel.get("label") is None or n[2] == sel["label"])
-                       and (sel.get("role") is None or n[1] == sel["role"])
-                       and (sel.get("id") is None or re.search(r"\bid=" + re.escape(sel["id"]) + r"[ \]]", l))), None)
-            name = sel.get("label") or sel.get("id") or sel.get("role")
+            if sel.get("field"):         # a caption needs the frames: only the tape window's own fresh tree has them
+                e = self.find(sel.get("label"), sel.get("role"), nth=sel.get("nth", 1), id=sel.get("id"),
+                              field=sel["field"]) if tree == self.tree else None
+                at = next((i for i, l in enumerate(lines) if e and f"[{e['element_index']}] " in l), None)
+            else:
+                at = next((i for i, l in enumerate(lines) if (n := parse(l)) and (sel.get("label") is None or n[2] == sel["label"])
+                           and (sel.get("role") is None or n[1] == sel["role"])
+                           and (sel.get("id") is None or re.search(r"\bid=" + re.escape(sel["id"]) + r"[ \]]", l))), None)
+            name = sel_name(sel)
             if at is None:
                 miss.append(f"{name!r} is not in the window")
                 continue
@@ -1662,10 +1728,9 @@ class Runner:
             self.focus(arg)
         elif kind == "click":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            e = self.wait_for(a["label"], a.get("role"), prefix=a.get("prefix", False), nth=a.get("nth", 1),
-                              enabled_only=True)
+            e = self.pick(a, enabled_only=True)
             if not e:
-                raise RuntimeError(f"click: {a['label']!r} not found (enabled)")
+                raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled)")
             label = e.get("label") or e.get("name") or ""
             d = denied(self.deny, label, e.get("role"), self.title)
             if d:
@@ -1744,14 +1809,13 @@ class Runner:
             logger.info("text found in %r: %s", self.title, arg["text"])
         elif kind == "expect":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            if not self.wait_for(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
-                                 a.get("nth", 1)):
-                raise AssertionError(f"expected {a.get('role') or 'element'} {a['label']!r} did not appear")
+            if not self.pick(a, a.get("timeout", 8.0)):
+                raise AssertionError(f"expected {a.get('role') or 'element'} {sel_name(a)!r} did not appear")
         elif kind == "absent":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            if not self.wait_gone(a["label"], a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
-                                  a.get("nth", 1)):
-                raise AssertionError(f"{a.get('role') or 'element'} {a['label']!r} did not go away")
+            if not self.wait_gone(a.get("label"), a.get("role"), a.get("timeout", 8.0), a.get("prefix", False),
+                                  a.get("nth", 1), a.get("id"), a.get("field")):
+                raise AssertionError(f"{a.get('role') or 'element'} {sel_name(a)!r} did not go away")
         elif kind == "type":
             a = arg if isinstance(arg, dict) else {"text": arg}
             if "env" in a or "file" in a:
@@ -1801,9 +1865,9 @@ class Runner:
         elif kind == "set":
             # a control's value through UI Automation (data-driven-import D1): a DevExpress combo whose items only
             # exist while its drop-down is open, and the drop-down ignores background clicks (measured)
-            e = self.wait_for(arg["label"], arg.get("role"), prefix=arg.get("prefix", False), enabled_only=True)
+            e = self.pick(arg, enabled_only=True)
             if not e:
-                raise RuntimeError(f"set: {arg['label']!r} not found (enabled)")
+                raise RuntimeError(f"set: {sel_name(arg)!r} not found (enabled)")
             self.cua.call("set_value", {**self.win, "element_token": e["element_token"], "value": str(arg["value"])},
                           secret=arg.get("secret", False))
         elif kind == "open_file":
@@ -1919,6 +1983,7 @@ def cmd_run(a):
     plan = [(substitute(s, values), e) for s, e in resolve_all(tape["steps"], amap)]
     deny = deny_entries(amap)
     check_tape_deny(plan, deny)                      # … and so does a click the map denies
+    check_selectors(plan)                            # … and a selector that names nothing
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
     with box_lock(a.host, f"run {a.tape}") as lk:    # box-lock: after the offline checks, so a broken tape never waits
@@ -2139,6 +2204,7 @@ def act_step(a, step, amap, s, entry, deny, lk=None, tape=None):
     if lk:
         cua.on_blocked = lambda tool, args, waited: lk.status(state="blocked", error=f"{tool} did not answer "
                                                               f"within {waited:.1f} s")
+    check_selectors([(s, None)])
     r = Runner(cua, "test")
     r.deny = deny                        # replay-guards D1: an agent learning a flow cannot click it either
     # step-outcome-check D4: act names unplanned windows as run does; the tape given with --append plans some
@@ -2906,7 +2972,41 @@ def selftest():
             tape = yaml.safe_load(open(os.path.join(HERE, "tapes", name), encoding="utf-8"))
             m = load_map(tape.get("map"))
             check_tape_deny(resolve_all(tape["steps"], m), deny_entries(m))
+            check_selectors(resolve_all(tape["steps"], m))
     assert real["window"] == "Claude"
+    # field-selectors: frames as measured on a DevExpress line dialog (2026-10-25); the quantity box has only a
+    # runtime id, its caption „Me&nnyiség" is a separate layout item whose frame holds it
+    fe = lambda i, role, label, x, y, w, h, **k: {"element_index": i, "role": role, "label": label, "enabled": True,
+                                                   "frame": {"x": x, "y": y, "w": w, "h": h}, "actions": ["set_value"], **k}
+    els = [fe(27, "ComboBox", "lookUpEditProductNameSearch", 650, 308, 520, 28),
+           fe(41, "Pane", "4065688", 640, 518, 170, 28, value="1"), fe(42, "Edit", "5900722", 642, 520, 150, 24),
+           fe(4, "Pane", "6621562", 960, 517, 160, 28, value="0 Ft"), fe(5, "Edit", "7538570", 962, 519, 140, 24),
+           fe(49, "Pane", "Termék név", 530, 305, 649, 35, actions=["invoke"]),
+           fe(63, "Pane", "Me&nnyiség", 539, 515, 278, 35, actions=["invoke"]),
+           fe(67, "Pane", "Eg&ységár", 841, 514, 288, 35, actions=["invoke"]),
+           fe(61, "Pane", "Alapadatok", 526, 500, 866, 168, actions=["invoke"])]
+    tree = ("- Window \"Tétel\"\n  - [27] ComboBox [id=lookUpEditProductNameSearch actions=[set_value]]\n"
+            "  - [41] Pane [value=\"1\" id=4065688 actions=[set_value]]\n")
+    assert [e["element_index"] for e in select(els, tree, field="Mennyiség")] == [41, 42]
+    assert [e["element_index"] for e in select(els, tree, field="Egységár", role="Edit")] == [5]
+    assert [e["element_index"] for e in select(els, tree, field="Termék név")] == [27]
+    assert select(els, tree, field="Nincs ilyen") == []
+    assert [e["element_index"] for e in select(els, tree, id="lookUpEditProductNameSearch")] == [27]
+    assert select(els, tree, id="lookUpEdit") == []                   # whole ids only
+    assert caption_text("&Cikkszám:") == "Cikkszám" and sel_name({"field": "Mennyiség"}) == "field Mennyiség"
+    rr = Runner.__new__(Runner)
+    rr.elements, rr.tree = els, tree
+    assert rr.find(None, field="Mennyiség", nth=2)["element_index"] == 42
+    assert rr.find(None, id="4065688")["element_index"] == 41          # a runtime id is an id too, if unstable
+    check_selectors([({"expect": {"file": "%TEMP%\\x.json", "timeout": 600}}, None), ({"expect": {"text": "Kész"}}, None)])
+    for bad in ({"click": {"foreground": True}}, {"set": {"value": 1}}, {"expect": {"timeout": 3}}):
+        try:
+            check_selectors([(bad, None)])
+            raise AssertionError(f"accepted {bad}")
+        except ValueError:
+            pass
+    check_selectors([({"click": {"id": "textEditCode"}}, None), ({"set": {"field": "Mennyiség", "value": 3}}, None)])
+    check_tape_deny([({"click": {"id": "textEditCode"}}, None)], deny_entries({"deny": [{"label": "Delete"}]}))
     assert RUNS == os.path.expandvars(os.path.expanduser(os.environ.get("DESKTAPE_RUNS") or os.path.join(HERE, "runs")))
     # claude-plugin: doctor names what is missing with the command for this OS, and installs nothing
     rows = doctor_report(local=True, video=True, which=lambda x: None, exists=lambda p: False, platform="win32")

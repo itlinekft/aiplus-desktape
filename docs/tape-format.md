@@ -48,6 +48,24 @@ as the driver reports it (`Button`, `TabItem`, `MenuItem`, `ComboBox`, …). Whe
 the first in tree order is used; `nth: 2` takes the second and `nth: -1` the last (for example the latest
 message's `Copy`).
 
+Two more keys find a control that has no usable name; they work in `click`, `expect`, `absent`, `set` and
+the `value`/`filled`/`enabled` outcomes, alone or with `label`, `role` and `nth`:
+
+- `id:` the control's automation id, as `look` prints it (`[5] Edit [id=textEditCode …]`). Ids made only
+  of digits are runtime ids: they change every time the window opens, so a tape should not use them.
+- `field:` the input under a caption, for forms whose captions are separate layout items (WinForms and
+  DevExpress layouts): `field: Mennyiség` finds the controls inside the frame of the caption reading
+  „Me&nnyiség" (the access-key `&` and a trailing colon are ignored). An edit box often shows up twice, its
+  frame and its text box; `role: Edit` takes the text box.
+
+```yaml
+- click: {id: lookUpEditProductNameSearch, foreground: true, effect: none}
+- set: {field: Mennyiség, value: "5", expect: {value: {field: Mennyiség, contains: "5"}}}
+- click: {field: Egységár, role: Edit, foreground: true, effect: none}
+```
+
+A selector with none of `label`, `id`, `field` or `role` stops the run before the first tool call.
+
 `window:` sets the window's position and size through the driver and reads it back; a maximised window is
 restored first. Clicks by element work at any size (the Claude Desktop tour passes at 800×600 too), so
 pin the frame for videos, whose framing would otherwise depend on how the window was left.
