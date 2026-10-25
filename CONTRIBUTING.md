@@ -24,8 +24,9 @@ CLI; do not edit them by hand.
 
 ## Ground rules
 
-- **The runner never calls a model.** Authoring and repair belong to the agent that drives desktape; the
-  runner writes a repair bundle and stops.
+- **The runner calls no model unless asked.** Authoring and repair belong to the agent that drives desktape; the
+  runner writes a repair bundle and stops. `run --repair model` is the one opt-in exception (a small model proposes
+  one selector, desktape validates it and writes it back); keep any new model use behind such a flag.
 - **Default deny.** A new driver tool goes on the `ALLOWED` list in `desktape.py` only with a reason in the
   pull request; every call is audited, and text marked `secret` is redacted.
 - **No environment in the repository:** no host names, IP addresses, user names, keys or screenshots of a

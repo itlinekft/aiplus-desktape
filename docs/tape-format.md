@@ -292,6 +292,26 @@ steps:
   `"1 173,23 Ft"` equals `1173.23`. It fails listing every mismatch and every row the grid lacks; a passing
   check goes into the summary's `checks`. Only the rows the grid has loaded can be compared.
 
+### Tolerance: patience, toasts, names that change
+
+- After every action the runner waits until the window has settled (two equal reads, at most 5 s), and an element
+  wait lasts the tape's `patience:` (default 30 s) unless the step gives its own `timeout:`.
+- A window with no button but a close control (an install toast, „Plugin removed.”) is logged, not an unplanned
+  dialog. A window with any other button (OK included) still stops the run.
+- A `label` or `field` ending in `*` matches by its start: `"Ügyfelek listája*"` is the tab with any row count.
+  Check records with `check_table`, which matches rows by key and pages through the grid, not with `expect: {text:}`
+  on a visible list.
+
+### When a name has really changed: `run --repair model`
+
+With `--repair model` (and the Anthropic SDK plus an API key on the controller), a `click`, `expect`, `set` or `focus`
+whose selector matches nothing is given once to a small model (`--repair-model`, default `claude-haiku-5-5`) with the
+step and the window's element list, typed values removed. It names the element the step meant; desktape uses it only
+if it matches exactly one element, then runs the step with its usual effect and outcome checks. A fix of a map entry
+is written into the map file (the old value kept in a comment); a fix of an inline step goes to `repaired.yaml` in the
+run folder for you to apply. Every call is in `audit.jsonl`, `model_calls` counts them, and `repaired` in the summary
+lists them. Without the flag no model is called. Leave it off in a recorded take unless the video says so.
+
 ### Prompts that come at an unplanned moment: `answers:`
 
 Some prompts cannot be a step in the tape's order: an assistant asks about one uncertain row in the middle of a

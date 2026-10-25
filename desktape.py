@@ -2986,6 +2986,109 @@ def cmd_run(a):
         return run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk)
 
 
+REPAIR_MODEL = "claude-haiku-5-5"     # tolerant-replay: the owner asked for a small model
+REPAIR_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["found", "label", "role", "prefix", "reason"],
+                 "properties": {"found": {"type": "boolean"}, "label": {"type": "string"}, "role": {"type": "string"},
+                                "prefix": {"type": "boolean"}, "reason": {"type": "string"}}}
+REPAIR_SYSTEM = ("You repair one step of a desktop UI automation tape. The step's selector no longer matches any element "
+                 "in the window. From the step and the window's element list, name the one element the step meant: its "
+                 "exact label and role as listed, and prefix=true only if the label must match by its start (a changing "
+                 "suffix such as a count). If no element plausibly fits, set found=false. Never pick a different action "
+                 "than the step's (a Delete for a Save, a Log out for a Close).")
+
+
+def repair_prompt(step, title, tree):
+    """tolerant-replay D5: the step and the element tree, with typed values stripped (a field may hold a secret)."""
+    shown = re.sub(r"\bvalue=(\"[^\"]*\"|\S+)", "value=…", tree or "")
+    return (f"Window: {title}\nThe step (YAML): {json.dumps(hide_secret(step), ensure_ascii=False)}\n"
+            f"Its error: the selector matched nothing.\nElements:\n{shown[:60000]}")
+
+
+def ask_repair_model(prompt, model):
+    """One call; returns the parsed JSON proposal. Imported here so desktape needs the SDK only with --repair model."""
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("--repair model needs the Anthropic SDK: pip install anthropic (or uv run --with anthropic)")
+    client = anthropic.Anthropic()
+    r = client.messages.create(model=model, max_tokens=2000, system=REPAIR_SYSTEM,
+                               messages=[{"role": "user", "content": prompt}],
+                               output_config={"format": {"type": "json_schema", "schema": REPAIR_SCHEMA}})
+    if r.stop_reason == "refusal":
+        raise RuntimeError("the repair model declined")
+    return json.loads(next(b.text for b in r.content if b.type == "text"))
+
+
+SELECTOR_KEYS = ("label", "role", "prefix", "id", "field", "nth")
+
+
+def repaired_step(step, proposal):
+    """The step with its selector replaced by the proposal's, keeping every other key (expect, foreground…)."""
+    kind, arg = next(iter(step.items()))
+    a = dict(arg) if isinstance(arg, dict) else {"label": arg}
+    for k in SELECTOR_KEYS:
+        a.pop(k, None)
+    a.update({"label": proposal["label"], "role": proposal["role"]})
+    if proposal.get("prefix"):
+        a["prefix"] = True
+    return {kind: a}
+
+
+def try_repair(r, step, entry, err, model, log):
+    """tolerant-replay D1: ask once, validate like a hand-written step, run it. Returns the new step or None."""
+    kind, arg = next(iter(step.items()))
+    if kind not in ("click", "expect", "set", "focus") or "not found" not in str(err) and "did not appear" not in str(err):
+        return None
+    if r.win is None:
+        return None
+    r.snapshot()
+    prompt = repair_prompt(step, r.title, r.tree)
+    proposal = (getattr(r, "repair_fn", None) or (lambda p: ask_repair_model(p, model)))(prompt)
+    r.model_calls = getattr(r, "model_calls", 0) + 1
+    log({"tool": "repair_model", "model": model, "step": hide_secret(step), "proposal": proposal})
+    if not proposal.get("found"):
+        logger.warning("repair: the model found no element for %s: %s", describe_step(kind, arg), proposal.get("reason"))
+        return None
+    new = repaired_step(step, proposal)
+    hits = select(r.elements, r.tree, proposal["label"], proposal["role"] or None, bool(proposal.get("prefix")))
+    if len(hits) != 1:
+        logger.warning("repair: the proposal %r matches %d elements, not one; not used", proposal["label"], len(hits))
+        return None
+    check_selectors([(new, entry)])
+    logger.info("repair: %s -> %s (%s)", json.dumps(arg, ensure_ascii=False)[:80], proposal["label"], proposal["reason"][:80])
+    r.step(new)                      # the same effect and outcome checks as any step
+    return new
+
+
+def cua_audit(run_dir, rec):
+    """A model call goes into the run's audit.jsonl like a driver call (secrets already hidden)."""
+    with open(os.path.join(run_dir, "audit.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"t": round(time.time(), 3), **rec}, ensure_ascii=False) + "\n")
+
+
+def write_back(tape, amap_name, entry, i, old, new, run_dir):
+    """A map entry is fixed in the map file (the old value kept as a comment); an inline step goes to repaired.yaml."""
+    kind, arg = next(iter(new.items()))
+    sel = {k: arg[k] for k in SELECTOR_KEYS if k in arg}
+    if entry and amap_name:
+        path = amap_name if os.path.exists(amap_name) else os.path.join(HERE, "maps", f"{amap_name}.yaml")
+        lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+        at = next((j for j, l in enumerate(lines) if re.match(rf"\s+{re.escape(entry)}:\s", l)), None)
+        if at is not None:
+            ind = re.match(r"\s*", lines[at]).group(0)
+            was = lines[at].strip()
+            lines[at] = (f"{ind}{entry}: {json.dumps(sel, ensure_ascii=False)}   "
+                         f"# repaired {time.strftime('%Y-%m-%d')} by --repair model; was: {was[len(entry) + 1:].strip()[:80]}\n")
+            open(path, "w", encoding="utf-8").writelines(lines)
+            logger.info("repair: map %s entry %s updated", path, entry)
+            return path
+    out = os.path.join(run_dir, "repaired.yaml")
+    with open(out, "a", encoding="utf-8") as f:
+        yaml.safe_dump([{"tape": tape["name"], "step": i, "was": old, "now": new}], f, allow_unicode=True, sort_keys=False)
+    logger.info("repair: inline step %d written to %s (apply it to the tape)", i, out)
+    return out
+
+
 def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     run_dir = new_run_dir(tape["name"], a.mode)
     stamp = os.path.basename(run_dir).split("-")[0] + "-" + os.path.basename(run_dir).split("-")[1]
@@ -3019,7 +3122,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         profile = tt.home()
         rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "/" + rec_rel if tt.mac else profile + "\\" + rec_rel.replace("/", "\\")
-    t0 = time.time(); failed = None; done = 0; repair = None; frame_set = False
+    t0 = time.time(); failed = None; done = 0; repair = None; frame_set = False; repairs = []
     logger.info("tape %s, mode %s, %d steps, run dir %s", tape["name"], a.mode, len(plan), run_dir)
     try:
         for i, (s, entry) in enumerate(plan):
@@ -3035,7 +3138,15 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             if lk:
                 lk.status(state="running", step=desc)
             try:
-                r.step(s)
+                try:
+                    r.step(s)
+                except Exception as e0:
+                    new = try_repair(r, s, entry, e0, getattr(a, "repair_model", REPAIR_MODEL),
+                                     lambda rec: cua_audit(run_dir, rec)) if getattr(a, "repair", "none") == "model" else None
+                    if new is None:
+                        raise
+                    repairs.append({"step": i, "was": tape["steps"][i], "now": new,
+                                    "written": write_back(tape, tape.get("map"), entry, i, tape["steps"][i], new, run_dir)})
                 if "focus" in s and tape.get("window") and not frame_set:
                     r.set_frame(tape["window"]); frame_set = True
             except Exception as e:
@@ -3083,11 +3194,13 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         passed(lk, f"{tape['name']}: all {len(plan)} steps")
     summary = {"tape": tape["name"], "mode": a.mode, "map": tape.get("map"), "steps": len(plan), "passed": done,
                "failed": failed, "seconds": round(time.time() - t0, 1), "snapshots": r.snapshots,
-               "model_calls": 0}
+               "model_calls": getattr(r, "model_calls", 0)}
     if r.checks:
         summary["checks"] = r.checks
     if r.answered:
         summary["answered"] = r.answered
+    if repairs:
+        summary["repaired"] = repairs
     if repair:
         summary["repair"] = repair
     if r.t_rec is not None:
@@ -4836,6 +4949,39 @@ def selftest():
     assert real["window"] == "Claude"
     tabs2 = [{"label": "Ügyfelek listája (11)", "role": "TabItem", "element_index": 1}]
     assert len(select(tabs2, "", label="Ügyfelek listája*")) == 1 and not select(tabs2, "", label="Ügyfelek listája")
+    # tolerant-replay D1: the repair model's proposal is validated and run like a hand-written step, then written back
+    class Rep(Runner):
+        def __init__(self, labels):
+            Runner.__init__(self, None, "test")
+            self.win, self.title, self.ran = {"pid": 1}, "W", []
+            self.labels = labels
+        def snapshot(self):
+            self.elements = [{"label": l, "role": "Button", "element_index": i} for i, l in enumerate(self.labels)]
+            self.tree = "\n".join(f'- [{i}] Button "{l}"' for i, l in enumerate(self.labels))
+        def step(self, st):
+            self.ran.append(st)
+    rp, logged = Rep(["Mentés és bezárás", "Mégse"]), []
+    rp.repair_fn = lambda prompt: {"found": True, "label": "Mentés és bezárás", "role": "Button", "prefix": False, "reason": "renamed"}
+    new = try_repair(rp, {"click": {"label": "Mentés", "role": "Button", "foreground": True}}, "form.save",
+                     RuntimeError("click: 'Mentés' not found (enabled)"), "fake", logged.append)
+    assert new == {"click": {"foreground": True, "label": "Mentés és bezárás", "role": "Button"}} and rp.ran == [new]
+    assert rp.model_calls == 1 and logged[0]["tool"] == "repair_model"
+    rp.repair_fn = lambda prompt: {"found": False, "label": "", "role": "", "prefix": False, "reason": "none"}
+    assert try_repair(rp, {"click": {"label": "X"}}, None, RuntimeError("not found"), "fake", logged.append) is None
+    rp.labels = ["Mentés", "Mentés"]
+    rp.repair_fn = lambda prompt: {"found": True, "label": "Mentés", "role": "Button", "prefix": False, "reason": "two"}
+    assert try_repair(rp, {"click": {"label": "X"}}, None, RuntimeError("not found"), "fake", logged.append) is None
+    assert try_repair(rp, {"click": {"label": "X"}}, None, RuntimeError("the window did not close"), "fake", logged.append) is None
+    with tempfile.TemporaryDirectory() as d:
+        mp = os.path.join(d, "m.yaml")
+        open(mp, "w", encoding="utf-8").write("name: m\nelements:\n  form.save:   { label: \"Mentés\", role: Button }\n  other: { label: x }\n")
+        write_back({"name": "t"}, mp, "form.save", 3, {"click": "@form.save"}, new, d)
+        m = yaml.safe_load(open(mp, encoding="utf-8"))
+        assert m["elements"]["form.save"] == {"label": "Mentés és bezárás", "role": "Button"} and m["elements"]["other"] == {"label": "x"}
+        out = write_back({"name": "t"}, None, None, 4, {"click": {"label": "Mentés"}}, new, d)
+        assert yaml.safe_load(open(out, encoding="utf-8"))[0]["step"] == 4
+    assert "value=…" in repair_prompt({"type": "x"}, "W", '- [1] Edit "Jelszó" value="titok"') and "titok" not in \
+        repair_prompt({"type": "x"}, "W", '- [1] Edit "Jelszó" value="titok"')
     # tolerant-replay D3: a window with only a close control is a toast; one with a real choice is not
     toast = ('- Window "Claude"\n  - [1] Window "Plugin removed."\n    - [2] Text "Plugin removed."\n'
              '    - [3] Button "Close"\n  - [4] Button "New"')
@@ -5042,6 +5188,10 @@ def main():
     _add = sub.add_parser
     sub.add_parser = lambda *x, **k: _add(*x, parents=[common], **k)
     p = sub.add_parser("run"); p.add_argument("tape"); p.add_argument("--mode", default="test", choices=["test", "video"])
+    p.add_argument("--repair", default="none", choices=["none", "model"],
+                   help="model: a selector that matches nothing is repaired once by a small model, validated, and written "
+                        "back (tolerant-replay); needs the Anthropic SDK and an API key")
+    p.add_argument("--repair-model", default=REPAIR_MODEL, help=f"the repair model (default {REPAIR_MODEL})")
     p.add_argument("--var", action="append", metavar="NAME=VALUE", help="a tape variable; NAME=@file uploads the file")
     p = sub.add_parser("look"); p.add_argument("--window"); p.add_argument("--map")
     p.add_argument("--ocr", action="store_true"); p.add_argument("--full", action="store_true")

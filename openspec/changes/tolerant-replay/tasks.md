@@ -9,11 +9,11 @@
 
 ## 2. Repair model
 
-- [ ] 2.1 `--repair model`: prompt from step + tree (D5), one JSON selector back [REQ: An opt-in repair model proposes a selector once]
-- [ ] 2.2 Validation and write-back (map entry / repaired.yaml); audit + model_calls [REQ: An opt-in repair model proposes a selector once]
-- [ ] 2.3 Selftests with a fake model; no flag = no call [REQ: An opt-in repair model proposes a selector once]
+- [x] 2.1 `--repair model`: prompt from step + tree (D5), one JSON selector back [REQ: An opt-in repair model proposes a selector once]
+- [x] 2.2 Validation and write-back (map entry / repaired.yaml); audit + model_calls [REQ: An opt-in repair model proposes a selector once]
+- [x] 2.3 Selftests with a fake model; no flag = no call [REQ: An opt-in repair model proposes a selector once]
 
 ## 3. Docs and measurement
 
-- [ ] 3.1 docs/tape-format.md, CLAUDE.md, CONTRIBUTING.md (D1 reversed for the opt-in path) [REQ: An opt-in repair model proposes a selector once]
+- [x] 3.1 docs/tape-format.md, CLAUDE.md, CONTRIBUTING.md (D1 reversed for the opt-in path) [REQ: An opt-in repair model proposes a selector once]
 - [ ] 3.2 Measure on the reference target: a save followed by a list-tab close, a toast, an 11-row search check [REQ: Steps wait for a settled window]

@@ -16,8 +16,10 @@ openspec validate --all                 # the specs and changes under openspec/
 
 ## Rules
 
-- **The runner never calls a model** (design D1 in the archived `tape-runner-mvp` change). A failed step
-  writes `runs/<stamp>/repair.md`; the agent driving desktape fixes the map or the tape from it.
+- **By default the runner calls no model** (design D1 in the archived `tape-runner-mvp` change). A failed step
+  writes `runs/<stamp>/repair.md`; the agent driving desktape fixes the map or the tape from it. The one exception is
+  opt-in: `run --repair model` lets a small model propose a replacement selector once, validated like a hand-written
+  step and written back to the map (`tolerant-replay` D1); every call is in `audit.jsonl` and `model_calls`.
 - **OpenSpec first.** A change in behaviour gets a requirement and tasks under `openspec/changes/` before
   code. Never edit `.claude/skills/openspec-*` or `.claude/commands/opsx/`: the `openspec` CLI regenerates them.
 - **This repository is public.** No host names, IP addresses, user names, keys or internal project names in
