@@ -44,9 +44,9 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 ### Telepítés
 
 - **Claude Desktop:** Customize › Plugins › Add › Add marketplace, ide írd be: `itlinekft/aiplus-plugins`, majd
-  add hozzá a desktape-et. A desktape saját piactere is működik: `https://github.com/itlinekft/aiplus-desktape.git`.
+  add hozzá az AI+ desktape-et. A desktape saját piactere is működik: `https://github.com/itlinekft/aiplus-desktape.git`.
 - **Claude Code:** `claude plugin marketplace add itlinekft/aiplus-plugins`, utána
-  `claude plugin install desktape@aiplus-plugins`.
+  `claude plugin install aiplus-desktape@aiplus-plugins`.
 
 Első lépés: kérdezd meg a Claude-ot, „hogyan kezdjem?”. Megnézi, mi hiányzik a gépről, megmondja, honnan jön
 minden letöltés, és csak a jóváhagyásod után telepít.
@@ -139,7 +139,7 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste `itlinekft/aiplus-plugins` (ITLine's
 marketplace, which lists desktape) or `https://github.com/itlinekft/aiplus-desktape.git` (desktape's own), **Sync**, then
 the **Add** button on the AI+ desktape card. In Claude Code: `claude plugin marketplace add itlinekft/aiplus-plugins`, then
-`claude plugin install desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/aiplus-desktape`, then
+`claude plugin install aiplus-desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/aiplus-desktape`, then
 `/plugin install aiplus-desktape@aiplus-desktape`.
 
 Then ask Claude "how do I start?". The `desktape-start` skill runs `desktape.py doctor`, which names what this
