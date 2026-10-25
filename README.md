@@ -1,11 +1,18 @@
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/brand/itline-aiplus-lockup.svg">
+    <img src="site/brand/itline-aiplus-lockup.svg" height="44" alt="ITLine AI+">
+  </picture>
+  &nbsp;&nbsp;&nbsp;
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset="site/brand/desktape-dark-256.png">
-    <img src="site/brand/desktape-256.png" width="160" height="160" alt="desktape">
+    <img src="site/brand/desktape-256.png" width="120" height="120" alt="desktape">
   </picture>
 </p>
 
-# desktape
+<p align="center"><b>AI+ desktape</b> · ITLine AI+ · ingyenes · MIT</p>
+
+# AI+ desktape
 
 ## Magyarul
 
@@ -37,7 +44,7 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 ### Telepítés
 
 - **Claude Desktop:** Customize › Plugins › Add › Add marketplace, ide írd be: `itlinekft/aiplus-plugins`, majd
-  add hozzá a desktape-et. A desktape saját piactere is működik: `https://github.com/itlinekft/desktape.git`.
+  add hozzá a desktape-et. A desktape saját piactere is működik: `https://github.com/itlinekft/aiplus-desktape.git`.
 - **Claude Code:** `claude plugin marketplace add itlinekft/aiplus-plugins`, utána
   `claude plugin install desktape@aiplus-plugins`.
 
@@ -130,7 +137,7 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 ## Install as a Claude plugin
 
 In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste `itlinekft/aiplus-plugins` (ITLine's
-marketplace, which lists desktape) or `https://github.com/itlinekft/desktape.git` (desktape's own), **Sync**, then
+marketplace, which lists desktape) or `https://github.com/itlinekft/aiplus-desktape.git` (desktape's own), **Sync**, then
 **Add desktape**. In Claude Code: `claude plugin marketplace add itlinekft/aiplus-plugins`, then
 `claude plugin install desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/desktape`, then
 `/plugin install desktape@desktape`.

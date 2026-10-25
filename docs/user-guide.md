@@ -11,7 +11,7 @@ or macOS program with an accessibility tree works the same way.
 ## 1. Install and check
 
 ```bash
-git clone https://github.com/itlinekft/desktape && cd desktape
+git clone https://github.com/itlinekft/aiplus-desktape && cd aiplus-desktape
 pip install -r requirements.txt
 python3 desktape.py --selftest            # → selftest ok   (offline, no target needed)
 export DESKTAPE_HOST=user@windows-host    # every other command needs a target

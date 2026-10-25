@@ -3,7 +3,7 @@
 ## Reporting a problem
 
 Report a security problem privately through GitHub's „Report a vulnerability” on
-https://github.com/itlinekft/desktape/security, not in a public issue. ITLine Kft. answers there.
+https://github.com/itlinekft/aiplus-desktape/security, not in a public issue. ITLine Kft. answers there.
 
 ## What desktape does on a machine
 

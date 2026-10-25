@@ -91,10 +91,10 @@ measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 ## 6. Guide and troubleshooting
 
 > **HU:** Részletes útmutató: `docs/user-guide.md`; ha valami nem megy: `TROUBLESHOOTING.md` (magyarul is) ebben a
-> plugin mappában és a https://github.com/itlinekft/desktape oldalon.
+> plugin mappában és a https://github.com/itlinekft/aiplus-desktape oldalon.
 >
 > **EN:** The walkthrough: `docs/user-guide.md`; when something fails: `TROUBLESHOOTING.md`, in this plugin's folder
-> and at https://github.com/itlinekft/desktape.
+> and at https://github.com/itlinekft/aiplus-desktape.
 
 ## 7. Close
 
