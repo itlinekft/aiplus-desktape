@@ -341,6 +341,11 @@ Hotkeys are the app's own: write `[cmd, …]` in a macOS tape.
 
 ## Only the scene's programs on screen: `tidy`
 
+For recordings in general (the plugin's skill has the full list): start every take from restored data checked by
+value; plan every prompt the take can raise; show an assistant only in a fresh session in its own work folder;
+use the agent cursor only where desktape does the real work; and keep an answer key out of the take's inputs.
+
+
 A recorded take shows only the programs its scene needs; every other window is closed, or minimised where
 it must keep running (the driver's host, remote access, a window listed under `minimize:`).
 A tape asks for that itself, usually as its first step:

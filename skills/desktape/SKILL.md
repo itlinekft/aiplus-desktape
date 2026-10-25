@@ -93,6 +93,25 @@ When you drive a desktop yourself (`act`, or while a tape runs), act the way its
 - A window you do not need on screen: close it, or minimise it if it has to keep running.
 - Judge "done" by the outcome (the file exists, the list shows the row), not by what the screen seems to say.
 
+## Recording a take
+
+A recorded take must run on its own, with no person stepping in, and show only what the scene is about:
+
+- **Start from a known state, checked by value.** Restore the program's data from a backup and read back the values
+  the take will change, before every take. A take that changes data is never "tried again" on top of itself.
+- **`tidy` first.** The take's first step closes every program the scene does not need and minimises what must keep
+  running (the driver's own host, remote access), matched by program, not by window title (two windows can share a
+  title). A minimised window is left alone.
+- **No person in the loop.** Every prompt the take can raise is planned in the tape (`dialogs:` and the step that
+  answers it); an unplanned one stops the take, and the take is redone, not cut around.
+- **A fresh session in its own folder.** An assistant shown in a take starts a new session in a work folder that
+  holds only that job's files and instructions, with no memory of other work. If it brings up other work, redo the
+  take.
+- **The cursor.** Show the driver's agent cursor where the tool does the real work; turn it off where the tool only
+  stages what a person does on their own computer.
+- **The answer key is for checking only.** A take's inputs come from what the assistant reads in the scene (a PDF, a
+  price list); the expected values are compared only after the take, never fed in.
+
 ## Rules
 
 - One driver session per machine: a run waits for, or stops on, another session's lock (`dt lock`).
