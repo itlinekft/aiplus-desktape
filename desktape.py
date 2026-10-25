@@ -662,6 +662,35 @@ def load_map(name):
     return yaml.safe_load(open(path, encoding="utf-8"))
 
 
+def on_screen_table(tables, elements, bounds):
+    """Of the tables that fit, the one whose rows are on screen. A program may keep a closed list's grid in its
+    tree with its rows at negative screen points (measured: Kulcs, after a list was opened and closed), and the
+    tree text alone cannot tell the two apart; with none on screen, the first one, as before."""
+    if len(tables) < 2:
+        return tables[0] if tables else None
+    shown = {e.get("element_index") for e in first_grid_rows(elements, bounds)} | \
+            {e.get("element_index") for e in elements if e.get("role") == "ListItem" and e.get("frame")
+             and bounds.get("x", 0) <= e["frame"]["x"] and bounds.get("y", 0) <= e["frame"]["y"]}
+    return next((t for t in tables if shown & set(t.get("row_index", []))), tables[0])
+
+
+def first_grid_rows(elements, bounds):
+    """The on-screen rows of the first grid in the tree. A program may keep a hidden grid's rows at negative
+    screen points (measured: a closed list's rows at (-1910, -434)), and a second grid below the first one
+    (a detail pane) has rows of its own: a scroll aimed at either never moves the grid being read."""
+    bx, by = bounds.get("x", 0), bounds.get("y", 0)
+    bw, bh = bounds.get("width", 10 ** 6), bounds.get("height", 10 ** 6)
+    seen = [e for e in elements if e.get("role") == "ListItem" and e.get("frame")
+            and bx <= e["frame"]["x"] < bx + bw and by <= e["frame"]["y"] < by + bh]
+    run = seen[:1]
+    for e in seen[1:]:
+        f, g = run[-1]["frame"], e["frame"]
+        if g["x"] != f["x"] or g["w"] != f["w"] or not 0 < g["y"] - f["y"] <= 2 * f["h"]:
+            break                       # another grid (other column, other width, or a gap) begins
+        run.append(e)
+    return run
+
+
 def resolve(step, amap):
     """Expand `@name` selectors from the map. Returns (step, the map entry name or None).
     Raises KeyError for a name the map lacks, so a misspelt tape fails before any tool call."""
@@ -1130,7 +1159,7 @@ def read_tables(tree_text):
         if cur is not None and n[0] <= depth:
             cur = row = None
         if n[1] == "Table":
-            cur, depth = {"label": n[2], "headers": [], "rows": []}, n[0]
+            cur, depth = {"label": n[2], "headers": [], "rows": [], "row_index": []}, n[0]
             tables.append(cur)
         elif cur is not None and n[1] == "Header":
             cur["headers"].append(n[2])
@@ -1138,6 +1167,8 @@ def read_tables(tree_text):
             m = VALUE.search(line)
             row = {"_values": m.group(1).split(";") if m else [], "_depth": n[0]}
             cur["rows"].append(row)
+            ix = re.search(r"\[(\d+)\]", line)
+            cur["row_index"].append(int(ix.group(1)) if ix else None)
         elif row is not None and n[1] == "DataItem" and n[0] > row["_depth"]:
             head = max((h for h in cur["headers"] if n[2].startswith(h + " ") or n[2] == h), key=len, default=None)
             if head:
@@ -1852,10 +1883,13 @@ class Runner:
         missing = [c for c in [arg.get("file_key") or key, *columns.values()] if c not in headers]
         if missing:
             raise ValueError(f"check_table: {arg['file']} has no column {missing[0]!r}; it has {headers}")
+        sc, _ = self.cua.call("list_windows", {})
+        bounds = next((w.get("bounds") for w in sc.get("windows", []) if w.get("window_id") == self.win["window_id"]),
+                      None) or {"x": 0, "y": 0}
         def grid():
             self.snapshot()
             t = [t for t in read_tables(self.tree) if key in t["headers"] and all(c in t["headers"] for c in columns)]
-            return t[0] if t else None
+            return on_screen_table(t, self.elements, bounds)
         # a grid that is reloading (right after an import, measured) shows its headers and rows without values
         # for a moment: wait until a row carries its key
         end = time.time() + float(arg.get("timeout", 15))
@@ -1870,22 +1904,25 @@ class Runner:
         # keeping every row by its key, until the file's rows are all seen or a page brings nothing new.
         rows = {r[key].strip(): r for r in table["rows"] if r.get(key)}
         wanted = {str(r.get(arg.get("file_key") or key, "")).strip() for r in want}
+        # The grid may stand anywhere (measured: left at its last page by an earlier check), so it is paged UP
+        # first, then down, each way until a page brings no new row.
         pages = 0
-        while not wanted <= rows.keys() and pages < arg.get("max_pages", 40):
-            at = self.grid_point()
-            if at is None:
-                break
-            # the scroll lands at a screen point: the window must be on top there, or another program's window
-            # scrolls instead and the rows "are not in the grid" (measured: a chat window over the program)
-            self.raise_for_input()
-            self.cua.call("scroll", {**self.win, "direction": "down", "by": "page", "amount": 1,
-                                     "delivery_mode": "foreground", "x": at[0], "y": at[1]})
-            pages += 1
-            t = grid()
-            new = {r[key].strip(): r for r in (t or {}).get("rows", []) if r.get(key)}
-            if not new.keys() - rows.keys():
-                break
-            rows.update(new)
+        for direction in ("up", "down"):
+            while not wanted <= rows.keys() and pages < arg.get("max_pages", 40):
+                at = self.grid_point()
+                if at is None:
+                    break
+                # the scroll lands at a screen point: the window must be on top there, or another program's
+                # window scrolls instead and the rows "are not in the grid" (measured: a chat window over it)
+                self.raise_for_input()
+                self.cua.call("scroll", {**self.win, "direction": direction, "by": "page", "amount": 1,
+                                         "delivery_mode": "foreground", "x": at[0], "y": at[1]})
+                pages += 1
+                t = grid()
+                new = {r[key].strip(): r for r in (t or {}).get("rows", []) if r.get(key)}
+                if not new.keys() - rows.keys():
+                    break
+                rows.update(new)
         table = {"headers": table["headers"], "rows": list(rows.values())}
         problems = compare_table(table, want, key, columns, arg.get("file_key"))
         self.checks.append({"file": os.path.basename(arg["file"]), "rows": len(want), "columns": list(columns),
@@ -1908,12 +1945,13 @@ class Runner:
 
     def grid_point(self):
         """A window-local point inside the grid's rows, for scrolling it (the middle of a row element)."""
-        rows = [e for e in self.elements if e.get("role") == "ListItem" and e.get("frame")]
-        if not rows:
-            return None
         sc, _ = self.cua.call("list_windows", {})
         w = next((w for w in sc.get("windows", []) if w.get("window_id") == self.win["window_id"]), None)
-        f, b = rows[len(rows) // 2]["frame"], (w or {}).get("bounds") or {"x": 0, "y": 0}
+        b = (w or {}).get("bounds") or {"x": 0, "y": 0}
+        rows = first_grid_rows(self.elements, b)
+        if not rows:
+            return None
+        f = rows[len(rows) // 2]["frame"]
         return int(f["x"] + f["w"] / 2 - b["x"]), int(f["y"] + f["h"] / 2 - b["y"])
 
     def check_front(self, title):
@@ -4949,6 +4987,19 @@ def selftest():
     assert real["window"] == "Claude"
     tabs2 = [{"label": "Ügyfelek listája (11)", "role": "TabItem", "element_index": 1}]
     assert len(select(tabs2, "", label="Ügyfelek listája*")) == 1 and not select(tabs2, "", label="Ügyfelek listája")
+    # of two grids with the same columns, the one on screen is read (a closed list's grid stays in the tree)
+    ta = {"headers": ["Termék kód"], "rows": [{"Termék kód": "OLD"}], "row_index": [295]}
+    tb = {"headers": ["Termék kód"], "rows": [{"Termék kód": "A4DOSSZIE"}], "row_index": [34]}
+    els = [{"role": "ListItem", "element_index": 295, "frame": {"x": -1910, "y": -434, "w": 1886, "h": 24}},
+           {"role": "ListItem", "element_index": 34, "frame": {"x": 6, "y": 370, "w": 1886, "h": 24}}]
+    assert on_screen_table([ta, tb], els, {"x": -10, "y": -10, "width": 1940, "height": 1040}) is tb
+    assert on_screen_table([tb], [], {}) is tb and on_screen_table([], [], {}) is None
+    # a scroll must aim at the grid being read: hidden rows off screen and a second grid below do not count
+    fr = lambda x, y, w=1886: {"role": "ListItem", "frame": {"x": x, "y": y, "w": w, "h": 24}}
+    g = [fr(6, 370 + 24 * i) for i in range(10)] + [fr(11, 711, 1898), fr(11, 735, 1898)] + \
+        [fr(-1910, -434 + 24 * i) for i in range(10)]
+    got = first_grid_rows(g, {"x": -10, "y": -10, "width": 1940, "height": 1040})
+    assert len(got) == 10 and got[5]["frame"]["y"] == 490
     # tolerant-replay D1: the repair model's proposal is validated and run like a hand-written step, then written back
     class Rep(Runner):
         def __init__(self, labels):
