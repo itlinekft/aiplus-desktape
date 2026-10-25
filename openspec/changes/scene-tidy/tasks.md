@@ -10,6 +10,7 @@
 
 - [x] 1.6 `minimize:` beside `keep:`, matched by program, title, pid or command line; guards minimised; a key only to the window in front [REQ: tidy-can-minimise-instead-of-close]
 - [ ] 1.7 A Windows source for command lines and the process tree (CIM is denied over SSH): measured by the session that drives the Windows box [REQ: tidy-can-minimise-instead-of-close]
+- [x] 1.8 A stale macOS permission prompt closed (the driver already holds the permission); a real one reported with what to turn on and where [REQ: tidy-never-closes-the-driver-s-host-remote-access-or-a-minimised-window]
 
 ## 2. Tests and docs
 - [x] 2.1 Selftest: the keep list, the system list, a program that quits, a program that asks [REQ: a-tape-can-clear-the-screen-of-other-programs]

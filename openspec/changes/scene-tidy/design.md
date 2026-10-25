@@ -70,3 +70,16 @@ minimised window stayed off screen through a `look` and two clicks in another pr
 Before Cmd+Q, Alt+F4, Cmd+M or Win+Down, the window is raised, and then checked: on macOS by the driver's
 verdict, on Windows by being the top window of the list. If it is not in front, nothing is sent and the step
 fails. An Alt+F4 that reached the desktop would open Windows' shutdown dialog.
+
+## D7. A stale permission prompt is closed; a real one is reported with where to grant it
+
+The owner (2026-10-25): „miért nem zárta be magától? … én nem fogom” and „beállítom ha jogosultság, csak mond
+hogy mit kell és hol”. macOS leaves a permission prompt on screen after the permission was granted (measured:
+"Screen Recording — "CuaDriver" would like to record this computer's screen", behind Claude, hours after the
+grant). Before the main pass, `tidy` reads each on-screen prompt of `universalAccessAuthWarn` and asks the
+driver's daemon which permissions it holds:
+- the prompt names CuaDriver and that permission is granted: "Open System Settings" closes it without changing
+  anything, and System Settings is closed in the main pass. "Deny" is never pressed, because it could record a
+  refusal;
+- otherwise it is left, reported as "macOS asks for <permission> for <program>: System Settings → Privacy &
+  Security → <pane> → turn on <program>", which a person can follow.

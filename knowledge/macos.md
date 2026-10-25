@@ -57,8 +57,12 @@ granted to `/Applications/CuaDriver.app`, once, at the machine (`docs/macos-setu
 - Start the daemon before granting (`open -n -g -a CuaDriver --args serve`), or the grant times out.
 - Keep exactly one copy of CuaDriver.app. A second copy makes a second row in System Settings, and the grant
   goes to the wrong one.
-- A pending approval shows as a window of `universalAccessAuthWarn`. It is the system's, not the program's;
-  leave it to the person.
+- A permission prompt is a window of `universalAccessAuthWarn` ("Screen Recording", "Accessibility Access").
+  **It can stay on screen after the permission was granted**, hours later, often behind other windows. When
+  the driver already holds that permission (`cua-driver permissions status`), the prompt is stale. Close it
+  with its "Open System Settings" button, then close System Settings; `tidy` does this. Never press "Deny"
+  on it. A prompt for a permission not granted yet is the person's: tell them what to turn on and where
+  (System Settings → Privacy & Security → the pane → the program's switch).
 
 Measured: 2026-10-25, macOS 26.4, Cua Driver 0.34.1.
 

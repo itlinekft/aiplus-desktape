@@ -1553,6 +1553,19 @@ PROMPT_APPS = {"universalAccessAuthWarn", "UserNotificationCenter", "CoreService
 # scene-tidy D4: remote-access programs carry a person's own session to the machine; never closed
 REMOTE_APPS = {"rustdesk", "teamviewer", "anydesk", "screen sharing", "mstsc", "parsec", "splashtop"}
 TIDY_WAIT = 8.0
+# A macOS permission prompt's title -> the driver's permission name and the System Settings pane (scene-tidy D7)
+MAC_PROMPTS = {"Screen Recording": ("Screen Recording", "Screen & System Audio Recording"),
+               "Accessibility Access": ("Accessibility", "Accessibility")}
+
+
+def mac_permissions_granted(host):
+    """The driver's own permissions, as its daemon reports them: {"Accessibility": True, "Screen Recording": True}."""
+    r = Target(host).sh(f"{MAC_DRIVER} permissions status")
+    return {m.group(1).strip(): "granted" in m.group(2) for m in re.finditer(r"^([A-Za-z ]+):\s+(.+)$", r.stdout, re.M)}
+
+
+def permission_howto(app, pane):
+    return f"System Settings → Privacy & Security → {pane} → turn on {app}"
 
 
 def driver_pids(host):
@@ -2092,8 +2105,10 @@ class Runner:
             if pid not in cmdlines:
                 cmdlines[pid] = process_cmdline(self.cua.host, pid)
             return cmdlines[pid]
-        wins = self.cua.call("list_windows", {})[0].get("windows", [])
         self.tidied = {"closed": [], "minimised": [], "left": []}
+        if self.mac:
+            self.answer_stale_prompts()
+        wins = self.cua.call("list_windows", {})[0].get("windows", [])
         plan = {}                          # pid -> (program, [(window, "keep" | "min:<why>" | "close" | "left:<why>")])
         for w in wins:
             app = w.get("app_name") or ""
@@ -2101,8 +2116,9 @@ class Runner:
                     or app in SYSTEM_APPS:
                 continue
             off = w.get("minimized") or (self.mac and w.get("is_on_screen") is False)
-            if app in PROMPT_APPS:
-                what = "left:a system prompt" if w.get("is_on_screen") else None
+            if app in PROMPT_APPS:              # D7: a macOS permission prompt was handled before this pass
+                handled = self.mac and app == "universalAccessAuthWarn" and w.get("title") in MAC_PROMPTS
+                what = "left:a system prompt" if w.get("is_on_screen") and not handled else None
             elif off:
                 what = "left:already minimised"
             elif any(tidy_match(w, e, cmdline) for e in mini):        # D5: minimise wins over keep
@@ -2139,6 +2155,35 @@ class Runner:
             logger.warning("tidy: left as they are: %s", ", ".join(self.tidied["left"]))
         logger.info("tidy: closed %s; minimised %s; kept %s", ", ".join(self.tidied["closed"]) or "nothing",
                     ", ".join(self.tidied["minimised"]) or "nothing", ", ".join(map(str, keep)) or "nothing")
+
+    def answer_stale_prompts(self):
+        """scene-tidy D7: a macOS permission prompt for a permission the driver already has is stale (it stays on
+        screen after the grant, measured). It is closed the way a person would, with "Open System Settings", and
+        System Settings then closes with the rest. A prompt for a permission not granted, or for another program,
+        is a person's decision: it is left, with what to turn on and where."""
+        prompts = [w for w in self.cua.call("list_windows", {})[0].get("windows", [])
+                   if w.get("app_name") == "universalAccessAuthWarn" and w.get("is_on_screen") and w.get("title") in MAC_PROMPTS]
+        if not prompts:
+            return
+        granted = mac_permissions_granted(self.cua.host)
+        for w in prompts:
+            perm, pane = MAC_PROMPTS[w["title"]]
+            ids = {"pid": w["pid"], "window_id": w["window_id"]}
+            sc, text = self.cua.call("get_window_state", ids)
+            asks = re.search(r'“([^”]+)”|"([^"]+)" would like', " ".join(mac_ocr(self.cua, w)))
+            who = (asks.group(1) or asks.group(2)) if asks else "?"
+            if who.replace(" ", "").lower() != "cuadriver" or not granted.get(perm):
+                self.tidied["left"].append(f'"{w["title"]}" (macOS asks for {perm} for {who}: '
+                                           f'{permission_howto(who, pane)})')
+                continue
+            button = next((e for e in sc.get("elements") or [] if e.get("label") == "Open System Settings"), None)
+            if not button:
+                self.tidied["left"].append(f'"{w["title"]}" (a stale prompt for {perm}, but it has no "Open System Settings")')
+                continue
+            self.cua.call("click", {**ids, "element_token": button["element_token"]})
+            logger.info("tidy: closed a stale %s prompt for CuaDriver (already granted) with Open System Settings", perm)
+            self.tidied["closed"].append(f"a stale {perm} prompt")
+        time.sleep(2.0)                    # System Settings opens; the main pass closes it
 
     def raise_exact(self, app, w):
         """bring_to_front, then make sure that exact window is in front before any key is sent (scene-tidy D6): an
@@ -3877,6 +3922,12 @@ def selftest_tidy():
                     self.wins = [w for w in self.wins if not (w["pid"] == args["pid"] and
                                  (self.mac or w["window_id"] == args["window_id"]))]
                 return {}, ""
+            if tool == "get_window_state" and args.get("window_id") in (40, 41):    # a macOS permission prompt
+                return {"elements": [{"label": "Open System Settings", "role": "Button", "element_token": "t"}]}, ""
+            if tool == "click" and args.get("window_id") in (40, 41):              # it closes on its button
+                self.wins = [w for w in self.wins if w["window_id"] != args["window_id"]]
+                self.keys.append((args["pid"], ("click",)))
+                return {}, ""
             if tool == "get_window_state":
                 return {}, ('- Window "Doc"\n  - [1] Window "Do you want to keep this document?"\n'
                             '    - [2] Button "Don\'t Save" [actions=[press]]\n    - [3] Button "Save" [actions=[press]]')
@@ -3884,8 +3935,11 @@ def selftest_tidy():
     w = lambda pid, wid, app, title, on=True, mini=None: {"pid": pid, "window_id": wid, "app_name": app, "title": title,
         "is_on_screen": on, "minimized": mini, "z_index": wid, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}
     real, real_cmd, level = globals()["driver_pids"], globals()["process_cmdline"], logger.level
+    real_perm, real_ocr, real_sleep = globals()["mac_permissions_granted"], globals()["mac_ocr"], time.sleep
     logger.setLevel(logging.ERROR)                             # the "left as they are" warnings are expected
     try:
+        globals()["mac_permissions_granted"] = lambda host: {"Accessibility": False, "Screen Recording": True}
+        globals()["mac_ocr"] = lambda cua, w: ['1049,343 "CuaDriver" would like to record this computer\'s']
         globals()["driver_pids"] = lambda host: set()
         globals()["process_cmdline"] = lambda host, pid: {6: "login -pf me", 61: "-zsh"}.get(pid, "")
         mac = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(2, 20, "Notes", "Notes"), w(2, 21, "Notes", "Shopping"),
@@ -3894,12 +3948,18 @@ def selftest_tidy():
                              w(7, 70, "Preview", "a.pdf"), w(7, 71, "Preview", "b.pdf", on=False)])
         r = Runner(mac, "test")
         r.tidy({"keep": ["Claude"], "minimize": ["Terminal"], "timeout": 1})
-        assert r.tidied["closed"] == ["Notes"], r.tidied            # one Cmd+Q for the program, not per window
+        assert r.tidied["closed"] == ["a stale Screen Recording prompt", "Notes"], r.tidied   # D7; one Cmd+Q, not per window
+        assert (4, ("click",)) in mac.keys, mac.keys
         assert (2, ("cmd", "q")) in mac.keys and mac.keys.count((6, ("cmd", "m"))) == 2, mac.keys
         assert sorted(r.tidied["minimised"]) == ['"a.pdf" (Preview: its program has a window that stays)',
                                                  '"agent session" (Terminal: asked)', '"htop" (Terminal: asked)'], r.tidied
-        assert sorted(r.tidied["left"]) == ['"Screen Recording" (universalAccessAuthWarn: a system prompt)',
-                                            '"b.pdf" (Preview: already minimised)'], r.tidied
+        assert sorted(r.tidied["left"]) == ['"b.pdf" (Preview: already minimised)'], r.tidied
+        # D7: a permission not granted yet is the person's: left, with what to turn on and where
+        ask = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(4, 41, "universalAccessAuthWarn", "Accessibility Access")])
+        r = Runner(ask, "test")
+        r.tidy({"keep": ["Claude"]})
+        assert not ask.keys and r.tidied["left"] == ['"Accessibility Access" (macOS asks for Accessibility for CuaDriver: '
+                                                     'System Settings → Privacy & Security → Accessibility → turn on CuaDriver)'], r.tidied
         assert not any(k[0] == 7 and k[1] == ("cmd", "q") for k in mac.keys)   # Preview has a hidden window: not quit
         assert tidy_match({"pid": 6, "app_name": "Terminal"}, {"app": "Terminal", "cmdline_has": "login"}, lambda p: "login -pf me")
         asks = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(7, 70, "TextEdit", "Doc")], asks=[7])
@@ -3943,6 +4003,7 @@ def selftest_tidy():
             assert "not in front" in str(e) and not stuck.keys, (e, stuck.keys)
     finally:
         globals()["driver_pids"], globals()["process_cmdline"] = real, real_cmd
+        globals()["mac_permissions_granted"], globals()["mac_ocr"] = real_perm, real_ocr
         logger.setLevel(level)
 
 def selftest_macos():

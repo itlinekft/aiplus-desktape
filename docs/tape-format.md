@@ -364,8 +364,10 @@ steps:
 
 Every program with a titled window that is not kept is closed the way a person closes it: Cmd+Q on macOS
 (the whole program), Alt+F4 on Windows (each window). The system's own windows are never touched (Finder,
-the Dock, Explorer's desktop and taskbar, the driver; Explorer's folder windows do close), and a macOS
-permission prompt is only reported. When
+the Dock, Explorer's desktop and taskbar, the driver; Explorer's folder windows do close). A macOS
+permission prompt for a permission the driver already has is stale, and `tidy` closes it with its "Open
+System Settings" button, then closes System Settings; a prompt for a permission not granted yet, or for
+another program, is left, and the report says what to turn on and where. When
 a program answers with a question ("save changes?", "terminate running processes?"), the step fails,
 naming the program and quoting the question with its buttons; desktape never answers it and never
 force-kills a program. Between takes, `desktape.py tidy --keep Claude` does the same without a tape.
