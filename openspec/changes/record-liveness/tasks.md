@@ -2,7 +2,8 @@
 
 ## 1. Liveness
 
-- [ ] 1.1 A once-a-minute growth check in `record` and video mode; error + alert + summary field [REQ: A recording is checked while it runs]
+- [ ] 1.1 A once-a-minute growth check in `record` and video mode through `Target.size(path)`; a dead recording fails the run (`on_dead: alert` keeps it going); summary `last_grew` [REQ: A recording is checked while it runs]
+- [ ] 1.3 macOS branch of `Target.size` + a mac selftest (desktape-mac) [REQ: A recording is checked while it runs]
 - [ ] 1.2 Selftest with a fake recorder that stops growing [REQ: A recording is checked while it runs]
 
 ## 2. ffmpeg on Windows

@@ -4,14 +4,22 @@
 
 ### Requirement: A recording is checked while it runs
 
-While `record` or video mode records, the runner SHALL check at least once a minute that the recording grows, and
-SHALL log an error and raise the alert the moment it has not grown since the last check; the run's summary SHALL
-name the last time it was seen growing.
+While `record` or video mode records, the runner SHALL check at least once a minute, through the target's file size,
+that the recording grows. When it has not grown since the last check, video mode SHALL fail the run with
+`recording stopped growing at <time>` and stop its steps, and `record` SHALL stop and exit non-zero; both SHALL keep
+the last time it was seen growing in the summary. A tape or `record` MAY choose `on_dead: alert`, which only logs the
+error and raises the alert.
 
 #### Scenario: the recorder stops in the middle of a take
 
-- **WHEN** the recording's size has not changed for one check interval
-- **THEN** the runner logs an error naming the recording and the time it last grew, and the alert line says so
+- **WHEN** the recording's size has not changed for one check interval in video mode
+- **THEN** the run fails with "recording stopped growing at <time>", no further step runs, and the summary names
+  the time it last grew
+
+#### Scenario: a size on either system
+
+- **WHEN** the target is Windows or macOS
+- **THEN** the size is read through the same target method, so one check serves both
 
 ### Requirement: A Windows recording can use ffmpeg instead of the driver
 
