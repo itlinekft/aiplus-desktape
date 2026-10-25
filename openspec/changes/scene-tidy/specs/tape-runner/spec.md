@@ -27,11 +27,26 @@ and SHALL NOT answer a question the program asks.
 
 ### Requirement: Tidy never closes the driver's host, remote access, or a minimised window
 
-A `tidy` step SHALL NOT close a window of a process in the driver's process tree, a remote-access program,
-or a minimised window (on macOS, a window that is not on screen; its program SHALL NOT be quit). It SHALL
-list each of them with the reason. When the driver's process tree cannot be read, it SHALL close nothing.
+A `tidy` step SHALL NOT close a window of a process in the driver's process tree or of a remote-access
+program; it SHALL minimise them instead. It SHALL leave a minimised window as it is (on macOS, a window that
+is not on screen; its program SHALL NOT be quit), and SHALL list each with the reason. When the driver's
+process tree cannot be read, it SHALL touch nothing.
 
 #### Scenario: the terminal that hosts the driver
 
 - **WHEN** a minimised terminal window on Windows is the ancestor of `cua-driver serve`, and RustDesk is open
-- **THEN** `tidy` closes neither, and reports both with "it hosts the driver" and "remote access"
+- **THEN** `tidy` closes neither and minimises both, reporting "it hosts the driver" and "remote access"
+
+### Requirement: Tidy can minimise instead of close
+
+A `tidy` step SHALL accept a `minimize` list beside `keep`. A window matching it SHALL be minimised, not
+closed, even when it also matches `keep`. An entry SHALL match a program name or a window title's start, or
+a mapping of `app`, `title`, `pid`, `cmdline_has` and `cmdline_lacks`, all of which must hold. An entry that
+needs a command line the target cannot give SHALL fail the step. No key SHALL be sent to a window that is
+not in front after it was raised.
+
+#### Scenario: two programs titled "Claude"
+
+- **WHEN** `tidy: {keep: [Claude], minimize: [{pid: 5804}]}` runs while two Claude programs have a window
+  each
+- **THEN** the window of process 5804 is minimised, and the other stays in front

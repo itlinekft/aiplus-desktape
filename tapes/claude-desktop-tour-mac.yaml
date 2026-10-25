@@ -6,7 +6,7 @@ map: claude-desktop-mac
 video_pause: 1.0
 dialogs: ["Search"]                  # the command palette, opened on purpose; any other dialog stops the run
 steps:
-  - tidy: { keep: [Claude] }        # only Claude Desktop on screen (scene-tidy)
+  - tidy: { keep: [Claude], minimize: [Terminal] }   # only Claude on screen; a terminal's work keeps running
   - focus: "@window"
   - click: "@sidebar.search"         # a fixed starting point whatever screen Claude was left on
   - expect: "@search.tab.sessions"

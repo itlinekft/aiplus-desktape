@@ -351,9 +351,21 @@ steps:
 
 Every program with a titled window that is not kept is closed the way a person closes it: Cmd+Q on macOS
 (the whole program), Alt+F4 on Windows (each window). The system's own windows are never touched (Finder,
-the Dock, Explorer's desktop, the driver), and these are only reported, never closed: a macOS permission prompt,
-any window of the process tree that hosts the driver, remote-access programs (RustDesk, TeamViewer, AnyDesk …),
-and minimised windows (on macOS, a program with a window off screen is not quit at all). When
+the Dock, Explorer's desktop and taskbar, the driver; Explorer's folder windows do close), and a macOS
+permission prompt is only reported. When
 a program answers with a question ("save changes?", "terminate running processes?"), the step fails,
 naming the program and quoting the question with its buttons; desktape never answers it and never
 force-kills a program. Between takes, `desktape.py tidy --keep Claude` does the same without a tape.
+
+What must keep running but must not show is minimised instead: `minimize:` beside `keep:`. It wins over
+`keep`, and an entry may name a process exactly, which tells two windows with one title apart:
+
+```yaml
+  - tidy: { keep: [Claude], minimize: [Terminal, { pid: 5804 }] }
+```
+
+An entry is a program name or a title's start, or a mapping of `app`, `title`, `pid`, `cmdline_has` and
+`cmdline_lacks` that must all hold (a command line is readable on macOS; on Windows over SSH it is not, so
+use `pid`). The program hosting the driver and remote-access programs are minimised, never closed, and a
+window that is already minimised is left. A key is sent only to a window that is in front after it was
+raised. `desktape.py tidy --keep Claude --minimize Terminal` between takes.

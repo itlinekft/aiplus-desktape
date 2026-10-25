@@ -45,3 +45,28 @@ remote access. So `tidy` leaves the following alone and lists each in its report
   Cmd+Q would take such a window with it, so its program is not quit at all; its windows are reported.
 
 Windows are closed by window id, never by title, so two windows with one title cannot be confused.
+
+## D5. Minimise what must keep running but must not show
+
+The owner (2026-10-25): "close mellett lehet minimalizálás is tudhatja a desktape ha csak el kell tüntetni
+egy ablakot". A `minimize:` list sits beside `keep:`. A window is kept, minimised or closed:
+
+- **minimise** wins over **keep**, so `keep: [Claude]` with `minimize: [{pid: 5804}]` leaves only the demo
+  Claude of two programs titled "Claude";
+- the driver's host and remote-access programs are minimised by default, never closed;
+- a window already minimised is left as it is;
+- on macOS a program that keeps a window (kept, minimised, or hidden) is not quit: its other windows are
+  minimised instead, because Cmd+Q would take every window of the program.
+
+An entry is a program name or a title start, or a mapping that ANDs `app`, `title`, `pid`, `cmdline_has`
+and `cmdline_lacks`. A command line is read with `ps` on macOS. On Windows, over SSH, Windows' process query
+(CIM) is denied to a standard user (measured 2026-10-25), so a command-line entry fails the step there
+rather than guess; `pid` is the fallback. Minimising is Cmd+M on macOS, and Win+Down on Windows until the
+window reports minimised (a maximised window restores on the first press). Measured on the Mac mini: a
+minimised window stayed off screen through a `look` and two clicks in another program.
+
+## D6. A key only to the window in front
+
+Before Cmd+Q, Alt+F4, Cmd+M or Win+Down, the window is raised, and then checked: on macOS by the driver's
+verdict, on Windows by being the top window of the list. If it is not in front, nothing is sent and the step
+fails. An Alt+F4 that reached the desktop would open Windows' shutdown dialog.

@@ -1472,7 +1472,7 @@ def overlap(a, b):
 # scene-tidy D2: programs a `tidy` step never closes; macOS's permission prompts are reported as left open
 SYSTEM_APPS = {"Finder", "Dock", "SystemUIServer", "Control Center", "Notification Center", "loginwindow",
                "WindowManager", "Window Server", "Cua Driver", "Universal Control", "Spotlight", "TextInputMenuAgent",
-               "explorer.exe", "cua-driver.exe", "TextInputHost.exe", "ShellExperienceHost.exe",
+               "cua-driver.exe", "TextInputHost.exe", "ShellExperienceHost.exe",   # Explorer: its folder windows close
                "StartMenuExperienceHost.exe", "SearchHost.exe"}
 PROMPT_APPS = {"universalAccessAuthWarn", "UserNotificationCenter", "CoreServicesUIAgent", "SecurityAgent"}
 # scene-tidy D4: remote-access programs carry a person's own session to the machine; never closed
@@ -1500,10 +1500,44 @@ def driver_pids(host):
     return {int(x) for x in out.split() if x.isdigit()}
 
 
-def kept(w, keep):
-    """Is this window on a `tidy` keep list? An entry names the program, or the start of a window title."""
-    app, title = (w.get("app_name") or "").lower(), w.get("title") or ""
-    return any(app in (k.lower(), k.lower() + ".exe") or title.startswith(k) for k in keep)
+def app_is(w, name, prefix=False):
+    """The window's program by name, case and `.exe` ignored."""
+    app = (w.get("app_name") or "").lower().removesuffix(".exe")
+    want = str(name).lower().removesuffix(".exe")
+    return app.startswith(want) if prefix else app == want
+
+
+def tidy_match(w, entry, cmdline):
+    """A `keep` / `minimize` entry against a window (scene-tidy D5): a string is a program name or the start of a
+    window title; a dict ANDs `app`, `title` (start), `pid`, `cmdline_has` and `cmdline_lacks`. Matching by
+    process is what tells two windows titled "Claude" of two programs apart."""
+    if not isinstance(entry, dict):
+        return app_is(w, entry) or (w.get("title") or "").startswith(str(entry))
+    if "pid" in entry and w.get("pid") != int(entry["pid"]):
+        return False
+    if "app" in entry and not app_is(w, entry["app"]):
+        return False
+    if "title" in entry and not (w.get("title") or "").startswith(str(entry["title"])):
+        return False
+    if "cmdline_has" in entry or "cmdline_lacks" in entry:
+        line = cmdline(w.get("pid"))
+        if line is None:
+            raise ValueError(f"tidy: this target's command lines cannot be read, so {entry} cannot be matched; "
+                             "match by `pid` instead")
+        if "cmdline_has" in entry and str(entry["cmdline_has"]) not in line:
+            return False
+        if "cmdline_lacks" in entry and str(entry["cmdline_lacks"]) in line:
+            return False
+    return True
+
+
+def process_cmdline(host, pid):
+    """A process's command line on the target, or None where it cannot be read (Windows over SSH: CIM is denied
+    to a standard user, measured 2026-10-25)."""
+    t = Target(host)
+    if not t.mac:
+        return None
+    return t.sh(f"ps -o command= -p {int(pid)}").stdout.strip()
 
 
 def own_pids():
@@ -1945,63 +1979,109 @@ class Runner:
             logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
 
     def tidy(self, arg):
-        """Only the programs the scene needs (scene-tidy): every other program with a titled window closes, the
-        way a person closes it (D1): Cmd+Q on macOS, Alt+F4 per window on Windows. A question it asks stops the
-        step, quoted and unanswered (D3); nothing is force-killed."""
+        """Only the programs the scene needs (scene-tidy): a window is kept, minimised or closed. Closing is the way
+        a person closes (D1): Cmd+Q on macOS, Alt+F4 per window on Windows; minimising is Cmd+M / Win+Down (D5).
+        The driver's host and remote access are minimised, never closed; a minimised window is left (D4). A
+        question a program asks stops the step, quoted and unanswered (D3); nothing is force-killed."""
         a = arg if isinstance(arg, dict) else {"keep": arg}
-        keep = [str(k) for k in (a.get("keep") or [])]
+        keep, mini = list(a.get("keep") or []), list(a.get("minimize") or [])
         timeout = float(a.get("timeout", TIDY_WAIT))
         mine = own_pids() if self.cua.host == "local" else set()
-        host_of_driver = driver_pids(self.cua.host)      # D4: read first; unreadable means nothing is closed
+        host_of_driver = driver_pids(self.cua.host)      # D4: read first; unreadable means nothing is touched
+        cmdlines = {}
+        def cmdline(pid):
+            if pid not in cmdlines:
+                cmdlines[pid] = process_cmdline(self.cua.host, pid)
+            return cmdlines[pid]
         wins = self.cua.call("list_windows", {})[0].get("windows", [])
-        keep_pids = {w.get("pid") for w in wins if kept(w, keep)} | mine
-        self.tidied = {"closed": [], "left": []}
-        targets = []                       # (program, pid, the windows to close)
-        hidden = set()                     # macOS: programs with a window off screen (minimised, another Space)
+        self.tidied = {"closed": [], "minimised": [], "left": []}
+        plan = {}                          # pid -> (program, [(window, "keep" | "min:<why>" | "close" | "left:<why>")])
         for w in wins:
             app = w.get("app_name") or ""
-            name = app.lower().removesuffix(".exe")
-            if not w.get("title") or w.get("pid") in keep_pids or (app, None) in SHELL_WINDOWS \
-                    or (app, w.get("title")) in SHELL_WINDOWS or app in SYSTEM_APPS:
+            if not w.get("title") or (app, None) in SHELL_WINDOWS or (app, w.get("title")) in SHELL_WINDOWS \
+                    or app in SYSTEM_APPS:
                 continue
-            why = ("a system prompt" if app in PROMPT_APPS else "it hosts the driver" if w.get("pid") in host_of_driver
-                   else "remote access" if any(name.startswith(r) for r in REMOTE_APPS)
-                   else "minimised" if w.get("minimized") or (self.mac and w.get("is_on_screen") is False) else None)
-            if why:                        # D4: never closed, only reported
-                if why != "a system prompt" or w.get("is_on_screen"):
-                    self.tidied["left"].append(f'"{w["title"]}" ({app}: {why})')
-                if self.mac and why == "minimised":
-                    hidden.add(w.get("pid"))          # Cmd+Q would take the hidden window with it
-                continue
-            hit = next((t for t in targets if t[1] == w["pid"]), None)   # per program: one Cmd+Q on macOS
-            if hit:
-                hit[2].append(w)
-                continue
-            targets.append((app, w["pid"], [w]))
-        for app, pid, ws in [t for t in targets if t[1] in hidden]:
-            self.tidied["left"] += [f'"{w["title"]}" ({app}: it also has a minimised window)' for w in ws]
-        targets = [t for t in targets if t[1] not in hidden]
-        for app, pid, ws in targets:
-            if self.mac:
-                self.close_program(app, pid, max(ws, key=lambda x: bool(x.get("is_on_screen"))), ["cmd", "q"], timeout, False)
+            off = w.get("minimized") or (self.mac and w.get("is_on_screen") is False)
+            if app in PROMPT_APPS:
+                what = "left:a system prompt" if w.get("is_on_screen") else None
+            elif off:
+                what = "left:already minimised"
+            elif any(tidy_match(w, e, cmdline) for e in mini):        # D5: minimise wins over keep
+                what = "min:asked"
+            elif w.get("pid") in mine or any(tidy_match(w, e, cmdline) for e in keep):
+                what = "keep"
+            elif w.get("pid") in host_of_driver:
+                what = "min:it hosts the driver"
+            elif any(app_is(w, r, prefix=True) for r in REMOTE_APPS):
+                what = "min:remote access"
             else:
-                for w in ws:
+                what = "close"
+            if what:
+                plan.setdefault(w["pid"], (app, []))[1].append((w, what))
+        for pid, (app, items) in plan.items():
+            if self.mac and any(x[1] == "close" for x in items) and any(x[1] != "close" for x in items):
+                # Cmd+Q would take the program's other windows with it: minimise these instead
+                items[:] = [(w, "min:its program has a window that stays" if what == "close" else what) for w, what in items]
+            for w, what in items:
+                if what.startswith("left:"):
+                    self.tidied["left"].append(f'"{w["title"]}" ({app}: {what[5:]})')
+                elif what.startswith("min:"):
+                    self.minimise_window(app, w, what[4:])
+                    self.tidied["minimised"].append(f'"{w["title"]}" ({app}: {what[4:]})')
+            closing = [w for w, what in items if what == "close"]
+            if closing and self.mac:
+                self.close_program(app, pid, closing[0], ["cmd", "q"], timeout, False)
+                self.tidied["closed"].append(app)
+            elif closing:
+                for w in closing:
                     self.close_program(app, pid, w, ["alt", "f4"], timeout, True)
-            self.tidied["closed"].append(app)
+                self.tidied["closed"].append(app)
         if self.tidied["left"]:
-            logger.warning("tidy: left open, never closed by tidy: %s", ", ".join(self.tidied["left"]))
-        logger.info("tidy: closed %s; kept %s", ", ".join(self.tidied["closed"]) or "nothing",
-                    ", ".join(keep) or "nothing")
+            logger.warning("tidy: left as they are: %s", ", ".join(self.tidied["left"]))
+        logger.info("tidy: closed %s; minimised %s; kept %s", ", ".join(self.tidied["closed"]) or "nothing",
+                    ", ".join(self.tidied["minimised"]) or "nothing", ", ".join(map(str, keep)) or "nothing")
+
+    def raise_exact(self, app, w):
+        """bring_to_front, then make sure that exact window is in front before any key is sent (scene-tidy D6): an
+        Alt+F4 that lands on the desktop opens Windows' shutdown dialog."""
+        ids = {"pid": w["pid"], "window_id": w["window_id"]}
+        try:
+            r, _ = self.cua.call("bring_to_front", ids)
+        except (CallBlocked, RuntimeError) as e:
+            raise OutcomeFailed(f"tidy: {app}'s window {w.get('title')!r} could not be brought to the front ({e}); "
+                                "nothing was sent to it") from None
+        if self.mac:
+            ok = front_ok(r, w["window_id"])
+        else:
+            on = [x for x in self.cua.call("list_windows", {})[0].get("windows", []) if x.get("is_on_screen", True)
+                  and not x.get("minimized") and (x.get("app_name"), None) not in SHELL_WINDOWS
+                  and (x.get("app_name"), x.get("title")) not in SHELL_WINDOWS and x.get("title")]
+            top = max(on, key=lambda x: x.get("z_index") or -1, default={})
+            ok = top.get("window_id") == w["window_id"]
+        if not ok:
+            raise OutcomeFailed(f"tidy: {app}'s window {w.get('title')!r} is not in front after bring_to_front; "
+                                "nothing was sent to it")
+        return ids
+
+    def minimise_window(self, app, w, why):
+        """Cmd+M (macOS) or Win+Down until Windows reports it minimised (a maximised window restores first)."""
+        ids = self.raise_exact(app, w)
+        for _ in range(1 if self.mac else 3):
+            self.cua.call("hotkey", {**ids, "keys": ["cmd", "m"] if self.mac else ["win", "down"], "delivery_mode": "foreground"})
+            end = time.time() + 2.0
+            while time.time() < end:
+                x = next((x for x in self.cua.call("list_windows", {})[0].get("windows", []) if x.get("window_id") == w["window_id"]), None)
+                if x is None or (x.get("is_on_screen") is False if self.mac else x.get("minimized")):
+                    logger.info("tidy: minimised %r (%s: %s)", w.get("title"), app, why)
+                    return
+                time.sleep(0.3)
+        raise OutcomeFailed(f"tidy: {app}'s window {w.get('title')!r} did not minimise ({why})")
 
     def close_program(self, app, pid, w, keys, timeout, window_only):
         """Close one program (macOS) or one window (Windows) with its own shortcut; wait until it is gone."""
-        ids = {"pid": pid, "window_id": w["window_id"]}
         mine = lambda: [x for x in self.cua.call("list_windows", {})[0].get("windows", []) if x.get("pid") == pid]
         before = {x.get("window_id") for x in mine()}
-        try:
-            self.cua.call("bring_to_front", ids)
-        except (CallBlocked, RuntimeError) as e:
-            logger.warning("tidy: bring_to_front of %r (%s): %s", w.get("title"), app, e)
+        ids = self.raise_exact(app, w)
         self.cua.call("hotkey", {**ids, "keys": keys, "delivery_mode": "foreground"})
         end = time.time() + timeout
         while True:
@@ -2022,7 +2102,7 @@ class Runner:
         what = f"it asks in {ask.get('title') or (dialogs[0] if dialogs else '?')!r}: {said}" if (new or dialogs) else \
             f"its window {w.get('title')!r} is still open after {timeout:g} s: {said}"
         raise OutcomeFailed(f"tidy: {app} did not close; {what}" + (f"; its buttons: {', '.join(buttons[:6])}" if buttons else "")
-                            + f" (nothing was answered: answer it, or add {app!r} to `keep`)")
+                            + f" (nothing was answered: answer it, keep {app!r}, or minimise it)")
 
     def mac_open_file(self, arg):
         """A path into a macOS file panel (macos-target D5): the panel raised and verified in front, Cmd+Shift+G
@@ -2845,17 +2925,17 @@ def cmd_tidy(a):
         cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
         r = Runner(cua, "test")
         try:
-            r.tidy({"keep": a.keep, "timeout": a.timeout})
+            r.tidy({"keep": a.keep, "minimize": a.minimize, "timeout": a.timeout})
         except OutcomeFailed as e:
             print(f"FAILED: {e}")
             if r.tidied and r.tidied["closed"]:
-                print(f"closed before that: {', '.join(r.tidied['closed'])}")
+                print(f"closed before that: {', '.join(r.tidied['closed'])}; minimised: {', '.join(r.tidied['minimised']) or 'nothing'}")
             lk.status(state="ok", step="tidy", error=str(e)[:300])
             return 1
         finally:
             cua.close()
-        print(f"closed: {', '.join(r.tidied['closed']) or 'nothing'}" +
-              (f"\nleft open (never closed by tidy): {', '.join(r.tidied['left'])}" if r.tidied["left"] else ""))
+        print(f"closed: {', '.join(r.tidied['closed']) or 'nothing'}\nminimised: {', '.join(r.tidied['minimised']) or 'nothing'}" +
+              (f"\nleft as they are: {', '.join(r.tidied['left'])}" if r.tidied["left"] else ""))
         return 0
 
 
@@ -3023,7 +3103,7 @@ def cmd_unlock(a):
 # ---- offline selftest --------------------------------------------------------------------------
 
 def selftest_tidy():
-    """scene-tidy: kept and system windows stay, a program quits, a program that asks stops the step unanswered."""
+    """scene-tidy: keep, minimise and close; the guards; a program that asks stops the step unanswered."""
     class TidyCua:
         host, audit = "me@mac", None
         def __init__(self, mac, wins, asks=()):
@@ -3031,9 +3111,20 @@ def selftest_tidy():
         def call(self, tool, args, secret=False, timeout=None):
             if tool == "list_windows":
                 return {"windows": [dict(w) for w in self.wins]}, ""
+            if tool == "bring_to_front":            # it comes to the top
+                top = max((w.get("z_index") or 0) for w in self.wins) + 1
+                for w in self.wins:
+                    if w["window_id"] == args["window_id"]:
+                        w["z_index"] = top
+                return {"observed": {"frontmost_ordinary_window_id": args["window_id"]}}, ""
             if tool == "hotkey":
-                self.keys.append((args["pid"], tuple(args["keys"])))
-                if args["pid"] not in self.asks:      # it closes: the window (Windows) or the program (macOS)
+                keys = tuple(args["keys"])
+                self.keys.append((args["pid"], keys))
+                if keys in (("cmd", "m"), ("win", "down")):
+                    for w in self.wins:
+                        if w["window_id"] == args["window_id"]:
+                            w.update({"is_on_screen": False} if self.mac else {"minimized": True})
+                elif args["pid"] not in self.asks:      # it closes: the window (Windows) or the program (macOS)
                     self.wins = [w for w in self.wins if not (w["pid"] == args["pid"] and
                                  (self.mac or w["window_id"] == args["window_id"]))]
                 return {}, ""
@@ -3042,42 +3133,67 @@ def selftest_tidy():
                             '    - [2] Button "Don\'t Save" [actions=[press]]\n    - [3] Button "Save" [actions=[press]]')
             return {}, ""
     w = lambda pid, wid, app, title, on=True, mini=None: {"pid": pid, "window_id": wid, "app_name": app, "title": title,
-        "is_on_screen": on, "minimized": mini, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}
-    real, level = globals()["driver_pids"], logger.level
-    logger.setLevel(logging.ERROR)                             # the "left open" warnings are expected
+        "is_on_screen": on, "minimized": mini, "z_index": wid, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}
+    real, real_cmd, level = globals()["driver_pids"], globals()["process_cmdline"], logger.level
+    logger.setLevel(logging.ERROR)                             # the "left as they are" warnings are expected
     try:
         globals()["driver_pids"] = lambda host: set()
+        globals()["process_cmdline"] = lambda host, pid: {6: "login -pf me", 61: "-zsh"}.get(pid, "")
         mac = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(2, 20, "Notes", "Notes"), w(2, 21, "Notes", "Shopping"),
                              w(3, 30, "Finder", "Desktop"), w(4, 40, "universalAccessAuthWarn", "Screen Recording"),
-                             w(5, 50, "Cua Driver", ""), w(6, 60, "Terminal", ""),
+                             w(5, 50, "Cua Driver", ""), w(6, 60, "Terminal", "agent session"), w(6, 61, "Terminal", "htop"),
                              w(7, 70, "Preview", "a.pdf"), w(7, 71, "Preview", "b.pdf", on=False)])
         r = Runner(mac, "test")
-        r.tidy({"keep": ["Claude"], "timeout": 1})
+        r.tidy({"keep": ["Claude"], "minimize": ["Terminal"], "timeout": 1})
         assert r.tidied["closed"] == ["Notes"], r.tidied            # one Cmd+Q for the program, not per window
-        assert mac.keys == [(2, ("cmd", "q"))], mac.keys
-        assert set(r.tidied["left"]) == {'"Screen Recording" (universalAccessAuthWarn: a system prompt)',
-                                         '"b.pdf" (Preview: minimised)', '"a.pdf" (Preview: it also has a minimised window)'}, r.tidied
+        assert (2, ("cmd", "q")) in mac.keys and mac.keys.count((6, ("cmd", "m"))) == 2, mac.keys
+        assert sorted(r.tidied["minimised"]) == ['"a.pdf" (Preview: its program has a window that stays)',
+                                                 '"agent session" (Terminal: asked)', '"htop" (Terminal: asked)'], r.tidied
+        assert sorted(r.tidied["left"]) == ['"Screen Recording" (universalAccessAuthWarn: a system prompt)',
+                                            '"b.pdf" (Preview: already minimised)'], r.tidied
+        assert not any(k[0] == 7 and k[1] == ("cmd", "q") for k in mac.keys)   # Preview has a hidden window: not quit
+        assert tidy_match({"pid": 6, "app_name": "Terminal"}, {"app": "Terminal", "cmdline_has": "login"}, lambda p: "login -pf me")
         asks = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(7, 70, "TextEdit", "Doc")], asks=[7])
         try:
             Runner(asks, "test").tidy({"keep": ["Claude"], "timeout": 0.5}); raise AssertionError("expected OutcomeFailed")
         except OutcomeFailed as e:
             assert "TextEdit did not close" in str(e) and "Don't Save" in str(e) and "nothing was answered" in str(e), e
         assert asks.keys == [(7, ("cmd", "q"))]                       # nothing answered: no second key, no click
-        # Windows (scene-tidy D4): the driver's host, remote access and minimised windows stay, reported
+        # Windows (scene-tidy D4, D5): two "Claude" programs told apart by pid; the driver's host and remote access
+        # minimised, never closed; an already minimised window left; Explorer folders closed, the desktop not
         globals()["driver_pids"] = lambda host: {11, 15}
-        win = TidyCua(False, [w(1, 10, "Claude.exe", "Claude"), w(8, 80, "notepad.exe", "a.txt - Notepad"),
-                              w(8, 81, "notepad.exe", "b.txt - Notepad"), w(9, 90, "explorer.exe", "Program Manager"),
-                              w(11, 110, "WindowsTerminal.exe", "Windows PowerShell", mini=True),
-                              w(15, 150, "powershell.exe", "Administrator: console"),
+        globals()["process_cmdline"] = lambda host, pid: None
+        win = TidyCua(False, [w(1, 10, "Claude.exe", "Claude"), w(5804, 12, "Claude.exe", "Claude"),
+                              w(8, 80, "notepad.exe", "a.txt - Notepad"), w(8, 81, "notepad.exe", "b.txt - Notepad"),
+                              w(9, 90, "explorer.exe", "Program Manager"), w(9, 91, "explorer.exe", "Letöltések"),
+                              w(11, 110, "WindowsTerminal.exe", "Windows PowerShell"),
                               w(12, 120, "RustDesk.exe", "RustDesk"), w(14, 140, "SystemSettings.exe", "Gépház", mini=True)])
         r = Runner(win, "test")
-        r.tidy({"keep": ["Claude"]})
-        assert win.keys == [(8, ("alt", "f4")), (8, ("alt", "f4"))] and r.tidied["closed"] == ["notepad.exe"], (win.keys, r.tidied)
-        assert r.tidied["left"] == ['"Windows PowerShell" (WindowsTerminal.exe: it hosts the driver)',
-                                    '"Administrator: console" (powershell.exe: it hosts the driver)',
-                                    '"RustDesk" (RustDesk.exe: remote access)', '"Gépház" (SystemSettings.exe: minimised)'], r.tidied
+        r.tidy({"keep": ["Claude"], "minimize": [{"pid": 5804}]})
+        assert win.keys.count((8, ("alt", "f4"))) == 2 and (9, ("alt", "f4")) in win.keys, win.keys
+        assert sorted(r.tidied["closed"]) == ["explorer.exe", "notepad.exe"], r.tidied
+        assert sorted(r.tidied["minimised"]) == ['"Claude" (Claude.exe: asked)', '"RustDesk" (RustDesk.exe: remote access)',
+                                                 '"Windows PowerShell" (WindowsTerminal.exe: it hosts the driver)'], r.tidied
+        assert r.tidied["left"] == ['"Gépház" (SystemSettings.exe: already minimised)'], r.tidied
+        assert not any(k[0] in (1, 11, 12) and k[1] == ("alt", "f4") for k in win.keys)   # never closed
+        assert [x["window_id"] for x in win.wins if x["pid"] == 9] == [90]                 # the desktop stays
+        try:
+            tidy_match({"pid": 1}, {"cmdline_lacks": "--user-data-dir"}, lambda p: None); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "match by `pid`" in str(e), e
+        # D6: a window that does not come to the front gets no key
+        class Stuck(TidyCua):
+            def call(self, tool, args, **kw):
+                if tool == "bring_to_front":
+                    return {}, ""
+                return super().call(tool, args, **kw)
+        stuck = Stuck(False, [w(1, 10, "Claude.exe", "Claude", ), w(8, 5, "notepad.exe", "a.txt - Notepad")])
+        try:
+            Runner(stuck, "test").tidy({"keep": ["Claude"]}); raise AssertionError("expected OutcomeFailed")
+        except OutcomeFailed as e:
+            assert "not in front" in str(e) and not stuck.keys, (e, stuck.keys)
     finally:
-        globals()["driver_pids"] = real
+        globals()["driver_pids"], globals()["process_cmdline"] = real, real_cmd
         logger.setLevel(level)
 
 def selftest_macos():
@@ -3915,6 +4031,7 @@ def main():
     p.add_argument("--video", action="store_true", help="recording videos too")
     p = sub.add_parser("tidy", help="close every program with a window except the kept ones (scene-tidy)")
     p.add_argument("--keep", action="append", default=[], metavar="NAME", help="a program name or a window title's start")
+    p.add_argument("--minimize", action="append", default=[], metavar="NAME", help="a program name or a window title's start to minimise")
     p.add_argument("--timeout", type=float, default=TIDY_WAIT, help="seconds each program has to close")
     p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
     p.add_argument("--json", action="store_true")
