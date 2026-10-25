@@ -3,6 +3,15 @@
 The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.com/)). Measured results are in
 [`docs/MEASURED.md`](docs/MEASURED.md).
 
+## [Unreleased]
+
+### Changed
+- The AI+ marketplace lists the plugin as `aiplus-desktape` (aiplus-plugins d5e126c), following the rename to
+  AI+ desktape. If you installed `desktape@aiplus-plugins`, remove it and add `aiplus-desktape@aiplus-plugins`
+  (Claude Desktop: Customize › Plugins; Claude Code: `claude plugin uninstall desktape@aiplus-plugins`, then
+  `claude plugin install aiplus-desktape@aiplus-plugins`). desktape's own marketplace is unaffected.
+- The plugin's homepage is https://www.itline.hu/ai-plus/desktape/.
+
 ## [0.2.1] - 2026-10-25
 
 ### Changed
