@@ -7,6 +7,48 @@
 
 # desktape
 
+## Magyarul
+
+**API nélküli asztali programok vezérlése.** A desktape Windowson vagy macOS-en úgy kezel egy programot, ahogy egy
+ember tenné: kattint, gépel, fájlt nyit meg, és a végén érték szerint ellenőrzi, hogy bekerültek-e az adatok. A
+lépéseket egy AI-asszisztens egyszer kitalálja és egy YAML-fájlba menti, ez a tape. Utána a futtatás már AI-modell
+nélkül megy.
+
+Mire jó:
+
+1. **Programvezérlés, ez a fő felhasználás.** Egy asszisztens elvégzi a valódi munkát egy olyan programban, amelynek
+   nincs API-ja, például egy régebbi ügyviteli vagy készletkezelő programban: szállítólevelet visz fel, árlistát
+   frissít egy beszállítói PDF-ből, havi fájlt importál. Te megmondod, mit csináljon, a desktape kattint, és minden
+   lépés eredményét ellenőrzi, a végén a program táblázatát is visszaolvassa.
+2. **Tesztelés.** Ugyanaz a tape gyors tesztként is lefut.
+3. **Bemutatás.** Ugyanaz a tape lassan, feliratos képernyővideóként is lefut.
+
+A desktape nem a Claude saját képernyővezérlése: a lejátszás a Windows és a macOS akadálymentesítési felületén
+keresztül kattint, lépésről lépésre, ahogy a tape előírja.
+
+Állapot: korai verzió. A tape formátuma és a parancsok még változhatnak.
+
+### Mi kell hozzá
+
+- **A vezérelt gépen:** Windows 11 vagy macOS, a Cua Driver, SSH-belépés kulccsal, videóhoz ffmpeg.
+- **Ahonnan vezérled:** Linux, Windows vagy macOS. A Pythont és a többi eszközt a `uv` hozza magával.
+- **Futás közben:** Windowson nyitva kell lennie egy RDP-ablaknak, macOS-en a képernyő nem lehet zárolva.
+
+### Telepítés
+
+- **Claude Desktop:** Customize › Plugins › Add › Add marketplace, ide írd be: `itlinekft/aiplus-plugins`, majd
+  add hozzá a desktape-et. A desktape saját piactere is működik: `https://github.com/itlinekft/desktape.git`.
+- **Claude Code:** `claude plugin marketplace add itlinekft/aiplus-plugins`, utána
+  `claude plugin install desktape@aiplus-plugins`.
+
+Első lépés: kérdezd meg a Claude-ot, „hogyan kezdjem?”. Megnézi, mi hiányzik a gépről, megmondja, honnan jön
+minden letöltés, és csak a jóváhagyásod után telepít.
+
+Részletesen: [használati útmutató](docs/user-guide.md) (angolul), [hibaelhárítás](TROUBLESHOOTING.md) (magyarul és
+angolul), [amit mértünk](docs/MEASURED.md).
+
+## In English
+
 **Control desktop programs that have no API.** An AI agent works out the clicks and typing once and keeps them
 as a YAML **tape**; desktape then replays the tape, checking every step's outcome, with no model calls. Like
 VHS, but for desktop GUIs: the same tape also runs as a test, or as a captioned video.
@@ -87,15 +129,18 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 
 ## Install as a Claude plugin
 
-In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste
-`https://github.com/itlinekft/desktape.git`, **Sync**, then **Add desktape**. In Claude Code:
-`/plugin marketplace add itlinekft/desktape`, then `/plugin install desktape@desktape`.
+In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste `itlinekft/aiplus-plugins` (ITLine's
+marketplace, which lists desktape) or `https://github.com/itlinekft/desktape.git` (desktape's own), **Sync**, then
+**Add desktape**. In Claude Code: `claude plugin marketplace add itlinekft/aiplus-plugins`, then
+`claude plugin install desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/desktape`, then
+`/plugin install desktape@desktape`.
 
-Then ask Claude for the job. Its skill first runs `desktape.py doctor`, which names what this machine still
-lacks and the one command that installs each piece (`winget`, `brew`, or the tool's official script); Claude
-runs those one at a time, each approved in its permission prompt. Nothing is installed by hand: `uv run
-desktape.py` brings Python and PyYAML itself. The one exception is the Cua Driver on a Windows target, which is
-installed in the desktop session with a pinned version ([`docs/windows-setup.md`](docs/windows-setup.md) §2).
+Then ask Claude "how do I start?". The `desktape-start` skill runs `desktape.py doctor`, which names what this
+machine still lacks and the one command that installs each piece (`winget`, `brew` or the tool's official
+script); Claude runs those one at a time, each approved in its permission prompt. Nothing is installed by hand:
+`uv run desktape.py` brings Python and PyYAML itself. The one exception is the Cua Driver on a Windows target, which
+is installed in the desktop session with a pinned version ([`docs/windows-setup.md`](docs/windows-setup.md) §2).
+When something fails: [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md). What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md).
 
 ## Use
 
@@ -126,20 +171,20 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
 
 ## Layout
 
-- `desktape.py` — the runner and the CLI: `run`, `look`, `act`, `--selftest`.
-- `maps/` — app maps: named selectors and app facts per app version.
-- `tapes/` — flows: the marketplace-dialog sample, and `claude-desktop-tour.yaml`, a read-only tour of
+- `desktape.py`: the runner and the CLI: `run`, `look`, `act`, `--selftest`.
+- `maps/`: app maps: named selectors and app facts per app version.
+- `tapes/`: flows: the marketplace-dialog sample, and `claude-desktop-tour.yaml`, a read-only tour of
   Claude Desktop's main screens that doubles as the map's regression test, and
   `claude-desktop-incognito-ask.yaml`, which asks one question in an incognito chat and waits for the answer,
   and `claude-desktop-demo.yaml`, which records the public demo with the user's content covered.
-- `windows/` — scripts desktape copies to a Windows target (the OCR, run as a one-off interactive task).
-- `macos/` — the pinned driver install for a Mac, and the Vision OCR helper desktape compiles there.
-- `knowledge/` — what desktape knows about each operating system (file dialogs, permissions, the locked screen…),
+- `windows/`: scripts desktape copies to a Windows target (the OCR, run as a one-off interactive task).
+- `macos/`: the pinned driver install for a Mac, and the Vision OCR helper desktape compiles there.
+- `knowledge/`: what desktape knows about each operating system (file dialogs, permissions, the locked screen…),
   published and kept up to date; `desktape.py knowledge` prints it with your own notes on top.
-- `docs/` — setup, the tape format, and measured results.
-- `site/` — the landing page and the demo video (GitHub Pages, `.github/workflows/pages.yml`).
-- `openspec/` — requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).
-- `client/`, `spike/` — the first measurements; kept for reference, not used by the runner.
+- `docs/`: setup, the tape format, and measured results.
+- `site/`: the landing page and the demo video (GitHub Pages, `.github/workflows/pages.yml`).
+- `openspec/`: requirements and design decisions ([OpenSpec](https://github.com/Fission-AI/OpenSpec)).
+- `client/`, `spike/`: the first measurements; kept for reference, not used by the runner.
 
 ## Roadmap
 
@@ -156,5 +201,5 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
-MIT, see `LICENSE`. desktape drives [Cua Driver](https://github.com/trycua/cua) (MIT), which is installed
+MIT, Copyright (c) 2026 ITLine Kft.; see `LICENSE`. desktape drives [Cua Driver](https://github.com/trycua/cua) (MIT), which is installed
 separately on the target and is not part of this repository.

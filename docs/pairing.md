@@ -21,7 +21,7 @@ It prints:
 - ONE line for the target, for example:
 
   ```
-  from="192.168.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA… desktape-pair-box1@mini
+  from="172.20.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA… desktape-pair-box1@mini
   ```
 
   `from=` lists the controller's private LAN addresses (a tailnet or public address is never added;

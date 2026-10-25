@@ -1,4 +1,4 @@
-# desktape — notes for coding agents
+# desktape: notes for coding agents
 
 desktape drives a remote desktop (Windows first) through [Cua Driver](https://github.com/trycua/cua) over
 SSH: it runs a YAML tape as a test or as a captioned video, and gives an agent a cheap `look` and a
@@ -28,4 +28,11 @@ openspec validate --all                 # the specs and changes under openspec/
   a non-ASCII character breaks the parse silently.
 - New Python code logs through `logging` (`logger = logging.getLogger("desktape")`); never swallow an
   exception without at least a warning.
-- Write in English. Commit only the files you mean, by name (`git commit -- <paths>`).
+- **Measure before you claim.** A claim about what desktape does on a real machine (a tape's step count and time, a
+  platform that works, a permission it needs) goes into `docs/MEASURED.md` first, with the date, the machine type,
+  the versions and the exact commands. The tested-status block in `skills/desktape-start/SKILL.md` and the public
+  copy never claim more than that file.
+- **Public and private:** everything tracked here is public (MIT, Copyright ITLine Kft.). Machines are named by type
+  („a Windows 11 test PC”), never by host name or address; examples use documentation or neutral private addresses.
+- Write in English, user-facing first-run text Hungarian first. Commit only the files you mean, by name
+  (`git commit -- <paths>`).

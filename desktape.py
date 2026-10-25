@@ -3808,14 +3808,14 @@ def selftest_person_cursor():
 
 def selftest_pairing():
     """target-pairing: LAN addresses only, the line, the profile round trip, removal by comment, unpair's refusal."""
-    mac_if = ("lo0: flags\n\tinet 127.0.0.1 netmask 0xff000000\nen0: flags\n\tinet 192.168.1.50 netmask 0xffffff00\n"
+    mac_if = ("lo0: flags\n\tinet 127.0.0.1 netmask 0xff000000\nen0: flags\n\tinet 172.20.1.50 netmask 0xffffff00\n"
               "en1: flags\n\tinet 10.0.0.12 netmask\nutun4: flags\n\tinet 100.101.7.9 --> 100.101.7.9\n"
               "en5: flags\n\tinet 203.0.113.5 netmask\nen6: flags\n\tinet 169.254.3.4 netmask\nen7: flags\n\tinet 8.8.4.4\n")
-    assert lan_addresses(mac_if) == ["192.168.1.50", "10.0.0.12"], lan_addresses(mac_if)   # no tailnet, public, test-net
+    assert lan_addresses(mac_if) == ["172.20.1.50", "10.0.0.12"], lan_addresses(mac_if)   # no tailnet, public, test-net
     assert lan_addresses("2: eth0    inet 10.1.2.3/24 brd\n3: docker0    inet 172.17.0.1/16") == ["10.1.2.3", "172.17.0.1"]
-    assert lan_addresses("   IPv4 Address. . . . . . . . . . . : 192.168.1.50\n") == ["192.168.1.50"]
-    line = pair_line("ssh-ed25519 AAAAC3Nza key-comment\n", ["192.168.1.50", "10.0.0.12"], "desktape-pair-box1@mini")
-    assert line == ('from="192.168.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty '
+    assert lan_addresses("   IPv4 Address. . . . . . . . . . . : 172.20.1.50\n") == ["172.20.1.50"]
+    line = pair_line("ssh-ed25519 AAAAC3Nza key-comment\n", ["172.20.1.50", "10.0.0.12"], "desktape-pair-box1@mini")
+    assert line == ('from="172.20.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty '
                     'ssh-ed25519 AAAAC3Nza desktape-pair-box1@mini'), line
     for bad in (lambda: pair_line("ssh-rsa AAAA x", ["10.0.0.1"], "c"), lambda: pair_line("ssh-ed25519 AAAA x", [], "c"),
                 lambda: pair_key("../x")):

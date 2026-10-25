@@ -1,15 +1,15 @@
 ---
 name: desktape
-description: Run a desktape tape — a recorded, checked sequence of clicks and typing — against a Windows desktop program that has no API (accounting, inventory, any old Windows app), on this computer or on a Windows machine over SSH; check first what is missing and install it with the person's approval; read a failed step's repair note. Use for "import this file into the program", "run the tape", "do it in the desktop app", "record a video of it", and Hungarian jobs - importálás a programba, árak felvitele, szalag futtatása, asztali program kezelése.
+description: Run a desktape tape (a recorded, checked sequence of clicks and typing) against a Windows desktop program that has no API (accounting, inventory, any old Windows app), on this computer or on a Windows machine over SSH; check first what is missing and install it with the person's approval; read a failed step's repair note. Use for "import this file into the program", "run the tape", "do it in the desktop app", "record a video of it", and Hungarian jobs - importálás a programba, árak felvitele, szalag futtatása, asztali program kezelése.
 ---
 
-# desktape — drive a Windows program through a recorded tape
+# desktape: drive a Windows program through a recorded tape
 
 desktape replays a **tape**: a YAML file of steps (focus a window, click a labelled control, type, open a file,
 check a table by value), each with an expected outcome. It drives the program through Cua Driver (Windows UI
 Automation), the way a person would, and stops at the first step whose outcome did not happen. **The runner
 never calls a model.** Your job is to choose and start the right tape, give it its inputs, and report what it
-measured — not to click around yourself.
+measured, not to click around yourself.
 
 ## The command
 
@@ -23,7 +23,7 @@ PyYAML itself; nothing else is installed by hand. If `uv` is not found, look in 
 `%USERPROFILE%\.local\bin\uv.exe`) before installing it: uv's installers put it there, and a running shell
 may not have that folder on its PATH yet. Call it by its full path then.
 
-## 1. Check first — every time on a new machine
+## 1. Check first, every time on a new machine
 
 ```bash
 dt doctor --local            # the program runs on THIS Windows computer
@@ -40,10 +40,10 @@ OS (`winget`, `brew`, or the tool's official script). Then:
 3. Run `doctor` again until it says `everything is in place`.
 
 Stop and ask the person instead when:
-- the **Cua Driver** is missing — it is installed in the desktop session, with a pinned version and a script
+- the **Cua Driver** is missing: it is installed in the desktop session, with a pinned version and a script
   that is read before it runs (`docs/windows-setup.md` §2 in this plugin's folder). Walk the person through it;
 - a command asks for an administrator or a restart;
-- `uv` was just installed and is not found yet — a new terminal (or a new session) picks up the PATH.
+- `uv` was just installed and is not found yet: a new terminal (or a new session) picks up the PATH.
 
 ## 2. Run a tape
 
@@ -54,13 +54,13 @@ dt run tape.yaml --host local --var import_file=@prices.xlsx   # a file input: u
 dt run tape.yaml --host local --mode video                     # recorded, with the tape's captions burned in
 ```
 
-- Before it starts, tell the person: **do not touch the mouse or the keyboard until it finishes** — the tape
+- Before it starts, tell the person: **do not touch the mouse or the keyboard until it finishes**: the tape
   uses the real pointer for some steps.
 - The last thing printed is a JSON summary. `"failed": null` means every step reached its outcome; `checks`
   holds what was read back by value (rows compared, mismatches). Report from the summary, never from what the
   screen seemed to show.
 - A tape names its inputs under `vars:`; ask for any you do not have. Passwords come from `type: {env: …,
-  secret: true}` — never put one on the command line or in a file you write.
+  secret: true}`: never put one on the command line or in a file you write.
 
 ## 3. When a step fails
 
@@ -69,7 +69,7 @@ words ("the window 'Megnyitás' is still open", "'Termék kód' stayed empty"), 
 it showed one. Then:
 
 1. Tell the person what happened, quoting that sentence. If the program reported an error (a file not found, a
-   rejected value), that is the answer — do not retry blindly.
+   rejected value), that is the answer: do not retry blindly.
 2. Leave the program as it is, unless the tape has a cleanup the person agrees to.
 3. Fix the tape or its map only if the person asks; re-run it from the start after a fix.
 
