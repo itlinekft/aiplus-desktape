@@ -139,9 +139,9 @@
   <header>
     <a class="mark" href="./">desk<span>tape</span></a>
     <nav>
-      <a href="https://github.com/tatargabor/desktape/blob/main/docs/user-guide.md">Guide</a>
-      <a class="wide" href="https://github.com/tatargabor/desktape/blob/main/docs/tape-format.md">Tape format</a>
-      <a href="https://github.com/tatargabor/desktape">GitHub</a>
+      <a href="https://github.com/itlinekft/desktape/blob/main/docs/user-guide.md">Guide</a>
+      <a class="wide" href="https://github.com/itlinekft/desktape/blob/main/docs/tape-format.md">Tape format</a>
+      <a href="https://github.com/itlinekft/desktape">GitHub</a>
     </nav>
   </header>
 
@@ -150,8 +150,8 @@
     <p class="lede">Record a desktop flow once with your agent, then replay it with zero model tokens, as a
       test or as a captioned video. desktape drives a Windows desktop from Linux over SSH, through UI Automation.</p>
     <div class="buttons">
-      <a class="primary" href="https://github.com/tatargabor/desktape">View on GitHub</a>
-      <a href="https://github.com/tatargabor/desktape/blob/main/docs/user-guide.md">Read the guide</a>
+      <a class="primary" href="https://github.com/itlinekft/desktape">View on GitHub</a>
+      <a href="https://github.com/itlinekft/desktape/blob/main/docs/user-guide.md">Read the guide</a>
     </div>
     <div class="player" id="player" role="img" aria-label="Animation: a tape replays step by step on a desktop window, with the account's chats covered and no model calls">
       <div class="tape-pane">
@@ -247,7 +247,7 @@
     </div>
     <p style="color: var(--muted); font-size: 15px;">Claude's side as of October 2026, from Anthropic's help pages;
       sources and our measurements in
-      <a href="https://github.com/tatargabor/desktape/blob/main/docs/related-work.md#desktape-and-claudes-own-computer-use">related work</a>.</p>
+      <a href="https://github.com/itlinekft/desktape/blob/main/docs/related-work.md#desktape-and-claudes-own-computer-use">related work</a>.</p>
   </section>
 
   <section>
@@ -290,7 +290,7 @@ desktape.py run tape.yaml --mode video</code></pre>
       </table>
     </div>
     <p style="color: var(--muted); font-size: 15px;">Every run: 0 model calls. The method and the raw numbers are
-      in <a href="https://github.com/tatargabor/desktape/blob/main/docs/spike-2026-10-23.md">the spike notes</a>.</p>
+      in <a href="https://github.com/itlinekft/desktape/blob/main/docs/spike-2026-10-23.md">the spike notes</a>.</p>
   </section>
 
   <section>
@@ -305,14 +305,14 @@ desktape.py run tape.yaml --mode video</code></pre>
 
   <section>
     <h2>Get started</h2>
-    <pre><code>git clone https://github.com/tatargabor/desktape && cd desktape
+    <pre><code>git clone https://github.com/itlinekft/desktape && cd desktape
 pip install -r requirements.txt
 python3 desktape.py --selftest                       # offline, no host needed
 export DESKTAPE_HOST=user@windows-host
 python3 desktape.py look --map claude-desktop-win    # what is on screen, cheaply
 python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml</code></pre>
     <p>The target needs OpenSSH Server, <a href="https://github.com/trycua/cua">Cua Driver</a> in the user's session,
-      and ffmpeg for video: <a href="https://github.com/tatargabor/desktape/blob/main/docs/windows-setup.md">Windows setup</a>.</p>
+      and ffmpeg for video: <a href="https://github.com/itlinekft/desktape/blob/main/docs/windows-setup.md">Windows setup</a>.</p>
   </section>
 
   <section>

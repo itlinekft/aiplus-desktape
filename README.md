@@ -61,8 +61,8 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 ## Install as a Claude plugin
 
 In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste
-`https://github.com/tatargabor/desktape.git`, **Sync**, then **Add desktape**. In Claude Code:
-`/plugin marketplace add tatargabor/desktape`, then `/plugin install desktape@desktape`.
+`https://github.com/itlinekft/desktape.git`, **Sync**, then **Add desktape**. In Claude Code:
+`/plugin marketplace add itlinekft/desktape`, then `/plugin install desktape@desktape`.
 
 Then ask Claude for the job. Its skill first runs `desktape.py doctor`, which names what this machine still
 lacks and the one command that installs each piece (`winget`, `brew`, or the tool's official script); Claude

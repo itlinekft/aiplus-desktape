@@ -9,7 +9,7 @@ the bundled Claude Desktop map; any Windows app with an accessibility tree works
 ## 1. Install and check
 
 ```bash
-git clone https://github.com/tatargabor/desktape && cd desktape
+git clone https://github.com/itlinekft/desktape && cd desktape
 pip install -r requirements.txt
 python3 desktape.py --selftest            # → selftest ok   (offline, no target needed)
 export DESKTAPE_HOST=user@windows-host    # every other command needs a target
