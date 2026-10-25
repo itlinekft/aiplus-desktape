@@ -108,6 +108,10 @@ When you drive a desktop yourself (`act`, or while a tape runs), act the way its
   with a real click if the program ignores UI Automation clicks (`foreground: true`). Do not leave it standing.
 - A banner or a pop-up nobody asked for: close it with its X. Do not "apply", "allow" or "grant" anything the
   person did not ask for (no account or app access grants).
+- In Claude Desktop, the information banner above the message box ("Permission mode is set to Auto. Claude runs on
+  its own…") is closed with its X whenever it shows, before a take too: it covers the chat and says nothing the
+  scene needs. Closing it changes nothing; never change the permission mode itself, and never follow its links
+  ("your connectors", "Learn more"). The same goes for the GitHub "Auto-sync … Grant access" card: X only.
 - A window you do not need on screen: close it, or minimise it if it has to keep running.
 - Judge "done" by the outcome (the file exists, the list shows the row), not by what the screen seems to say.
 
