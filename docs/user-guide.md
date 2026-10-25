@@ -1,7 +1,9 @@
 # User guide
 
-From a fresh checkout to a tape that runs as a test and renders as a captioned video. The examples use
-the bundled Claude Desktop map; any Windows app with an accessibility tree works the same way.
+From a fresh checkout to a tape that controls a desktop program, and runs as a test or renders as a captioned
+video. A tape's main use is control: an assistant gives it its inputs (a file, a list of rows) and desktape
+does the work in the program, checking each step. The examples use the bundled Claude Desktop map; any Windows
+or macOS program with an accessibility tree works the same way.
 
 - Setup of the target machine: [`windows-setup.md`](windows-setup.md)
 - Every step kind and the map format: [`tape-format.md`](tape-format.md)

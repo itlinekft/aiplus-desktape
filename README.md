@@ -7,19 +7,35 @@
 
 # desktape
 
-Like VHS, but for desktop GUIs: record a desktop flow once with your agent, then replay it with zero model
-tokens, as a test or as a captioned video.
+**Control desktop programs that have no API.** An AI agent works out the clicks and typing once and keeps them
+as a YAML **tape**; desktape then replays the tape, checking every step's outcome, with no model calls. Like
+VHS, but for desktop GUIs: the same tape also runs as a test, or as a captioned video.
+
+## What it is for
+
+1. **Controlling a program: the main use.** An assistant does the real work in a desktop program that has no
+   API, an accounting, inventory or any older Windows or macOS app:
+   - it enters delivery notes;
+   - it updates a price list from a supplier's PDF;
+   - it imports a monthly file.
+   The person says what to do ("take in these three delivery notes"). The assistant reads the documents and
+   fills in a tape's inputs, and desktape does the clicking. It checks each step's outcome, and the end
+   result by value, by reading the program's table back. Through the desktape plugin, Claude does this on
+   the same computer, or on another one over SSH.
+2. **Testing.** The same tape runs as a fast regression test of the program's UI.
+3. **Showing.** The same tape runs slowly as a captioned screen recording, for a demo or a how-to video.
 
 [Watch the 70-second demo](site/demo.mp4): recorded by `tapes/claude-desktop-demo.yaml`, 43 steps, no model
 calls. The landing page is `site/`, published to GitHub Pages.
 
-desktape drives a remote desktop (Windows or macOS) from a Linux machine, or the desktop it runs on. An AI agent looks at the
-screen cheaply, acts one step at a time, and keeps the steps that worked as a YAML **tape**. The same tape
-then runs as a fast test or as a slow, captioned screen recording, without calling a model.
+desktape drives a Windows or macOS desktop, from another machine over SSH or on the machine itself. An AI agent
+looks at the screen cheaply, acts one step at a time, and keeps the steps that worked as a tape. From then on,
+the tape runs without calling a model.
 
 **No computer use needed.** desktape is not an AI controlling your computer. It does not use Claude's (or
 any model's) computer use, and Claude Desktop's "Enable computer use" switch can stay off: the demo above
-was recorded with it off. A replay clicks through Windows UI Automation, step by step as the tape says, so
+was recorded with it off. A replay clicks through the system's accessibility interface (UI Automation on Windows,
+the accessibility API on macOS), step by step as the tape says, so
 there is no model call, no per-app permission prompt, and no AI taking over the screen. A model is only
 involved while an agent writes or repairs a tape, and even then it acts through desktape's `look` and
 `act`, which read the screen as text first, not through the model's own computer use. How the two compare (plans,
@@ -56,7 +72,7 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 
 ## Requirements
 
-- **Controller (where desktape runs):** Linux, or Windows from the user's desktop session; Python 3.9+,
+- **Controller (where desktape runs):** Linux, macOS, or Windows from the user's desktop session; Python 3.9+,
   PyYAML (`pip install -r requirements.txt`), and an OpenSSH client with key login to the target.
 - **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
   session, and an ffmpeg full build for video mode. Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).

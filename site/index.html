@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>desktape: tapes for desktop GUIs</title>
-<meta name="description" content="Record a desktop flow once with your agent, then replay it with zero model tokens, as a test or as a captioned video.">
+<meta name="description" content="Control desktop programs that have no API: an agent works out the clicks once as a tape, and desktape replays it with zero model tokens, checking every step. The same tape runs as a test or a captioned video.">
 <meta property="og:title" content="desktape">
-<meta property="og:description" content="Like VHS, but for desktop GUIs: record a flow once with your agent, replay it with zero model tokens.">
+<meta property="og:description" content="Control desktop programs that have no API, checked step by step, with zero model tokens on replay. Like VHS, but for desktop GUIs.">
 <meta property="og:image" content="https://itlinekft.github.io/desktape/brand/social-preview-1280x640.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
@@ -159,8 +159,9 @@
 
   <div class="hero">
     <h1>Like VHS, but for desktop&nbsp;GUIs.</h1>
-    <p class="lede">Record a desktop flow once with your agent, then replay it with zero model tokens, as a
-      test or as a captioned video. desktape drives a Windows or macOS desktop, over SSH or on the machine itself, through its accessibility tree.</p>
+    <p class="lede">Let an agent control desktop programs that have no API. It works out the clicks once as a
+      tape; desktape replays it with zero model tokens, checking every step, on Windows or macOS, over SSH or on
+      the machine itself. The same tape runs as a test, or as a captioned video.</p>
     <div class="buttons">
       <a class="primary" href="https://github.com/itlinekft/desktape">View on GitHub</a>
       <a href="https://github.com/itlinekft/desktape/blob/main/docs/user-guide.md">Read the guide</a>
@@ -219,6 +220,28 @@
         covering the account's chats and repositories.</figcaption>
     </figure>
   </div>
+
+  <section>
+    <h2>What it is for</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Control a program</h3>
+        <p>The main use. An assistant does real work in a desktop program that has no API: it enters delivery
+          notes, updates a price list from a supplier's PDF, imports a monthly file. It reads the documents and
+          fills in the tape's inputs; desktape does the clicking and reads the result back by value.</p>
+      </div>
+      <div class="card">
+        <h3>Test it</h3>
+        <p>The same tape runs as a fast regression test of the program's screens: every step waits for its
+          element and checks that something happened.</p>
+      </div>
+      <div class="card">
+        <h3>Show it</h3>
+        <p>The same tape runs slowly as a captioned screen recording, for a demo or a how-to video, with the
+          user's own content covered.</p>
+      </div>
+    </div>
+  </section>
 
   <section>
     <h2>How it works</h2>
