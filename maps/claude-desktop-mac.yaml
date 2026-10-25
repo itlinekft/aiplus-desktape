@@ -21,6 +21,7 @@ ignore:
   - { subtree: { role: List, label: "Artifacts" } }              # Artifacts page: the user's artifacts
   - { subtree: { role: List, label: "Projects" } }               # Projects page: the user's projects
   - { subtree: { role: List, label: "Upload or add files" } }    # the in-app file picker: Drive and artifact names
+  - { subtree: { role: List, label: "Search or create a project" } }   # "Project or folder": the user's projects and folders
 
 elements:
   # --- mode switch (top of the sidebar)
@@ -53,6 +54,8 @@ elements:
   chat.add.plugins:           { label: "Plugins", role: MenuItem }
   chat.add.research:          { label: "Research", role: MenuItem }
   chat.project_or_folder:     { label: "Project or folder", role: PopUpButton }
+  folder.search:              { label: "Search or create a project", role: ComboBox }
+  folder.add:                 { label: "Add folder", role: Text }   # opens macOS's folder dialog, which desktape cannot drive
   chat.permission_mode:       { label: "Auto", role: PopUpButton }        # label is the current mode
   chat.incognito:             { label: "Use incognito", role: Button }
   chat.browser:               { label: "Browser", role: CheckBox }
