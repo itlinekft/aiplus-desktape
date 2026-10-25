@@ -11,6 +11,12 @@
 - [x] 1.7 repair.md hides a secret's substituted value; os_input cleans its request file on any failure [REQ: Step text is what the tape author wrote]
 - [x] 1.8 start/stop_recording failures end with a summary and last.json [REQ: Step text is what the tape author wrote]
 
+- [x] 1.9 A busy program: the driver's walk returned an empty partial tree for >8 s while a list tab loaded
+      (measured in the v3 rehearsal: 3 runs, 6–12 empty reads each); waits now extend up to 30 s, and an empty
+      busy tree never counts as gone (it made `absent:` pass falsely) [REQ: Step text is what the tape author wrote]
+- [x] 1.10 `focus` waits up to 8 s for a window to appear or take its title (a form renamed after its record)
+      [REQ: Step text is what the tape author wrote]
+
 ## 2. Open
 
 - [ ] 2.1 `expect: {opens: T}` passes when T was already open before the step (exclude the step's baseline) [REQ: Step text is what the tape author wrote]

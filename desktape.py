@@ -1445,6 +1445,7 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
 
 # ---- the runner ---------------------------------------------------------------------------------
 
+BUSY_WAIT = 30.0        # busy-window: extra seconds for a program whose tree walk returns nothing yet
 FOCUS_WAIT = 8.0        # focus: how long a window may take to appear or take its title
 EFFECT_WAIT = 3.0       # step-effect-check D2: how long a click or typed text has to show an effect
 CLOSE_LABELS = {"OK", "Cancel", "Close", "Save", "Yes", "No", "Igen", "Nem", "Mégse", "Bezárás", "Mentés"}
@@ -1611,6 +1612,9 @@ class Runner:
     def snapshot(self):
         sc, text = self.cua.call("get_window_state", dict(self.win))
         self.elements, self.tree = sc.get("elements", []), text
+        # the driver's walk ran out of time before the first node: the program is busy (measured: a list tab of an
+        # accounting program loading, >8 s), not empty, so nothing may count as missing or gone (busy-window)
+        self.busy = not self.elements and "PARTIAL TREE" in (text or "")
         self.snapshots += 1
         self.dirty = False
         return self.elements
@@ -1852,22 +1856,36 @@ class Runner:
         i = nth - 1 if nth > 0 else len(hits) + nth
         return hits[i] if 0 <= i < len(hits) else None
 
+    def busy_wait(self, end):
+        """Past the step's own timeout, a busy program (an empty partial tree) gets up to BUSY_WAIT more."""
+        if time.time() <= end:
+            return True
+        if getattr(self, "busy", False) and time.time() <= end + BUSY_WAIT:
+            if not getattr(self, "busy_logged", False):
+                logger.warning("%r answers with an empty tree (busy); waiting up to %.0f s more", self.title, BUSY_WAIT)
+                self.busy_logged = True
+            return True
+        self.busy_logged = False
+        return False
+
     def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False, id=None, field=None):
         end = time.time() + timeout
         while True:
             self.snapshot()
             e = self.find(label, role, prefix, nth, enabled_only, id, field)
-            if e or time.time() > end:
+            if e or not self.busy_wait(end):
                 return e
             time.sleep(0.4)
 
     def wait_gone(self, label, role=None, timeout=8.0, prefix=False, nth=1, id=None, field=None):
-        """True once no element matches (design D5 of runner-robustness)."""
+        """True once no element matches (design D5 of runner-robustness); an empty tree of a busy program is not
+        "gone"."""
         end = time.time() + timeout
         while True:
             self.snapshot()
-            if not self.find(label, role, prefix, nth, id=id, field=field) or time.time() > end:
-                return not self.find(label, role, prefix, nth, id=id, field=field)
+            gone = not getattr(self, "busy", False) and not self.find(label, role, prefix, nth, id=id, field=field)
+            if gone or not self.busy_wait(end):
+                return gone
             time.sleep(0.4)
 
     def pick(self, a, timeout=8.0, enabled_only=False):
@@ -3785,6 +3803,18 @@ def selftest():
     assert spaces("14\u00a0040 Ft") == "14 040 Ft"
     assert caption_text("&Cikkszám:") == "Cikkszám" and sel_name({"field": "Mennyiség"}) == "field Mennyiség"
     rr = Runner.__new__(Runner)
+    rr.elements, rr.tree = els, tree
+    seq = iter([([], "⚠️ PARTIAL TREE: …"), ([], "⚠️ PARTIAL TREE: …"), (els, tree)])
+    def fake_snap(self=rr):
+        self.elements, self.tree = next(seq)
+        self.busy = not self.elements and "PARTIAL TREE" in self.tree
+    rr.snapshot, rr.title = fake_snap, "W"
+    assert rr.wait_for(None, field="Mennyiség", timeout=0.0)["element_index"] == 41     # waited through busy reads
+    seq = iter([([], "⚠️ PARTIAL TREE: …")] * 200)
+    old = BUSY_WAIT
+    globals()["BUSY_WAIT"] = 0.5
+    assert rr.wait_gone(None, field="Mennyiség", timeout=0.0) is False                 # an empty busy tree is not gone
+    globals()["BUSY_WAIT"] = old
     rr.elements, rr.tree = els, tree
     assert rr.find(None, field="Mennyiség", nth=2)["element_index"] == 42
     assert rr.find(None, id="4065688")["element_index"] == 41          # a runtime id is an id too, if unstable
