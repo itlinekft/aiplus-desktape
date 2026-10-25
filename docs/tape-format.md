@@ -340,7 +340,8 @@ Hotkeys are the app's own: write `[cmd, …]` in a macOS tape.
 
 ## Only the scene's programs on screen: `tidy`
 
-A recorded take shows only the programs its scene needs; every other window is closed, not minimised.
+A recorded take shows only the programs its scene needs; every other window is closed, or minimised where
+it must keep running (the driver's host, remote access, a window listed under `minimize:`).
 A tape asks for that itself, usually as its first step:
 
 ```yaml
