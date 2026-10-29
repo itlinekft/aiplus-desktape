@@ -6,6 +6,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- `desktape.py nightly` runs the tapes of a plan (`~/.config/desktape/nightly.yaml`, see `nightly.example.yaml`) one
+  after another, each against its own target, and writes a dated folder with `summary.md`, `summary.json`, each
+  tape's log and run folder. A failed, busy, invalid or hung tape does not stop the others; any of them makes the
+  night exit 1 and sends one alert line. `--dry-run` checks the plan and every tape offline. A systemd user service
+  and timer are in `contrib/systemd/`, with the steps to switch them on; desktape never installs them. Not yet
+  measured on a real night.
 - A map can carry `answers:`, like a tape: they apply to every tape on that map, and a tape answer with the same
   name replaces the map's. An unplanned dialog is offered to the answers before it fails a step. Meant for pop-ups
   any tape on the app may meet, such as Claude Desktop's auto-sync card (closed with its X, never "Grant access");

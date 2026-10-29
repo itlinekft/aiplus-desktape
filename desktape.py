@@ -12,6 +12,7 @@
   desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py targets                             the named targets, with lock and status
   desktape.py doctor [--local] [--video]          what this machine still needs, with the command for each
+  desktape.py nightly [--plan P] [--dry-run]      the tapes of a plan, one after another, with a dated result
   desktape.py --selftest                          offline checks, no host needed
 
 Target: --host user@host or --target NAME, else DESKTAPE_TARGET, else DESKTAPE_HOST, else the default in
@@ -26,7 +27,7 @@ row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a b
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, base64, contextlib, glob, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, base64, contextlib, glob, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, signal, subprocess, sys, tempfile, threading, time
 
 import yaml
 
@@ -3086,10 +3087,12 @@ def new_run_dir(name, mode):
     return d
 
 
-def cmd_run(a):
-    tape = yaml.safe_load(open(a.tape, encoding="utf-8"))
+def check_tape(path, var_pairs=None):
+    """A tape and its map, resolved and checked as far as possible before any tool call (also `nightly --dry-run`).
+    Returns (tape, map, values, uploads, plan, deny)."""
+    tape = yaml.safe_load(open(path, encoding="utf-8"))
     amap = load_map(tape.get("map"))
-    values, uploads = parse_vars(a.var)
+    values, uploads = parse_vars(var_pairs)
     values = tape_values(tape.get("vars"), values, uploads)
     tape["steps"] = expand_each(tape["steps"], values)   # row-loop: one block per data row, before anything else
     # a misspelt @name or a missing variable stops here; substituted after resolving, so a map's `expect:`
@@ -3102,6 +3105,11 @@ def cmd_run(a):
     answers = with_map_answers(answers, amap, values, tape.get("map"))   # map-answers: the app's own, after the tape's
     check_tape_deny([st for h in answers for st in h["plan"]], deny)
     tape["_answers"] = answers
+    return tape, amap, values, uploads, plan, deny
+
+
+def cmd_run(a):
+    tape, amap, values, uploads, plan, deny = check_tape(a.tape, a.var)
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
     with box_lock(a.host, f"run {a.tape}") as lk:    # box-lock: after the offline checks, so a broken tape never waits
@@ -4157,7 +4165,406 @@ def cmd_unlock(a):
     return 0 if why in (None, "not held") else 1
 
 
+# ---- the nightly run (nightly-run) ---------------------------------------------------------------
+
+NIGHTLY_KEYS = {"target", "out", "timeout", "mode", "tapes"}
+NIGHTLY_ENTRY_KEYS = {"tape", "name", "target", "cwd", "mode", "vars", "timeout", "before"}
+NIGHTLY_TIMEOUT = 900.0     # seconds one tape may run before it is stopped (nightly-run D4)
+NIGHTLY_OUT = "~/desktape-nightly"
+BEFORE_TIMEOUT = 120.0      # a controller-side `before` command (nightly-run D5)
+STOP_GRACE = 15.0           # after Ctrl+C, seconds a timed-out run has to let go of its lock and its driver
+
+
+def nightly_path():
+    """The plan: DESKTAPE_NIGHTLY, else nightly.yaml beside the targets file's default place (nightly-run D2)."""
+    if os.environ.get("DESKTAPE_NIGHTLY"):
+        return os.path.expanduser(os.environ["DESKTAPE_NIGHTLY"])
+    base = os.environ.get("APPDATA") if os.name == "nt" else \
+        (os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"))
+    return os.path.join(base or "", "desktape", "nightly.yaml")
+
+
+def load_plan(path, target=None):
+    """nightly-run D2: the plan's entries with every default applied and every path absolute. A relative `cwd` or
+    `out` is read from the plan's folder, a relative `tape` from the entry's `cwd` (default: desktape's own folder,
+    so `tapes/…` works as in the README). `target` (from --target) replaces the plan's default target."""
+    if not os.path.exists(path):
+        raise ValueError(f"no nightly plan at {path}: copy nightly.example.yaml there, or pass --plan")
+    try:
+        doc = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"{path} is not valid YAML: {e}") from None
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: expected a mapping with a tapes: list")
+    extra = set(doc) - NIGHTLY_KEYS
+    if extra:
+        raise ValueError(f"{path}: unknown keys {sorted(extra)}; known: {sorted(NIGHTLY_KEYS)}")
+    if not isinstance(doc.get("tapes"), list) or not doc["tapes"]:
+        raise ValueError(f"{path}: tapes: lists no tape")
+    home = os.path.dirname(os.path.abspath(path))
+    def where(p, base):
+        return os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(str(p)))))
+    entries, names = [], set()
+    for i, e in enumerate(doc["tapes"], 1):
+        e = {"tape": e} if isinstance(e, str) else e
+        if not isinstance(e, dict) or not e.get("tape"):
+            raise ValueError(f"{path}: entry {i} needs a tape")
+        extra = set(e) - NIGHTLY_ENTRY_KEYS
+        if extra:
+            raise ValueError(f"{path}: entry {i} ({e['tape']}) has unknown keys {sorted(extra)}; "
+                             f"known: {sorted(NIGHTLY_ENTRY_KEYS)}")
+        mode = e.get("mode", doc.get("mode", "test"))
+        if mode != "test":
+            raise ValueError(f"{path}: entry {i} ({e['tape']}): mode {mode!r}; a nightly run is test mode only")
+        if not isinstance(e.get("vars") or {}, dict):
+            raise ValueError(f"{path}: entry {i} ({e['tape']}): vars: is a mapping of name: value")
+        cwd = where(e["cwd"], home) if e.get("cwd") else HERE
+        name = str(e.get("name") or os.path.splitext(os.path.basename(str(e["tape"])))[0])
+        base, n = name, 1
+        while name in names:                       # two entries of one tape (other vars): each its own log
+            n += 1
+            name = f"{base}-{n}"
+        names.add(name)
+        try:
+            timeout = float(e.get("timeout", doc.get("timeout", NIGHTLY_TIMEOUT)))
+        except (TypeError, ValueError):
+            raise ValueError(f"{path}: entry {i} ({e['tape']}): timeout is a number of seconds") from None
+        entries.append({"name": name, "tape": where(e["tape"], cwd), "cwd": cwd,
+                        "target": e.get("target") or target or doc.get("target"), "timeout": timeout,
+                        "vars": [f"{k}={v}" for k, v in (e.get("vars") or {}).items()],
+                        "before": e.get("before")})
+    return {"path": os.path.abspath(path), "out": where(doc.get("out") or NIGHTLY_OUT, home), "entries": entries}
+
+
+def night_dir(out, day):
+    """nightly-run D3: <out>/<day>, or <day>-2, -3 … when that night's folder exists already."""
+    os.makedirs(out, exist_ok=True)
+    n = 1
+    while True:
+        d = os.path.join(out, day if n == 1 else f"{day}-{n}")
+        try:
+            os.makedirs(d)
+            return d
+        except FileExistsError:
+            n += 1
+
+
+def run_child(cmd, cwd, env, timeout, log):
+    """One child process, its output appended to `log`. Its exit code, or None when it ran past `timeout`: then it
+    gets Ctrl+C first, so its lock and its driver connection are given back, and is killed after STOP_GRACE."""
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(f"$ {subprocess.list2cmdline(cmd) if isinstance(cmd, list) else cmd}\n")
+        f.flush()
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, shell=isinstance(cmd, str),
+                             start_new_session=os.name != "nt")
+        try:
+            return p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.warning("still running after %.0f s, stopping it: %s", timeout, cmd)
+            stop_child(p)
+            f.write(f"\n[desktape nightly] stopped after {timeout:.0f} s\n")
+            return None
+        except KeyboardInterrupt:          # its own process group does not hear the terminal's Ctrl+C
+            stop_child(p)
+            raise
+
+
+def stop_child(p):
+    """Ctrl+C to the child's process group, then a kill after STOP_GRACE (Windows: a kill at once)."""
+    try:
+        if os.name != "nt":
+            os.killpg(p.pid, signal.SIGINT)
+            try:
+                p.wait(timeout=STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+        else:
+            p.kill()
+    except ProcessLookupError:
+        pass
+    p.wait()
+
+
+def last_line(path):
+    """The log's last non-empty line, for the summary's detail column."""
+    try:
+        lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
+    except OSError:
+        return ""
+    return lines[-1][:300] if lines else ""
+
+
+def nightly_outcome(code, summary, log):
+    """nightly-run D4: (status, detail) of one entry from its exit code and its run's summary."""
+    if code is None:
+        return "timeout", "stopped at its timeout"
+    if summary and summary.get("failed"):
+        return "fail", str(summary["failed"])
+    if code == 0 and summary:
+        return "pass", ""
+    if code == 3:
+        return "busy", last_line(log)
+    if code == 2:
+        return "invalid", last_line(log)
+    return "error", f"exit {code}" + (f": {last_line(log)}" if last_line(log) else "") + ("" if summary else ", no summary")
+
+
+def nightly_entry(e, night, runner=run_child):
+    """One tape of the night, in its own `run` process (nightly-run D1)."""
+    runs = os.path.join(night, "runs")
+    os.makedirs(runs, exist_ok=True)
+    log = os.path.join(night, "logs", f"{e['name']}.log")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    env = {**os.environ, "DESKTAPE_RUNS": runs}
+    res = {"name": e["name"], "tape": e["tape"], "target": e["target"], "cwd": e["cwd"], "log": log,
+           "steps": None, "passed": None, "run_dir": None, "repair": None}
+    t0 = time.time()
+    if not os.path.isfile(e["tape"]):
+        res.update(status="error", detail=f"no tape at {e['tape']}", exit=None, seconds=0.0)
+        return res
+    if e.get("before"):
+        code = runner(e["before"], e["cwd"], env, BEFORE_TIMEOUT, log)
+        if code != 0:
+            res.update(status="error", exit=code, seconds=round(time.time() - t0, 1),
+                       detail="before: " + ("timed out" if code is None else f"exit {code}") +
+                              (f": {last_line(log)}" if last_line(log) else ""))
+            return res
+    last = os.path.join(runs, "last.json")
+    if os.path.exists(last):
+        os.remove(last)                            # nightly-run D3: a last.json after the run is this run's
+    cmd = [sys.executable, os.path.abspath(__file__), "run", e["tape"], "--mode", "test"]
+    if e["target"]:
+        cmd += ["--target", e["target"]]
+    for v in e["vars"]:
+        cmd += ["--var", v]
+    code = runner(cmd, e["cwd"], env, e["timeout"], log)
+    summary = None
+    if os.path.exists(last):
+        try:
+            summary = json.load(open(last, encoding="utf-8"))
+        except ValueError as err:
+            logger.warning("%s: unreadable last.json: %s", e["name"], err)
+    status, detail = nightly_outcome(code, summary, log)
+    res.update(status=status, detail=detail, exit=code, seconds=round(time.time() - t0, 1))
+    if summary:
+        res.update(steps=summary.get("steps"), passed=summary.get("passed"), run_dir=summary.get("run_dir"))
+        repair = os.path.join(summary.get("run_dir") or "", "repair.md")
+        if summary.get("run_dir") and os.path.exists(repair):
+            res["repair"] = repair
+    return res
+
+
+def nightly_markdown(s):
+    """summary.md: one table a person reads in the morning."""
+    cell = lambda x: str(x if x is not None else "").replace("|", "\\|").replace("\n", " ")
+    mins, secs = divmod(int(s["seconds"]), 60)
+    out = [f"# desktape nightly {s['night']}", "",
+           f"{s['passed']} of {s['total']} tapes passed · {mins} min {secs:02d} s · started {s['started']} · "
+           f"plan `{s['plan']}`", "",
+           "| tape | target | status | steps | seconds | detail |", "|---|---|---|---|---|---|"]
+    for r in s["results"]:
+        steps = f"{r['passed']}/{r['steps']}" if r.get("steps") is not None else ""
+        detail = cell(r.get("detail"))
+        if r.get("repair"):
+            detail += f" · `{cell(r['repair'])}`"
+        elif r["status"] != "pass":
+            detail += f" · log `{cell(r['log'])}`"
+        out.append(f"| {cell(r['name'])} | {cell(r['target'] or 'default')} | **{r['status']}** | {steps} | "
+                   f"{r['seconds']} | {detail} |")
+    return "\n".join(out) + "\n"
+
+
+def plan_entries(plan, only=None):
+    """The plan's entries, or those `--only` names; naming none of them stops."""
+    entries = [e for e in plan["entries"] if not only or e["name"] in only]
+    if not entries:
+        raise ValueError(f"--only {', '.join(only)} matches no entry; the plan has: "
+                         f"{', '.join(e['name'] for e in plan['entries'])}")
+    return entries
+
+
+def nightly(plan, runner=run_child, day=None, only=None):
+    """nightly-run: every entry in turn; the night's folder, summary.json / summary.md, latest.*, one alert."""
+    entries = plan_entries(plan, only)
+    t0 = time.time()
+    night = night_dir(plan["out"], day or time.strftime("%Y-%m-%d"))
+    logger.info("nightly: %d tapes, results in %s", len(entries), night)
+    results = []
+    for e in entries:
+        logger.info("nightly: %s on %s", e["name"], e["target"] or "the default target")
+        r = nightly_entry(e, night, runner)
+        logger.info("nightly: %s %s %s", e["name"], r["status"], r.get("detail") or "")
+        results.append(r)
+    s = {"night": os.path.basename(night), "dir": night, "plan": plan["path"],
+         "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0)), "seconds": round(time.time() - t0, 1),
+         "passed": sum(r["status"] == "pass" for r in results), "total": len(results), "results": results}
+    md = nightly_markdown(s)
+    for base in (night, plan["out"]):
+        stem = "summary" if base == night else "latest"
+        json.dump(s, open(os.path.join(base, f"{stem}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        open(os.path.join(base, f"{stem}.md"), "w", encoding="utf-8").write(md)
+    if s["passed"] < s["total"]:
+        bad = ", ".join(f"{r['name']} {r['status']}" for r in results if r["status"] != "pass")
+        alert(f"desktape nightly {s['night']}: {s['passed']}/{s['total']} passed; {bad} "
+              f"({os.path.join(night, 'summary.md')})")
+    return s
+
+
+def nightly_dry_run(plan, only=None, targets=None):
+    """nightly-run: the plan's files, targets and every tape's offline checks; no target is contacted.
+    Returns [(name, ok, what)]."""
+    targets = targets if targets is not None else load_targets()
+    rows = []
+    for e in plan_entries(plan, only):
+        try:
+            if not os.path.isdir(e["cwd"]):
+                raise ValueError(f"no folder {e['cwd']} (cwd)")
+            if not os.path.isfile(e["tape"]):
+                raise ValueError(f"no tape at {e['tape']}")
+            host, _ = choose_target(None, e["target"], env=dict(os.environ), cfg=targets)
+            if not host:
+                raise ValueError("no target: name one in the plan or the entry, or a default in the targets file")
+            here = os.getcwd()
+            os.chdir(e["cwd"])                     # a map named by a relative path resolves as in the real run
+            try:
+                steps = check_tape(e["tape"], e["vars"])[4]
+            finally:
+                os.chdir(here)
+            what = f"{len(steps)} step{'' if len(steps) == 1 else 's'} on {e['target'] or host}" + (", with a before command" if e.get("before") else "")
+            rows.append((e["name"], True, what))
+        except KeyError as err:
+            rows.append((e["name"], False, str(err.args[0])))
+        except Exception as err:                    # any reason the real run would stop before its first tool call
+            rows.append((e["name"], False, str(err) if isinstance(err, ValueError) else f"{type(err).__name__}: {err}"))
+    return rows
+
+
+def cmd_nightly(a):
+    if a.host:
+        raise ValueError("nightly takes its targets from the plan (or --target for its default), not --host")
+    plan = load_plan(os.path.expanduser(a.plan) if a.plan else nightly_path(), target=a.target)
+    if a.dry_run:
+        rows = nightly_dry_run(plan, a.only)
+        for name, ok, what in rows:
+            print(f"{'ok     ' if ok else 'INVALID'} {name}: {what}")
+        print(f"{sum(ok for _, ok, _ in rows)} of {len(rows)} entries ready; results would go to {plan['out']}")
+        return 0 if all(ok for _, ok, _ in rows) else 2
+    s = nightly(plan, only=a.only)
+    print(nightly_markdown(s))
+    print(f"results: {s['dir']}")
+    return 0 if s["passed"] == s["total"] else 1
+
+
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_nightly():
+    """nightly-run: the plan, every outcome through a fake runner, the night's folder and summaries, a real timeout,
+    and the dry run's offline checks."""
+    alerts, real_alert = [], globals()["alert"]
+    globals()["alert"] = alerts.append
+    level = logger.level; logger.setLevel(logging.ERROR)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "proj", "tests"))
+            for t in ("good", "bad", "busy", "hang", "broken", "crash", "pre"):
+                open(os.path.join(d, "proj", "tests", f"{t}.yaml"), "w").write("name: x\nsteps: []\n")
+            plan_file = os.path.join(d, "nightly.yaml")
+            def write_plan(text):
+                open(plan_file, "w", encoding="utf-8").write(text)
+                return plan_file
+            # the plan: defaults, a path entry, relative paths, a second entry of one tape, unknown keys stop it
+            plan = load_plan(write_plan("target: box\nout: out\ntapes:\n  - tapes/claude-desktop-tour.yaml\n"
+                                        "  - { tape: tests/good.yaml, cwd: proj, timeout: 5, vars: { n: 1 } }\n"
+                                        "  - { tape: tests/good.yaml, cwd: proj, target: mac }\n"))
+            e0, e1, e2 = plan["entries"]
+            assert plan["out"] == os.path.join(d, "out") and e0["cwd"] == HERE, plan
+            assert e0["tape"] == os.path.join(HERE, "tapes", "claude-desktop-tour.yaml") and e0["timeout"] == NIGHTLY_TIMEOUT
+            assert e1["tape"] == os.path.join(d, "proj", "tests", "good.yaml") and e1["vars"] == ["n=1"], e1
+            assert (e1["name"], e2["name"], e1["target"], e2["target"]) == ("good", "good-2", "box", "mac")
+            assert load_plan(plan_file, target="other")["entries"][0]["target"] == "other"
+            for bad, said in (("tapes:\n  - { tape: a.yaml, timout: 60 }\n", "unknown keys ['timout']"),
+                              ("tape: a.yaml\n", "unknown keys ['tape']"),
+                              ("tapes:\n  - { tape: a.yaml, mode: video }\n", "test mode only"),
+                              ("tapes: []\n", "lists no tape")):
+                try:
+                    load_plan(write_plan(bad))
+                    raise AssertionError(f"accepted: {bad}")
+                except ValueError as err:
+                    assert said in str(err), err
+            # a night: every outcome, and a stale last.json never passes for the next tape
+            plan = load_plan(write_plan("out: out\ntapes:\n" + "".join(
+                f"  - {{ tape: tests/{t}.yaml, cwd: proj }}\n" for t in ("good", "bad", "busy", "hang", "broken", "crash"))
+                + "  - { tape: tests/pre.yaml, cwd: proj, before: 'exit 4' }\n  - { tape: tests/gone.yaml, cwd: proj }\n"))
+            ran = []
+            def fake(cmd, cwd, env, timeout, log):
+                if isinstance(cmd, str):
+                    ran.append("before")
+                    return 4
+                tape = os.path.splitext(os.path.basename(cmd[3]))[0]
+                ran.append(tape)
+                assert cwd == os.path.join(d, "proj") and env["DESKTAPE_RUNS"].endswith("runs") and cmd[2] == "run"
+                assert "--target" not in cmd and cmd[4:6] == ["--mode", "test"], cmd
+                open(log, "a").write(f"{tape} says goodbye\n")
+                run_dir = os.path.join(env["DESKTAPE_RUNS"], tape)
+                os.makedirs(run_dir, exist_ok=True)
+                last = os.path.join(env["DESKTAPE_RUNS"], "last.json")
+                if tape in ("good", "bad"):
+                    failed = "step 2: no element 'Send'" if tape == "bad" else None
+                    if failed:
+                        open(os.path.join(run_dir, "repair.md"), "w").write("#")
+                    json.dump({"steps": 3, "passed": 1 if failed else 3, "failed": failed, "run_dir": run_dir}, open(last, "w"))
+                return {"good": 0, "bad": 1, "busy": 3, "hang": None, "broken": 2, "crash": 1}[tape]
+            s = nightly(plan, runner=fake, day="2026-10-30")
+            got = {r["name"]: r["status"] for r in s["results"]}
+            assert got == {"good": "pass", "bad": "fail", "busy": "busy", "hang": "timeout", "broken": "invalid",
+                           "crash": "error", "pre": "error", "gone": "error"}, got
+            assert ran == ["good", "bad", "busy", "hang", "broken", "crash", "before"], ran   # pre's tape never ran
+            r = {r["name"]: r for r in s["results"]}
+            assert r["bad"]["repair"].endswith("repair.md") and r["bad"]["passed"] == 1 and r["good"]["steps"] == 3
+            assert r["crash"]["detail"] == "exit 1: crash says goodbye, no summary", r["crash"]
+            assert r["busy"]["detail"] == "busy says goodbye" and r["pre"]["detail"].startswith("before: exit 4"), r
+            assert s["night"] == "2026-10-30" and (s["passed"], s["total"]) == (1, 8), s
+            md = open(os.path.join(d, "out", "2026-10-30", "summary.md"), encoding="utf-8").read()
+            assert "1 of 8 tapes passed" in md and "| bad | default | **fail** | 1/3 |" in md and "repair.md" in md, md
+            assert open(os.path.join(d, "out", "latest.md"), encoding="utf-8").read() == md
+            assert json.load(open(os.path.join(d, "out", "2026-10-30", "summary.json")))["total"] == 8
+            assert len(alerts) == 1 and alerts[0].startswith("desktape nightly 2026-10-30: 1/8 passed; bad fail,"), alerts
+            s2 = nightly(plan, runner=fake, day="2026-10-30", only=["good"])         # a second run that day
+            assert s2["night"] == "2026-10-30-2" and s2["passed"] == s2["total"] == 1 and len(alerts) == 1, s2
+            # a real child: its exit code; and a hung one is stopped at its timeout, with Ctrl+C first
+            log = os.path.join(d, "child.log")
+            assert run_child("exit 5", d, dict(os.environ), 10, log) == 5
+            t0 = time.time()
+            assert run_child([sys.executable, "-c", "import time; time.sleep(30)"], d, dict(os.environ), 0.5, log) is None
+            assert time.time() - t0 < 10 and "stopped after 0 s" in open(log).read()
+            # the dry run: files, targets, and each tape's offline checks, with no target contacted
+            tape_dir = os.path.join(d, "proj", "tests")
+            open(os.path.join(tape_dir, "ok.yaml"), "w").write(
+                "name: ok\nmap: claude-desktop-win\nsteps:\n  - focus: '@window'\n  - click: '@sidebar.new'\n")
+            open(os.path.join(tape_dir, "typo.yaml"), "w").write(
+                "name: typo\nmap: claude-desktop-win\nsteps:\n  - click: '@sidebar.nwe'\n")
+            open(os.path.join(tape_dir, "local-map.yaml"), "w").write(
+                "name: lm\nmap: tests/m.yaml\nsteps:\n  - click: '@a'\n")
+            open(os.path.join(tape_dir, "m.yaml"), "w").write("window: W\nelements:\n  a: { label: A, role: Button }\n")
+            plan = load_plan(write_plan("target: box\ntapes:\n" + "".join(
+                f"  - {{ tape: tests/{t}.yaml, cwd: proj }}\n" for t in ("ok", "typo", "local-map", "nope"))
+                + "  - { tape: tests/ok.yaml, cwd: proj, target: elsewhere }\n"))
+            cfg = {"default": None, "targets": {"box": {"host": "box.example.lan"}}, "path": "targets.yaml"}
+            rows = {n: (ok, what) for n, ok, what in nightly_dry_run(plan, targets=cfg)}
+            assert rows["ok"] == (True, "2 steps on box") and rows["local-map"] == (True, "1 step on box"), rows
+            assert not rows["typo"][0] and "sidebar.nwe" in rows["typo"][1], rows
+            assert rows["nope"] == (False, f"no tape at {os.path.join(tape_dir, 'nope.yaml')}"), rows
+            assert not rows["ok-2"][0] and "no target 'elsewhere'" in rows["ok-2"][1], rows
+            assert os.getcwd() != os.path.join(d, "proj")
+            try:
+                nightly_dry_run(plan, only=["typoo"], targets=cfg)
+                raise AssertionError("--only matched nothing and passed")
+            except ValueError as err:
+                assert "matches no entry" in str(err) and "ok-2" in str(err), err
+    finally:
+        globals()["alert"] = real_alert
+        logger.setLevel(level)
+
 
 def selftest_knowledge():
     """os-knowledge: the base page first, then the user's pages; --where names the page not written yet."""
@@ -5577,8 +5984,9 @@ def selftest():
     selftest_person_cursor()
     selftest_mac_file_dialog()
     selftest_knowledge()
+    selftest_nightly()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
-                "knowledge"):
+                "knowledge", "nightly"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     print("selftest ok")
@@ -5640,6 +6048,10 @@ def main():
     p.add_argument("--timeout", type=float, default=TIDY_WAIT, help="seconds each program has to close")
     p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("nightly", help="run the tapes of a plan one after another and write a dated result (nightly-run)")
+    p.add_argument("--plan", help="the plan file (default DESKTAPE_NIGHTLY, else nightly.yaml beside targets.yaml)")
+    p.add_argument("--only", action="append", metavar="NAME", help="only this entry of the plan (repeatable)")
+    p.add_argument("--dry-run", action="store_true", help="check the plan and every tape offline; contact no target")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
     argv = sys.argv[1:]
     if argv and argv[0].endswith((".yaml", ".yml")):
@@ -5659,6 +6071,8 @@ def main():
             return cmd_knowledge(a)
         if a.cmd in ("pair", "unpair"):                         # target-pairing: the name is the target
             return cmd_pair(a) if a.cmd == "pair" else cmd_unpair(a)
+        if a.cmd == "nightly":                                  # nightly-run: each entry names its own target
+            return cmd_nightly(a)
         a.host, a.target = choose_target(a.host, a.target)     # target-profiles
         if not a.host:
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "

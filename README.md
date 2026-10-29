@@ -164,6 +164,7 @@ python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml --mode 
 python3 desktape.py tidy --keep Claude --minimize Terminal   # only the scene's programs on screen
 python3 desktape.py record --until-file /tmp/take-done        # the target's whole screen, beside a run on another machine
 python3 desktape.py pair box1 --host box1.local --user demo   # this machine's own key for a target: docs/pairing.md
+python3 desktape.py nightly --dry-run                         # a plan of tapes for every night: docs/nightly.md
 ```
 
 Authoring a tape: `look`, then `act` one step at a time with `--append`; a step is appended only if it
@@ -184,6 +185,8 @@ map format: [`docs/tape-format.md`](docs/tape-format.md).
   Claude Desktop's main screens that doubles as the map's regression test, and
   `claude-desktop-incognito-ask.yaml`, which asks one question in an incognito chat and waits for the answer,
   and `claude-desktop-demo.yaml`, which records the public demo with the user's content covered.
+- `contrib/systemd/`: a user service and timer for the nightly run (`docs/nightly.md`); copied by hand, never
+  installed by desktape.
 - `windows/`: scripts desktape copies to a Windows target (the OCR, run as a one-off interactive task).
 - `macos/`: the pinned driver install for a Mac, and the Vision OCR helper desktape compiles there.
 - `knowledge/`: what desktape knows about each operating system (file dialogs, permissions, the locked screen…),

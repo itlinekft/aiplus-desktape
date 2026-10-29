@@ -1,0 +1,20 @@
+# desktape's nightly run (openspec/changes/nightly-run): the tapes of ~/.config/desktape/nightly.yaml, one after
+# another, with a dated result in the plan's `out:` folder. A user unit; started by desktape-nightly.timer.
+# Install, check and removal: contrib/systemd/README.md. desktape never installs this file itself.
+[Unit]
+Description=desktape nightly run of desktop test tapes
+Documentation=file://%h/.config/desktape/nightly.yaml
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# DESKTAPE_DIR (the checkout) and optionally DESKTAPE_PYTHON, DESKTAPE_NIGHTLY, DESKTAPE_ALERT_CMD:
+# copy nightly.env.example to ~/.config/desktape/nightly.env and fill it in.
+EnvironmentFile=%h/.config/desktape/nightly.env
+Environment=DESKTAPE_PYTHON=python3
+ExecStart=/usr/bin/env ${DESKTAPE_PYTHON} ${DESKTAPE_DIR}/desktape.py nightly
+# A night of tapes, each stopped at its own timeout; this is the outer bound.
+TimeoutStartSec=4h
+# The SSH key of a target is the user's own (targets.yaml `identity:`); an agent socket is not inherited here.
+Nice=5

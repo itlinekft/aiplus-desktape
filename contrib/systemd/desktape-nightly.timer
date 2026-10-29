@@ -1,0 +1,13 @@
+# Starts desktape-nightly.service every night at 02:30 (the controller's local time). With Persistent=true a night
+# missed while the controller was off runs once at its next start. Install: contrib/systemd/README.md.
+[Unit]
+Description=desktape nightly run, every night at 02:30
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=5min
+Unit=desktape-nightly.service
+
+[Install]
+WantedBy=timers.target

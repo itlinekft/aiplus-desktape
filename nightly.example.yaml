@@ -1,0 +1,33 @@
+# A nightly plan for `desktape.py nightly` (openspec/changes/nightly-run). Copy it to ~/.config/desktape/nightly.yaml
+# (on Windows %APPDATA%\desktape\nightly.yaml, or any file named in DESKTAPE_NIGHTLY) and name your own targets and
+# tapes. Keep the real file out of git: it names your machines and your projects' folders.
+#
+# Check it without touching any machine:   python3 desktape.py nightly --dry-run
+# Run it once by hand:                      python3 desktape.py nightly
+# Every night: contrib/systemd/README.md (a user timer; desktape never installs it itself).
+
+target: test-box              # the default target, from targets.yaml (targets.example.yaml)
+out: ~/desktape-nightly       # one folder per night: <out>/<YYYY-MM-DD>/summary.md, summary.json, logs/, runs/
+timeout: 900                  # seconds one tape may run before it is stopped (default 900)
+
+tapes:
+  # A path is read from desktape's own folder, so the repository's tapes are named as in the README.
+  - tapes/claude-desktop-tour.yaml                    # read-only: every main screen; the map's regression test
+  - tapes/claude-desktop-add-marketplace-dialog.yaml  # opens a dialog, fills a URL, cancels; changes nothing
+
+  # Sends one short message in an incognito chat, so it uses a little of the account's usage every night.
+  # - { tape: tapes/claude-desktop-incognito-ask.yaml, timeout: 180 }
+
+  # A Mac. Its tour starts with `tidy`, which quits every other program with a window on that Mac: only on a
+  # machine that is used for nothing else at night.
+  # - { tape: tapes/claude-desktop-tour-mac.yaml, target: mac-mini }
+
+  # A project's own tapes, run from the project's folder, as its README runs them by hand (`cwd`; a relative
+  # `tape` is read from there). `vars` are the run's --var; `before` is a shell command on this machine, run
+  # first (at most 120 s; when it fails, the tape does not run).
+  # - name: my-app-smoke
+  #   cwd: ~/code/my-app
+  #   tape: tests/desktop/smoke.yaml
+  #   target: second-box
+  #   vars: { customer: "Example Ltd" }
+  #   before: ssh second-box.example.lan "my-app --reset-demo-data"
