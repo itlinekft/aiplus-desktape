@@ -132,6 +132,12 @@ PIPE = r"\\.\pipe\cua-driver"
 # the default terminal (Windows 11), `-WindowStyle Hidden` still flashed a terminal window on screen, and into a
 # recording (measured: 8 flashes in one take; one hosted the driver and could be closed by mistake).
 HIDDEN = "conhost.exe --headless "
+# An SSH key login of an administrator gets the elevated token, and cua-driver 0.34.1 refuses a pipe client whose
+# elevation differs from the daemon's ("service named-pipe connection rejected before request parsing", os error
+# 233; measured 2026-10-29 on a laptop whose account is in Administrators). So over SSH the daemon task runs with
+# the highest token the account has: elevated for an administrator, the plain one otherwise. A local controller
+# runs unelevated, so its daemon does too.
+RL_SSH = " /rl highest"
 # macos-target D1: on a Mac the installer links this into /Applications/CuaDriver.app; `mcp` proxies to the app's
 # daemon, which holds the Accessibility and Screen Recording grants (not SSH, not this process)
 MAC_DRIVER = "~/.local/bin/cua-driver"
@@ -212,7 +218,7 @@ class Target:
             self.sh(f'mkdir -p "$HOME/{rel}"')
         else:
             win = rel.replace("/", "\\")
-            self.sh(f"if not exist %USERPROFILE%\\{win} mkdir %USERPROFILE%\\{win}")
+            self.sh(f'if not exist "%USERPROFILE%\\{win}" mkdir "%USERPROFILE%\\{win}"')
 
     def path(self, rel):
         return os.path.join(os.path.expanduser("~") if self.mac else os.environ.get("USERPROFILE", ""), *rel.split("/"))
@@ -282,6 +288,7 @@ class CallBlocked(RuntimeError):
 
 NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
 MAC_NO_DAEMON = "daemon is not running"                 # … and on macOS
+PIPE_REFUSED = "(os error 233)"                     # Windows: the daemon closed the pipe on this client (RL_SSH)
 FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
 SETUP_DOC = {"windows": "docs/windows-setup.md section 3", "macos": "docs/macos-setup.md steps 2 and 3"}
 
@@ -295,10 +302,11 @@ def start_daemon(host):
         t.sh("open -n -g -a CuaDriver --args serve", check=True)
         time.sleep(2)
         return
-    t.sh("if not exist %USERPROFILE%\\desktape mkdir %USERPROFILE%\\desktape")
+    t.sh('if not exist "%USERPROFILE%\\desktape" mkdir "%USERPROFILE%\\desktape"')
     t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
-    tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\desktape\\cua-serve.ps1"
-    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-cua >nul',
+    tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\desktape\\cua-serve.ps1\\\""
+    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it{RL_SSH if not t.local else ""} /f >nul '
+         f'&& schtasks /run /tn desktape-cua >nul',
          check=True)
     time.sleep(4)
     t.sh("schtasks /delete /tn desktape-cua /f >nul")
@@ -316,10 +324,16 @@ class Cua:
         try:
             self._connect(host)
         except RuntimeError as e:
-            if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e):
+            refused = PIPE_REFUSED in str(e) and not t.mac and not t.local
+            if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e) and not refused:
                 raise
-            logger.warning("no driver daemon on %s (after a logout or reboot?); starting it in the desktop session",
-                           host)
+            if refused:      # a daemon started by hand, unelevated: it refuses the elevated SSH client (RL_SSH)
+                logger.warning("the driver daemon on %s refuses this SSH session (os error 233: started unelevated?); "
+                               "restarting it with the SSH session's token", host)
+                t.sh("taskkill /f /im cua-driver.exe >nul 2>nul")
+            else:
+                logger.warning("no driver daemon on %s (after a logout or reboot?); starting it in the desktop session",
+                               host)
             start_daemon(host)
             try:
                 self._connect(host)
@@ -1450,24 +1464,24 @@ def ocr_lines(host, cua=None, win=None):
     t, remote = Target(host), "desktape"
     # The parentheses matter: in cmd, `if … mkdir … & del …` puts the del inside the if, and a stale
     # ocr-done.txt from the previous run then returned the previous OCR result.
-    t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & "
-         f"del /q %USERPROFILE%\\{remote}\\ocr-done.txt %USERPROFILE%\\{remote}\\ocr-out.json 2>nul")
+    t.sh(f'(if not exist "%USERPROFILE%\\{remote}" mkdir "%USERPROFILE%\\{remote}") & '
+         f'del /q "%USERPROFILE%\\{remote}\\ocr-done.txt" "%USERPROFILE%\\{remote}\\ocr-out.json" 2>nul')
     t.put(os.path.join(HERE, "windows", "desktape-ocr.ps1"), f"{remote}/desktape-ocr.ps1")
-    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\desktape-ocr.ps1"
+    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\{remote}\\desktape-ocr.ps1\\\""
     t.sh(f'schtasks /create /tn desktape-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-ocr >nul',
          check=True)
     try:
         for _ in range(40):
-            if "done" in t.sh(f"type %USERPROFILE%\\{remote}\\ocr-done.txt 2>nul").stdout:
+            if "done" in t.sh(f'type "%USERPROFILE%\\{remote}\\ocr-done.txt" 2>nul').stdout:
                 break
             time.sleep(0.5)
         else:
             raise RuntimeError("OCR task did not finish in 20 s")
-        raw = t.sh(f"type %USERPROFILE%\\{remote}\\ocr-out.json").stdout.lstrip("\ufeff")
+        raw = t.sh(f'type "%USERPROFILE%\\{remote}\\ocr-out.json"').stdout.lstrip("\ufeff")
     finally:
         # Nothing stays scheduled, and no screenshot of the desktop is left behind.
-        t.sh(f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png "
-             f"%USERPROFILE%\\{remote}\\ocr-out.json %USERPROFILE%\\{remote}\\ocr-done.txt 2>nul")
+        t.sh(f'schtasks /delete /tn desktape-ocr /f >nul & del /q "%USERPROFILE%\\{remote}\\ocr-shot.png" '
+             f'"%USERPROFILE%\\{remote}\\ocr-out.json" "%USERPROFILE%\\{remote}\\ocr-done.txt" 2>nul')
     d = json.loads(raw)
     if "error" in d:
         raise RuntimeError(f"OCR: {d['error']}")
@@ -1577,9 +1591,10 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
     UI Automation does not answer: a one-off task in the desktop session activates the window, checks that it
     is in front, and only then sends. Raises when the window could not be brought to the front."""
     t, remote = Target(host), "desktape"
-    t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & del /q %USERPROFILE%\\{remote}\\os-input-out.json 2>nul")
+    t.sh(f'(if not exist "%USERPROFILE%\\{remote}" mkdir "%USERPROFILE%\\{remote}") & '
+         f'del /q "%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul')
     t.put(os.path.join(HERE, "windows", "os-input.ps1"), f"{remote}/os-input.ps1")
-    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\os-input.ps1"
+    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\{remote}\\os-input.ps1\\\""
     t0 = time.time()
     out = None
     try:
@@ -1591,15 +1606,15 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
         t.sh(f'schtasks /create /tn desktape-os-input /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-os-input >nul',
              check=True)
         for _ in range(40):
-            raw = t.sh(f"type %USERPROFILE%\\{remote}\\os-input-out.json 2>nul").stdout.lstrip("\ufeff").strip()
+            raw = t.sh(f'type "%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul').stdout.lstrip("\ufeff").strip()
             if raw:
                 out = json.loads(raw)
                 break
             time.sleep(0.5)
     finally:
         # Nothing stays scheduled, and the typed text does not stay on the target.
-        t.sh(f"schtasks /delete /tn desktape-os-input /f >nul & del /q %USERPROFILE%\\{remote}\\os-input.json "
-             f"%USERPROFILE%\\{remote}\\os-input-out.json 2>nul")
+        t.sh(f'schtasks /delete /tn desktape-os-input /f >nul & del /q "%USERPROFILE%\\{remote}\\os-input.json" '
+             f'"%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul')
     if audit:
         audit.write(json.dumps({"ts": round(t0, 3), "tool": "os_input", "args": {"title": title, "keys": "<redacted>" if secret else keys,
                                 "file": file, "clip": None if clip is None else f"{len(clip)} characters"},
@@ -3055,7 +3070,7 @@ def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name)
     else:
         win = rec_rel.replace("/", "\\")
         need_ffmpeg(t, "burning the captions")
-        t.sh(f'cd /d %USERPROFILE%\\{win} && "{t.ffmpeg()}" -y -loglevel error -i recording.mp4 '
+        t.sh(f'cd /d "%USERPROFILE%\\{win}" && "{t.ffmpeg()}" -y -loglevel error -i recording.mp4 '
              f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
     out = os.path.join(local_dir, f"{name}.mp4")
     t.get(f"{rec_rel}/captioned.mp4", out)
@@ -3360,7 +3375,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             if Target(a.host).mac:
                 Target(a.host).sh(f'rm -rf "$HOME/{rec_rel}"')        # rec_rel is desktape/rec/<stamp>, never empty
             else:
-                Target(a.host).sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+                Target(a.host).sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
             logger.info("removed the target's copy of the recording: %s", rec_rel)
         except Exception as e:
             logger.warning("video post-processing failed, the recording stays on the target in %s: %s", rec_rel, e)
@@ -3655,7 +3670,7 @@ def cmd_record(a):
         if t.mac:
             t.sh(f'rm -rf "$HOME/{rec_rel}"')      # the whole screen: no copy stays on the target
         else:
-            t.sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+            t.sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
     summary = {"record": a.name or "screen", "host": a.host, "stopped_by": why, "recording_started_at": utc_iso(t0),
                "start_call_seconds": round(t1 - t0, 3), "seconds": round(t2 - t1, 1), "video": local,
                "bytes": os.path.getsize(local), "liveness": lv.summary()}
