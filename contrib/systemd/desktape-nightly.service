@@ -4,8 +4,6 @@
 [Unit]
 Description=desktape nightly run of desktop test tapes
 Documentation=file://%h/.config/desktape/nightly.yaml
-Wants=network-online.target
-After=network-online.target
 
 [Service]
 Type=oneshot
@@ -14,7 +12,9 @@ Type=oneshot
 EnvironmentFile=%h/.config/desktape/nightly.env
 Environment=DESKTAPE_PYTHON=python3
 ExecStart=/usr/bin/env ${DESKTAPE_PYTHON} ${DESKTAPE_DIR}/desktape.py nightly
-# A night of tapes, each stopped at its own timeout; this is the outer bound.
-TimeoutStartSec=4h
+# Each tape is stopped at its own timeout; this outer bound is only for a night that never ends. Keep it above the
+# sum of the plan's timeouts. A stop (this timeout, a shutdown) is SIGTERM: the running tape gets Ctrl+C, and the
+# summary keeps every tape that finished.
+TimeoutStartSec=12h
 # The SSH key of a target is the user's own (targets.yaml `identity:`); an agent socket is not inherited here.
 Nice=5

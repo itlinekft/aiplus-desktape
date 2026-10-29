@@ -69,6 +69,10 @@ variables, denied clicks) and that each entry's target is in `targets.yaml`. It 
 | `timeout` | still running at its timeout: it gets Ctrl+C first, so it can give its lock back, and is killed 15 s later |
 | `error` | anything else: a missing tape, a failed `before`, an exit with no summary (an SSH failure, a crash) |
 
+`summary.md` and `latest.md` are rewritten after every tape, so a night cut short (Ctrl+C, the service stopped, a
+shutdown) keeps every tape that finished; it says **Interrupted** at the top, the running tape gets Ctrl+C, and the
+alert names it.
+
 The command exits 0 only when every tape passed; otherwise it exits 1 and sends one line through
 `DESKTAPE_ALERT_CMD`: `desktape nightly 2026-10-30: 3/5 passed; tour fail, smoke busy (…/summary.md)`.
 

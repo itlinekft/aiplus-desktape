@@ -6,7 +6,7 @@ results: [`docs/nightly.md`](../../docs/nightly.md).
 
 | file | what |
 |---|---|
-| `desktape-nightly.service` | one night: `desktape.py nightly`, as your user, with a 4-hour outer bound |
+| `desktape-nightly.service` | one night: `desktape.py nightly`, as your user, with a 12-hour outer bound |
 | `desktape-nightly.timer` | starts it at 02:30 (± 5 min); a night missed while the machine was off runs at the next start |
 | `nightly.env.example` | the checkout's folder and the optional settings the service reads |
 

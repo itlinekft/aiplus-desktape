@@ -30,6 +30,10 @@ first. `DESKTAPE_RUNS` is set to `<night>/runs/` for every tape, so the run fold
 with that night. Before each tape the night's `last.json` is removed; after it, `last.json` is that tape's summary,
 and a missing one means the run ended before its summary (a crash, the offline checks, a timeout). `<out>/latest.json`
 and `<out>/latest.md` are copies of the newest night's summary, for a reader who only wants "how was last night".
+Both are rewritten after every tape: a night stopped by Ctrl+C or SIGTERM (systemd's stop, a shutdown; `nightly`
+turns SIGTERM into Ctrl+C) keeps what finished, marks itself `interrupted`, alerts, and gives the running tape Ctrl+C
+so it can release its lock. The child starts with SIGINT at its default, so that Ctrl+C works even when `nightly`
+was started with SIGINT ignored (`nohup`, `&`).
 
 ## D4. Outcomes
 
@@ -40,7 +44,7 @@ and `<out>/latest.md` are copies of the newest night's summary, for a reader who
 | `busy` | exit 3: another session held the target past the lock wait |
 | `invalid` | exit 2: the tape or the map failed its offline checks |
 | `timeout` | still running at the entry's timeout; the process is stopped |
-| `error` | anything else: a `before` command that failed, a missing tape, an exit with no summary |
+| `error` | anything else: a `before` command that failed, a missing tape or `cwd`, a child that could not start, an exit with no summary |
 
 The night exits 0 only when every entry passed. On any other outcome it sends one line through `alert()`:
 `desktape nightly <night>: 3/5 passed; failed: <names>`, with the summary's path.

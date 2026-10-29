@@ -4255,8 +4255,10 @@ def run_child(cmd, cwd, env, timeout, log):
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"$ {subprocess.list2cmdline(cmd) if isinstance(cmd, list) else cmd}\n")
         f.flush()
+        posix = os.name != "nt"
         p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, shell=isinstance(cmd, str),
-                             start_new_session=os.name != "nt")
+                             start_new_session=posix,      # an inherited SIG_IGN would make the Ctrl+C below a no-op
+                             preexec_fn=(lambda: signal.signal(signal.SIGINT, signal.SIG_DFL)) if posix else None)
         try:
             return p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -4319,9 +4321,21 @@ def nightly_entry(e, night, runner=run_child):
     res = {"name": e["name"], "tape": e["tape"], "target": e["target"], "cwd": e["cwd"], "log": log,
            "steps": None, "passed": None, "run_dir": None, "repair": None}
     t0 = time.time()
-    if not os.path.isfile(e["tape"]):
-        res.update(status="error", detail=f"no tape at {e['tape']}", exit=None, seconds=0.0)
+    for bad, detail in ((not os.path.isdir(e["cwd"]), f"no folder {e['cwd']} (cwd)"),
+                        (not os.path.isfile(e["tape"]), f"no tape at {e['tape']}")):
+        if bad:
+            res.update(status="error", detail=detail, exit=None, seconds=0.0)
+            return res
+    try:
+        return nightly_steps(e, res, runs, env, log, runner, t0)
+    except OSError as err:                         # the child could not start (an interpreter, a folder that went away)
+        logger.warning("%s: %s", e["name"], err)
+        res.update(status="error", detail=f"could not start: {err}", exit=None, seconds=round(time.time() - t0, 1))
         return res
+
+
+def nightly_steps(e, res, runs, env, log, runner, t0):
+    """The `before` command, then the run, then its outcome (nightly_entry's body)."""
     if e.get("before"):
         code = runner(e["before"], e["cwd"], env, BEFORE_TIMEOUT, log)
         if code != 0:
@@ -4358,7 +4372,7 @@ def nightly_markdown(s):
     """summary.md: one table a person reads in the morning."""
     cell = lambda x: str(x if x is not None else "").replace("|", "\\|").replace("\n", " ")
     mins, secs = divmod(int(s["seconds"]), 60)
-    out = [f"# desktape nightly {s['night']}", "",
+    out = [f"# desktape nightly {s['night']}", ""] + ([f"**Interrupted:** {s['interrupted']}.", ""] if s.get("interrupted") else []) + [
            f"{s['passed']} of {s['total']} tapes passed · {mins} min {secs:02d} s · started {s['started']} · "
            f"plan `{s['plan']}`", "",
            "| tape | target | status | steps | seconds | detail |", "|---|---|---|---|---|---|"]
@@ -4389,20 +4403,28 @@ def nightly(plan, runner=run_child, day=None, only=None):
     t0 = time.time()
     night = night_dir(plan["out"], day or time.strftime("%Y-%m-%d"))
     logger.info("nightly: %d tapes, results in %s", len(entries), night)
-    results = []
-    for e in entries:
-        logger.info("nightly: %s on %s", e["name"], e["target"] or "the default target")
-        r = nightly_entry(e, night, runner)
-        logger.info("nightly: %s %s %s", e["name"], r["status"], r.get("detail") or "")
-        results.append(r)
+    results, interrupted = [], None
     s = {"night": os.path.basename(night), "dir": night, "plan": plan["path"],
-         "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0)), "seconds": round(time.time() - t0, 1),
-         "passed": sum(r["status"] == "pass" for r in results), "total": len(results), "results": results}
-    md = nightly_markdown(s)
-    for base in (night, plan["out"]):
-        stem = "summary" if base == night else "latest"
-        json.dump(s, open(os.path.join(base, f"{stem}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-        open(os.path.join(base, f"{stem}.md"), "w", encoding="utf-8").write(md)
+         "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0))}
+    def write():                                   # after every tape: a night cut short keeps what it has
+        s.update(seconds=round(time.time() - t0, 1), passed=sum(r["status"] == "pass" for r in results),
+                 total=len(entries), results=results, **({"interrupted": interrupted} if interrupted else {}))
+        md = nightly_markdown(s)
+        for base, stem in ((night, "summary"), (plan["out"], "latest")):
+            json.dump(s, open(os.path.join(base, f"{stem}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+            open(os.path.join(base, f"{stem}.md"), "w", encoding="utf-8").write(md)
+    try:
+        for e in entries:
+            logger.info("nightly: %s on %s", e["name"], e["target"] or "the default target")
+            r = nightly_entry(e, night, runner)
+            logger.info("nightly: %s %s %s", e["name"], r["status"], r.get("detail") or "")
+            results.append(r)
+            write()
+    except KeyboardInterrupt:
+        interrupted = f"stopped after {len(results)} of {len(entries)} tapes"
+        write()
+        alert(f"desktape nightly {s['night']}: {interrupted}; {s['passed']} passed ({os.path.join(night, 'summary.md')})")
+        raise
     if s["passed"] < s["total"]:
         bad = ", ".join(f"{r['name']} {r['status']}" for r in results if r["status"] != "pass")
         alert(f"desktape nightly {s['night']}: {s['passed']}/{s['total']} passed; {bad} "
@@ -4449,6 +4471,10 @@ def cmd_nightly(a):
             print(f"{'ok     ' if ok else 'INVALID'} {name}: {what}")
         print(f"{sum(ok for _, ok, _ in rows)} of {len(rows)} entries ready; results would go to {plan['out']}")
         return 0 if all(ok for _, ok, _ in rows) else 2
+    if os.name != "nt":                            # systemd stops a unit with SIGTERM: stop the child, keep the summary
+        def term(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, term)
     s = nightly(plan, only=a.only)
     print(nightly_markdown(s))
     print(f"results: {s['dir']}")
@@ -4529,6 +4555,29 @@ def selftest_nightly():
             assert open(os.path.join(d, "out", "latest.md"), encoding="utf-8").read() == md
             assert json.load(open(os.path.join(d, "out", "2026-10-30", "summary.json")))["total"] == 8
             assert len(alerts) == 1 and alerts[0].startswith("desktape nightly 2026-10-30: 1/8 passed; bad fail,"), alerts
+            # a missing cwd or a child that cannot start is that entry's error; the night goes on
+            plan3 = {"path": plan_file, "out": os.path.join(d, "out"), "entries": [
+                dict(plan["entries"][0], name="nocwd", cwd=os.path.join(d, "gone")), dict(plan["entries"][0], name="oserr"),
+                dict(plan["entries"][0], name="stop"), dict(plan["entries"][0], name="never")]}
+            calls = []
+            def fake3(cmd, cwd, env, timeout, log):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise FileNotFoundError(2, "No such file or directory", "python9")
+                raise KeyboardInterrupt                     # systemd's SIGTERM, as cmd_nightly turns it
+            try:
+                nightly(plan3, runner=fake3, day="2026-11-01")
+                raise AssertionError("an interrupted night returned")
+            except KeyboardInterrupt:
+                pass
+            s3 = json.load(open(os.path.join(d, "out", "2026-11-01", "summary.json")))
+            got = {r["name"]: (r["status"], r["detail"]) for r in s3["results"]}
+            assert got["nocwd"] == ("error", f"no folder {os.path.join(d, 'gone')} (cwd)"), got
+            assert got["oserr"][0] == "error" and got["oserr"][1].startswith("could not start:"), got
+            assert set(got) == {"nocwd", "oserr"} and s3["interrupted"] == "stopped after 2 of 4 tapes", s3
+            assert "**Interrupted:**" in open(os.path.join(d, "out", "latest.md")).read()
+            assert len(alerts) == 2 and "stopped after 2 of 4 tapes" in alerts[1], alerts
+            del alerts[1]
             s2 = nightly(plan, runner=fake, day="2026-10-30", only=["good"])         # a second run that day
             assert s2["night"] == "2026-10-30-2" and s2["passed"] == s2["total"] == 1 and len(alerts) == 1, s2
             # a real child: its exit code; and a hung one is stopped at its timeout, with Ctrl+C first
