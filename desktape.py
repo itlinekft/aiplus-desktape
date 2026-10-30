@@ -133,6 +133,12 @@ PIPE = r"\\.\pipe\cua-driver"
 # the default terminal (Windows 11), `-WindowStyle Hidden` still flashed a terminal window on screen, and into a
 # recording (measured: 8 flashes in one take; one hosted the driver and could be closed by mistake).
 HIDDEN = "conhost.exe --headless "
+# An SSH key login of an administrator gets the elevated token, and cua-driver 0.34.1 refuses a pipe client whose
+# elevation differs from the daemon's ("service named-pipe connection rejected before request parsing", os error
+# 233; measured 2026-10-29 on a laptop whose account is in Administrators). So over SSH the daemon task runs with
+# the highest token the account has: elevated for an administrator, the plain one otherwise. A local controller
+# runs unelevated, so its daemon does too.
+RL_SSH = " /rl highest"
 # macos-target D1: on a Mac the installer links this into /Applications/CuaDriver.app; `mcp` proxies to the app's
 # daemon, which holds the Accessibility and Screen Recording grants (not SSH, not this process)
 MAC_DRIVER = "~/.local/bin/cua-driver"
@@ -213,7 +219,7 @@ class Target:
             self.sh(f'mkdir -p "$HOME/{rel}"')
         else:
             win = rel.replace("/", "\\")
-            self.sh(f"if not exist %USERPROFILE%\\{win} mkdir %USERPROFILE%\\{win}")
+            self.sh(f'if not exist "%USERPROFILE%\\{win}" mkdir "%USERPROFILE%\\{win}"')
 
     def path(self, rel):
         return os.path.join(os.path.expanduser("~") if self.mac else os.environ.get("USERPROFILE", ""), *rel.split("/"))
@@ -283,7 +289,9 @@ class CallBlocked(RuntimeError):
 
 NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
 MAC_NO_DAEMON = "daemon is not running"                 # … and on macOS
+PIPE_REFUSED = "(os error 233)"                     # Windows: the daemon closed the pipe on this client (RL_SSH)
 FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
+MAC_FRONT_UNVERIFIED = "was not verified as the frontmost"   # bring_to_front on macOS: raised, focus not confirmed
 SETUP_DOC = {"windows": "docs/windows-setup.md section 3", "macos": "docs/macos-setup.md steps 2 and 3"}
 
 
@@ -296,10 +304,11 @@ def start_daemon(host):
         t.sh("open -n -g -a CuaDriver --args serve", check=True)
         time.sleep(2)
         return
-    t.sh("if not exist %USERPROFILE%\\desktape mkdir %USERPROFILE%\\desktape")
+    t.sh('if not exist "%USERPROFILE%\\desktape" mkdir "%USERPROFILE%\\desktape"')
     t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
-    tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\desktape\\cua-serve.ps1"
-    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-cua >nul',
+    tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\desktape\\cua-serve.ps1\\\""
+    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it{RL_SSH if not t.local else ""} /f >nul '
+         f'&& schtasks /run /tn desktape-cua >nul',
          check=True)
     time.sleep(4)
     t.sh("schtasks /delete /tn desktape-cua /f >nul")
@@ -317,10 +326,16 @@ class Cua:
         try:
             self._connect(host)
         except RuntimeError as e:
-            if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e):
+            refused = PIPE_REFUSED in str(e) and not t.mac and not t.local
+            if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e) and not refused:
                 raise
-            logger.warning("no driver daemon on %s (after a logout or reboot?); starting it in the desktop session",
-                           host)
+            if refused:      # a daemon started by hand, unelevated: it refuses the elevated SSH client (RL_SSH)
+                logger.warning("the driver daemon on %s refuses this SSH session (os error 233: started unelevated?); "
+                               "restarting it with the SSH session's token", host)
+                t.sh("taskkill /f /im cua-driver.exe >nul 2>nul")
+            else:
+                logger.warning("no driver daemon on %s (after a logout or reboot?); starting it in the desktop session",
+                               host)
             start_daemon(host)
             try:
                 self._connect(host)
@@ -1466,24 +1481,24 @@ def ocr_lines(host, cua=None, win=None):
     t, remote = Target(host), "desktape"
     # The parentheses matter: in cmd, `if … mkdir … & del …` puts the del inside the if, and a stale
     # ocr-done.txt from the previous run then returned the previous OCR result.
-    t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & "
-         f"del /q %USERPROFILE%\\{remote}\\ocr-done.txt %USERPROFILE%\\{remote}\\ocr-out.json 2>nul")
+    t.sh(f'(if not exist "%USERPROFILE%\\{remote}" mkdir "%USERPROFILE%\\{remote}") & '
+         f'del /q "%USERPROFILE%\\{remote}\\ocr-done.txt" "%USERPROFILE%\\{remote}\\ocr-out.json" 2>nul')
     t.put(os.path.join(HERE, "windows", "desktape-ocr.ps1"), f"{remote}/desktape-ocr.ps1")
-    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\desktape-ocr.ps1"
+    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\{remote}\\desktape-ocr.ps1\\\""
     t.sh(f'schtasks /create /tn desktape-ocr /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-ocr >nul',
          check=True)
     try:
         for _ in range(40):
-            if "done" in t.sh(f"type %USERPROFILE%\\{remote}\\ocr-done.txt 2>nul").stdout:
+            if "done" in t.sh(f'type "%USERPROFILE%\\{remote}\\ocr-done.txt" 2>nul').stdout:
                 break
             time.sleep(0.5)
         else:
             raise RuntimeError("OCR task did not finish in 20 s")
-        raw = t.sh(f"type %USERPROFILE%\\{remote}\\ocr-out.json").stdout.lstrip("\ufeff")
+        raw = t.sh(f'type "%USERPROFILE%\\{remote}\\ocr-out.json"').stdout.lstrip("\ufeff")
     finally:
         # Nothing stays scheduled, and no screenshot of the desktop is left behind.
-        t.sh(f"schtasks /delete /tn desktape-ocr /f >nul & del /q %USERPROFILE%\\{remote}\\ocr-shot.png "
-             f"%USERPROFILE%\\{remote}\\ocr-out.json %USERPROFILE%\\{remote}\\ocr-done.txt 2>nul")
+        t.sh(f'schtasks /delete /tn desktape-ocr /f >nul & del /q "%USERPROFILE%\\{remote}\\ocr-shot.png" '
+             f'"%USERPROFILE%\\{remote}\\ocr-out.json" "%USERPROFILE%\\{remote}\\ocr-done.txt" 2>nul')
     d = json.loads(raw)
     if "error" in d:
         raise RuntimeError(f"OCR: {d['error']}")
@@ -1593,9 +1608,10 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
     UI Automation does not answer: a one-off task in the desktop session activates the window, checks that it
     is in front, and only then sends. Raises when the window could not be brought to the front."""
     t, remote = Target(host), "desktape"
-    t.sh(f"(if not exist %USERPROFILE%\\{remote} mkdir %USERPROFILE%\\{remote}) & del /q %USERPROFILE%\\{remote}\\os-input-out.json 2>nul")
+    t.sh(f'(if not exist "%USERPROFILE%\\{remote}" mkdir "%USERPROFILE%\\{remote}") & '
+         f'del /q "%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul')
     t.put(os.path.join(HERE, "windows", "os-input.ps1"), f"{remote}/os-input.ps1")
-    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File %USERPROFILE%\\{remote}\\os-input.ps1"
+    tr = HIDDEN + f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\{remote}\\os-input.ps1\\\""
     t0 = time.time()
     out = None
     try:
@@ -1607,15 +1623,15 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
         t.sh(f'schtasks /create /tn desktape-os-input /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-os-input >nul',
              check=True)
         for _ in range(40):
-            raw = t.sh(f"type %USERPROFILE%\\{remote}\\os-input-out.json 2>nul").stdout.lstrip("\ufeff").strip()
+            raw = t.sh(f'type "%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul').stdout.lstrip("\ufeff").strip()
             if raw:
                 out = json.loads(raw)
                 break
             time.sleep(0.5)
     finally:
         # Nothing stays scheduled, and the typed text does not stay on the target.
-        t.sh(f"schtasks /delete /tn desktape-os-input /f >nul & del /q %USERPROFILE%\\{remote}\\os-input.json "
-             f"%USERPROFILE%\\{remote}\\os-input-out.json 2>nul")
+        t.sh(f'schtasks /delete /tn desktape-os-input /f >nul & del /q "%USERPROFILE%\\{remote}\\os-input.json" '
+             f'"%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul')
     if audit:
         audit.write(json.dumps({"ts": round(t0, 3), "tool": "os_input", "args": {"title": title, "keys": "<redacted>" if secret else keys,
                                 "file": file, "clip": None if clip is None else f"{len(clip)} characters"},
@@ -2259,11 +2275,18 @@ class Runner:
             self.blocked_by = self.describe_front({"ids": self.baseline})
             logger.warning("window %r could not be brought to the front: %s", title, self.blocked_by)
         except RuntimeError as e:
-            if FOREGROUND_REFUSED not in str(e):
+            if self.mac and MAC_FRONT_UNVERIFIED in str(e):
+                # mac-unverified-front D1: the tree still answers through accessibility, so `look` reads it (and
+                # clears a stuck state); keys and open_file check the front window themselves
+                self.blocked_by = self.mac_holder(w, str(e))
+                logger.warning("window %r (pid %s) is raised but macOS did not confirm it in front: %s",
+                               title, w["pid"], self.blocked_by)
+            elif FOREGROUND_REFUSED in str(e):
+                # driver-autostart: UI Automation still reaches the window; a step that needs the focus fails itself
+                logger.warning("window %r (pid %s) is raised but Windows kept the foreground elsewhere; continuing",
+                               title, w["pid"])
+            else:
                 raise
-            # driver-autostart: UI Automation still reaches the window; a step that needs the focus fails itself
-            logger.warning("window %r (pid %s) is raised but Windows kept the foreground elsewhere; continuing",
-                           title, w["pid"])
         self.check_covered(self.cua.call("list_windows", {})[0].get("windows", []))   # after bring_to_front
         if w.get("minimized"):
             # runner-robustness D1: bring_to_front restores it at its previous frame
@@ -2594,6 +2617,28 @@ class Runner:
         f = ((arg.get("expect") or {}) if isinstance(arg, dict) else {}).get("file")
         return {"ids": {w.get("window_id") for w in wins}, "pid": pid, "lines": lines, "all": wins,
                 "file": remote_file_state(self.cua.host, f) if f else None}
+
+    def mac_holder(self, w, error):
+        """What may hold the keyboard when macOS did not confirm `w` in front (mac-unverified-front D2): the driver's
+        verdict, the program's other windows on screen, the system's front window. Never raises."""
+        verdict = error.split("bring_to_front:")[-1].strip().rstrip(".")
+        parts = [f"the driver says {verdict!r}"]
+        try:
+            wins = self.cua.call("list_windows", {})[0].get("windows", [])
+            others = [x.get("title") or "(untitled)" for x in wins
+                      if x.get("pid") == w["pid"] and x.get("window_id") != w["window_id"] and x.get("is_on_screen")]
+            if others:
+                parts.append("the program's other windows on screen: " + ", ".join(repr(t) for t in others))
+        except Exception as e:
+            logger.warning("no window list for the report: %s", e)
+            parts.append("the window list did not answer")
+        try:
+            f = mac_front(self.cua.host, getattr(self.cua, "audit", None))
+            if f:
+                parts.append(f"the system's front window: {f.get('app')!r} (window {f.get('window_id')})")
+        except Exception as e:
+            logger.warning("no front window for the report: %s", e)
+        return "; ".join(parts) + ". A file panel or a system prompt may hold the keyboard: look at the screen"
 
     def describe_front(self, before):
         """The window in front, from the window list (it answers when a dialog's UI Automation does not)."""
@@ -3074,7 +3119,7 @@ def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name)
     else:
         win = rec_rel.replace("/", "\\")
         need_ffmpeg(t, "burning the captions")
-        t.sh(f'cd /d %USERPROFILE%\\{win} && "{t.ffmpeg()}" -y -loglevel error -i recording.mp4 '
+        t.sh(f'cd /d "%USERPROFILE%\\{win}" && "{t.ffmpeg()}" -y -loglevel error -i recording.mp4 '
              f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
     out = os.path.join(local_dir, f"{name}.mp4")
     t.get(f"{rec_rel}/captioned.mp4", out)
@@ -3387,7 +3432,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             if Target(a.host).mac:
                 Target(a.host).sh(f'rm -rf "$HOME/{rec_rel}"')        # rec_rel is desktape/rec/<stamp>, never empty
             else:
-                Target(a.host).sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+                Target(a.host).sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
             logger.info("removed the target's copy of the recording: %s", rec_rel)
         except Exception as e:
             logger.warning("video post-processing failed, the recording stays on the target in %s: %s", rec_rel, e)
@@ -3682,7 +3727,7 @@ def cmd_record(a):
         if t.mac:
             t.sh(f'rm -rf "$HOME/{rec_rel}"')      # the whole screen: no copy stays on the target
         else:
-            t.sh(f'rmdir /s /q %USERPROFILE%\\{rec_rel.replace("/", chr(92))}')
+            t.sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
     summary = {"record": a.name or "screen", "host": a.host, "stopped_by": why, "recording_started_at": utc_iso(t0),
                "start_call_seconds": round(t1 - t0, 3), "seconds": round(t2 - t1, 1), "video": local,
                "bytes": os.path.getsize(local), "liveness": lv.summary()}
@@ -5115,6 +5160,37 @@ def selftest():
             raise RuntimeError(f"bring_to_front failed: … Windows kept foreground on hwnd 0x1; {FOREGROUND_REFUSED}.")
     r = Runner(Refusing(), "test"); r.focus("W")
     assert r.win == {"pid": 1, "window_id": 2}, r.win
+
+    class Unverified:                   # mac-unverified-front: macOS raised the window but did not confirm the focus
+        mac, host, audit = True, "user@mac", None
+        def __init__(self, message):
+            self.message = message
+        def call(self, tool, args, secret=False, timeout=None):
+            if tool == "list_windows":
+                return {"windows": [{"title": "Claude", "pid": 7, "window_id": 20, "is_on_screen": True},
+                                    {"title": "Open", "pid": 7, "window_id": 21, "is_on_screen": True},
+                                    {"title": "Other", "pid": 8, "window_id": 30, "is_on_screen": True}]}, ""
+            if tool == "bring_to_front":
+                raise RuntimeError(self.message)
+            return {}, ""
+    real_front = globals()["mac_front"]
+    globals()["mac_front"] = lambda host, audit=None: {"window_id": 20, "pid": 7, "app": "Claude", "alpha": 1.0}
+    try:
+        r = Runner(Unverified("bring_to_front failed: bring_to_front: exact window 20 for pid 7 was not verified as "
+                              "the frontmost process's focused window (focused=false)."), "test")
+        r.check_covered = lambda windows: None
+        r.focus("Claude")
+        assert r.win == {"pid": 7, "window_id": 20}, r.win
+        assert "'Open'" in r.blocked_by and "'Other'" not in r.blocked_by and "'Claude' (window 20)" in r.blocked_by, \
+            r.blocked_by
+        r = Runner(Unverified("bring_to_front failed: no such window"), "test")
+        r.check_covered = lambda windows: None
+        try:
+            r.focus("Claude"); raise AssertionError("expected RuntimeError")
+        except RuntimeError as e:
+            assert "no such window" in str(e), e
+    finally:
+        globals()["mac_front"] = real_front
     logger.setLevel(level)
     # video-redaction: an empty caption ends the one before; rectangles; spans with margins; boxes first.
     assert [l for l in srt([(0.0, "A"), (2.0, ""), (5.0, "B")], 6.0).splitlines() if "-->" in l] == \

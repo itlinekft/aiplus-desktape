@@ -5,7 +5,7 @@
 Some of an app's pop-ups come on every machine, in every tape, at no plannable moment. Claude Desktop shows a
 card "Auto-sync requires the Claude GitHub App to have access to this repository." with a "Grant access" link
 after a marketplace is added, and it stays until closed. Measured 2026-10-24 on a Windows 11 test PC: the runner
-stopped on it as an unplanned dialog (`runs/…-install-aiplus-office-test`). Seen again 2026-10-25 on the macOS
+stopped on it as an unplanned dialog (`runs/…-install-<plugin>-test`). Seen again 2026-10-25 on the macOS
 target and in a recorded take on Windows. The owner's rule (2026-10-25): such a card is closed with its X
 whenever it shows; nobody grants an app access the person did not ask for.
 

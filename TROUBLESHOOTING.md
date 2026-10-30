@@ -78,6 +78,18 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
   macOS-en `docs/macos-setup.md` 2. és 3. lépés.
 - **Ki:** aki a vezérelt gépnél ül. **Óta:** 0.1.0.
 
+### Windows: „daemon transport error … (os error 233)” SSH-n át
+
+- **Hol:** bármelyik parancs, ami Windows-gépet szólít meg SSH-n.
+- **Ok:** a háttérfolyamat fut, de **más jogosultsággal**, mint az SSH-munkamenet. Egy rendszergazda fiók
+  kulcsos SSH-belépése emelt jogú, a kézzel indított háttérfolyamat nem; a Cua Driver 0.34.1 ilyenkor bontja a
+  kapcsolatot (a naplóban: „service named-pipe connection rejected before request parsing”).
+- **Ellenőrzés:** `cua-driver status` SSH-n át „endpoint exists but is not reachable”-t ír, az asztalon futtatva
+  „running”-ot.
+- **Javítás:** semmi: a desktape ilyenkor leállítja a háttérfolyamatot, és az SSH-munkamenet jogosultságával
+  újraindítja. Kézi indításnál a `schtasks` sorba kell a `/rl highest`.
+- **Ki:** a desktape. **Óta:** Unreleased.
+
 ### A Cua Driver hiányzik (`doctor`: MISSING)
 
 - **Hol:** `desktape.py doctor`.
@@ -237,6 +249,18 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Fix:** start it by hand in the target's desktop session: Windows `docs/windows-setup.md` section 3, macOS
   `docs/macos-setup.md` steps 2 and 3.
 - **Who:** the person at the target. **Since:** 0.1.0.
+
+### Windows: "daemon transport error … (os error 233)" over SSH
+
+- **Where:** any command that reaches a Windows target over SSH.
+- **Cause:** the daemon runs, but with a different elevation than the SSH session. An administrator's key login over
+  SSH is elevated; a daemon started by hand is not, and Cua Driver 0.34.1 then closes the connection (its log:
+  "service named-pipe connection rejected before request parsing").
+- **Check:** `cua-driver status` over SSH says "endpoint exists but is not reachable"; run on the desktop it says
+  "running".
+- **Fix:** none needed: desktape stops that daemon and starts it again with the SSH session's token. When you start
+  it by hand, add `/rl highest` to the `schtasks` line.
+- **Who:** desktape. **Since:** Unreleased.
 
 ### The Cua Driver is missing (`doctor`: MISSING)
 

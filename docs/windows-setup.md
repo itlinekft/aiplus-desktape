@@ -31,7 +31,7 @@ follow the junctions the installer creates (os error 448), and the Credential Ma
 The way to get there from SSH is a one-off scheduled task with `/it`:
 
 ```bat
-schtasks /create /tn desktape-setup /tr "powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\desktape\cua-setup.ps1" /sc once /st 23:59 /it /f
+schtasks /create /tn desktape-setup /tr "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\desktape\cua-setup.ps1\"" /sc once /st 23:59 /it /f
 schtasks /run /tn desktape-setup
 schtasks /delete /tn desktape-setup /f
 ```
@@ -51,6 +51,11 @@ start-at-logon task is installed.
 
 If the automatic start fails, desktape stops and points here: copy the script and start it by hand with
 the `/it` task pattern above.
+
+The daemon runs with the SSH session's token (`/rl highest`): an administrator's key login is elevated, and
+Cua Driver 0.34.1 refuses a pipe client whose elevation differs from the daemon's (os error 233). When you start
+it by hand, add `/rl highest`; a daemon that refuses desktape is stopped and started again (measured 2026-10-29).
+Quote `%USERPROFILE%` paths: a profile folder name may contain a space.
 
 Check it from Linux:
 

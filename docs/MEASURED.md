@@ -103,6 +103,18 @@ read over SSH every 18–20 s; `desktape.py doctor --target <vm>`.
 Not measured: a 30-minute recording under a working tape's load (the case where the driver's recorder stopped at
 minute 5 on the Windows test PC).
 
+## 2026-10-30: a Mac whose window is raised but not confirmed in front
+
+**Machine:** a Mac mini, macOS 26.4, arm64; Claude Desktop; Cua Driver 0.34.1. Controller: Linux, over SSH.
+**Change:** `mac-unverified-front`.
+
+| What | Result |
+|---|---|
+| before: a file panel that had stopped taking the keyboard, then a restart of Claude | every `bring_to_front` answered "was not verified as the frontmost process's focused window" (`focused=false`); `look` ended in a traceback, so the session stayed stuck at three strikes and `act` refused the step that could have closed the panel. The person at the screen cleared it |
+| after: Claude's file panel ("Open", from Customize › Plugins › Upload plugin) open, then `look --map claude-desktop-mac` | the window's 18 elements, and `# not in front:` with the driver's verdict, `the program's other windows on screen: 'Open'` and the system's front window; `status` afterwards: ok, strikes 0 |
+| closing it | `act '{"key": {"key": "escape", "into": "Open", "os": true}}'`, then Cancel in the upload dialog: both ok |
+| a test of a known path as one tape instead of single `act` steps | 6 steps in 22.5 s; a Claude Desktop question and its answer in 39 s, where single `act` calls had taken 10 to 20 s each |
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
