@@ -11,6 +11,14 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   any tape on the app may meet, such as Claude Desktop's auto-sync card (closed with its X, never "Grant access");
   that card's answer goes into the Claude Desktop maps once its X is measured on each platform.
 
+### Fixed
+- Windows: the driver daemon starts, and OCR and keyboard input run, when the user's profile folder has a space in its
+  name: every `%USERPROFILE%` path desktape sends is quoted.
+- Windows over SSH: an administrator's key login is elevated, and Cua Driver 0.34.1 refuses a pipe client whose
+  elevation differs from the daemon's (os error 233). desktape now starts the daemon with the SSH session's token
+  (`/rl highest`), and when it finds a daemon that refuses it, it stops that one and starts its own. Measured on a
+  Windows 10 laptop: `look` connects in both cases.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added
