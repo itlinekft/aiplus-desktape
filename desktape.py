@@ -283,6 +283,7 @@ class CallBlocked(RuntimeError):
 NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
 MAC_NO_DAEMON = "daemon is not running"                 # … and on macOS
 FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
+MAC_FRONT_UNVERIFIED = "was not verified as the frontmost"   # bring_to_front on macOS: raised, focus not confirmed
 SETUP_DOC = {"windows": "docs/windows-setup.md section 3", "macos": "docs/macos-setup.md steps 2 and 3"}
 
 
@@ -2258,11 +2259,18 @@ class Runner:
             self.blocked_by = self.describe_front({"ids": self.baseline})
             logger.warning("window %r could not be brought to the front: %s", title, self.blocked_by)
         except RuntimeError as e:
-            if FOREGROUND_REFUSED not in str(e):
+            if self.mac and MAC_FRONT_UNVERIFIED in str(e):
+                # mac-unverified-front D1: the tree still answers through accessibility, so `look` reads it (and
+                # clears a stuck state); keys and open_file check the front window themselves
+                self.blocked_by = self.mac_holder(w, str(e))
+                logger.warning("window %r (pid %s) is raised but macOS did not confirm it in front: %s",
+                               title, w["pid"], self.blocked_by)
+            elif FOREGROUND_REFUSED in str(e):
+                # driver-autostart: UI Automation still reaches the window; a step that needs the focus fails itself
+                logger.warning("window %r (pid %s) is raised but Windows kept the foreground elsewhere; continuing",
+                               title, w["pid"])
+            else:
                 raise
-            # driver-autostart: UI Automation still reaches the window; a step that needs the focus fails itself
-            logger.warning("window %r (pid %s) is raised but Windows kept the foreground elsewhere; continuing",
-                           title, w["pid"])
         self.check_covered(self.cua.call("list_windows", {})[0].get("windows", []))   # after bring_to_front
         if w.get("minimized"):
             # runner-robustness D1: bring_to_front restores it at its previous frame
@@ -2593,6 +2601,28 @@ class Runner:
         f = ((arg.get("expect") or {}) if isinstance(arg, dict) else {}).get("file")
         return {"ids": {w.get("window_id") for w in wins}, "pid": pid, "lines": lines, "all": wins,
                 "file": remote_file_state(self.cua.host, f) if f else None}
+
+    def mac_holder(self, w, error):
+        """What may hold the keyboard when macOS did not confirm `w` in front (mac-unverified-front D2): the driver's
+        verdict, the program's other windows on screen, the system's front window. Never raises."""
+        verdict = error.split("bring_to_front:")[-1].strip().rstrip(".")
+        parts = [f"the driver says {verdict!r}"]
+        try:
+            wins = self.cua.call("list_windows", {})[0].get("windows", [])
+            others = [x.get("title") or "(untitled)" for x in wins
+                      if x.get("pid") == w["pid"] and x.get("window_id") != w["window_id"] and x.get("is_on_screen")]
+            if others:
+                parts.append("the program's other windows on screen: " + ", ".join(repr(t) for t in others))
+        except Exception as e:
+            logger.warning("no window list for the report: %s", e)
+            parts.append("the window list did not answer")
+        try:
+            f = mac_front(self.cua.host, getattr(self.cua, "audit", None))
+            if f:
+                parts.append(f"the system's front window: {f.get('app')!r} (window {f.get('window_id')})")
+        except Exception as e:
+            logger.warning("no front window for the report: %s", e)
+        return "; ".join(parts) + ". A file panel or a system prompt may hold the keyboard: look at the screen"
 
     def describe_front(self, before):
         """The window in front, from the window list (it answers when a dialog's UI Automation does not)."""
@@ -4659,6 +4689,37 @@ def selftest():
             raise RuntimeError(f"bring_to_front failed: … Windows kept foreground on hwnd 0x1; {FOREGROUND_REFUSED}.")
     r = Runner(Refusing(), "test"); r.focus("W")
     assert r.win == {"pid": 1, "window_id": 2}, r.win
+
+    class Unverified:                   # mac-unverified-front: macOS raised the window but did not confirm the focus
+        mac, host, audit = True, "user@mac", None
+        def __init__(self, message):
+            self.message = message
+        def call(self, tool, args, secret=False, timeout=None):
+            if tool == "list_windows":
+                return {"windows": [{"title": "Claude", "pid": 7, "window_id": 20, "is_on_screen": True},
+                                    {"title": "Open", "pid": 7, "window_id": 21, "is_on_screen": True},
+                                    {"title": "Other", "pid": 8, "window_id": 30, "is_on_screen": True}]}, ""
+            if tool == "bring_to_front":
+                raise RuntimeError(self.message)
+            return {}, ""
+    real_front = globals()["mac_front"]
+    globals()["mac_front"] = lambda host, audit=None: {"window_id": 20, "pid": 7, "app": "Claude", "alpha": 1.0}
+    try:
+        r = Runner(Unverified("bring_to_front failed: bring_to_front: exact window 20 for pid 7 was not verified as "
+                              "the frontmost process's focused window (focused=false)."), "test")
+        r.check_covered = lambda windows: None
+        r.focus("Claude")
+        assert r.win == {"pid": 7, "window_id": 20}, r.win
+        assert "'Open'" in r.blocked_by and "'Other'" not in r.blocked_by and "'Claude' (window 20)" in r.blocked_by, \
+            r.blocked_by
+        r = Runner(Unverified("bring_to_front failed: no such window"), "test")
+        r.check_covered = lambda windows: None
+        try:
+            r.focus("Claude"); raise AssertionError("expected RuntimeError")
+        except RuntimeError as e:
+            assert "no such window" in str(e), e
+    finally:
+        globals()["mac_front"] = real_front
     logger.setLevel(level)
     # video-redaction: an empty caption ends the one before; rectangles; spans with margins; boxes first.
     assert [l for l in srt([(0.0, "A"), (2.0, ""), (5.0, "B")], 6.0).splitlines() if "-->" in l] == \

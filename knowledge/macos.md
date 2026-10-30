@@ -24,6 +24,21 @@ re-sorts between reading it and clicking it.
 
 Measured: 2026-10-25, macOS 26.4, Claude Desktop's "Add folder".
 
+## A window raised but not confirmed in front
+
+`bring_to_front` can answer "was not verified as the frontmost process's focused window" (`focused=false`): the
+window was raised, but something else holds the keyboard. Seen with the program's own file panel open, and after a
+file panel stopped taking the keyboard, when it held for minutes and across a restart of the program.
+
+- `look` still reads the window and prints `# not in front:` with the driver's verdict, the program's other
+  windows on screen (a file panel is `Open`) and the system's front window. It clears the strikes.
+- A click still works (an accessibility action). Keys and `open_file` check the front window and fail with their
+  own sentence.
+- When the program's other windows name nothing and the refusal does not go away, a person has to look at the
+  screen: a prompt that the window list does not show may hold the keyboard.
+
+Measured: 2026-10-30, macOS 26.4, Cua Driver 0.34.1, Claude Desktop.
+
 ## The driver's agent cursor is a window on top of everything
 
 The agent cursor is an ordinary-layer window of the "Cua Driver" app, above every other window. Right after
