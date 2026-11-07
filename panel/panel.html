@@ -141,7 +141,7 @@
 "use strict";
 const HU = {
   status: "Állapot", cctv: "Élő képek", cols: "Oszlopok", fps: "Kép/mp", solofps: "Nagyítva", size: "Méret",
-  fullscreen: "Teljes képernyő",
+  fullscreen: "Teljes képernyő", fullscreenOff: "Kilépés a teljes képernyőből",
   free: "Szabad", running: "Fut", lease: "Lease", booked: "Foglalva", unreachable: "Nem érhető el", reachable: "Elérhető",
   unknown: "Ismeretlen", holder: "Ki használja", since: "óta", until: "eddig", bookings: "Foglalások", none: "nincs",
   activity: "Legutóbb", session: "Session", step: "lépés", strikes: "hibák", lastok: "utolsó jó lépés",
@@ -159,7 +159,7 @@ const HU = {
 };
 const EN = {
   status: "Status", cctv: "Live screens", cols: "Columns", fps: "Frames/s", solofps: "Zoomed", size: "Size",
-  fullscreen: "Full screen",
+  fullscreen: "Full screen", fullscreenOff: "Exit full screen",
   free: "Free", running: "Running", lease: "Lease", booked: "Booked", unreachable: "Unreachable", reachable: "Reachable",
   unknown: "Unknown", holder: "Held by", since: "since", until: "until", bookings: "Bookings", none: "none",
   activity: "Recent", session: "Session", step: "step", strikes: "strikes", lastok: "last good step",
@@ -365,6 +365,8 @@ function layout() {
   grid.style.height = `${H}px`;
   for (const n of names) { tiles[n].el.style.width = `${w}px`; tiles[n].el.style.height = `${Math.floor(w / aspect)}px`; }
   laidOut = layoutKey();
+  const fb = $("fsbtn"), on = isFs();      // a toggle: its label says what a press does now
+  if (fb.dataset.on !== String(on)) { fb.dataset.on = on; fb.textContent = on ? T.fullscreenOff : T.fullscreen; fb.classList.toggle("on", on); }
   overlays();
 }
 function makeTile(n) {
@@ -400,8 +402,10 @@ function leaveSolo() {
   if (control.on) control.stop();
   keyLock(false);
   solo = null;
-  if (document.fullscreenElement && !store.get("fsgrid", false)) document.exitFullscreen();
-  else { document.body.classList.remove("fs"); layout(); }
+  // full screen the person chose for the grid stays, toolbar hidden; only the one the zoom opened ends here
+  const keep = store.get("fsgrid", false);
+  if (document.fullscreenElement && !keep) document.exitFullscreen();
+  else { if (!keep) document.body.classList.remove("fs"); layout(); }
   cctvLoop();
 }
 function toast(n, text, ms = 2500) {
@@ -640,6 +644,7 @@ for (const id of ["cols", "fps", "solofps", "size"]) {
 }
 $("fsbtn").onclick = () => {
   if (document.fullscreenElement) { store.set("fsgrid", false); document.exitFullscreen(); return; }
+  if (document.body.classList.contains("fs")) { store.set("fsgrid", false); document.body.classList.remove("fs"); layout(); return; }
   store.set("fsgrid", true);
   (document.documentElement.requestFullscreen ? document.documentElement.requestFullscreen() : Promise.reject()).catch(() => {
     document.body.classList.toggle("fs"); layout();       // no Fullscreen API: fill the window instead

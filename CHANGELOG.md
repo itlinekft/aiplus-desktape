@@ -43,6 +43,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   (`--no-vpn` leaves them out), and no longer puts container bridges (docker, br-, veth …) into `from=`.
 
 ### Fixed
+- The live screens' Back from a zoomed screen keeps the grid's own full screen with its toolbar hidden; it used to
+  bring the toolbar back over a grid still sized for full screen, cutting off the last row. The Full screen button is
+  a toggle and says "Exit full screen" while it is on.
 - The live screens' grid no longer stays sized for full screen after leaving it (its last row cut off under the
   toolbar): the frame loop redoes the layout whenever full screen, the zoom, the window or the grid's top changed.
 - `unpair` on Windows now removes the line from `ProgramData\ssh\administrators_authorized_keys` too, where an
