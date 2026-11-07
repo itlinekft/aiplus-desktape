@@ -53,6 +53,11 @@ desktape.py pair box1 --check       # key login, then the driver's window list o
 
 The first check learns the target's host key and keeps it.
 
+If ssh says the host key **has changed**, the address was another machine's before (a DHCP lease, a reinstall):
+compare the key the target serves (`ssh-keyscan -t ed25519 <address> | ssh-keygen -lf -`) with the one on its own
+screen (`ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`), and only when they match run
+`ssh-keygen -R <address>` and check again. A mismatch is a stop.
+
 ## 4. Unpair
 
 ```bash

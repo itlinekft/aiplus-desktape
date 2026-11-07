@@ -199,6 +199,25 @@ python3 desktape.py run offscreen.yaml --target <pc>    # focus, click the top b
 Not measured: the keyboard lock in a real full-screen Chrome (headless has no full screen), the bar's Alt+Tab, a
 drag on the Mac.
 
+## 2026-11-07: a new Windows PC set up by the Claude on it
+
+**Machine:** a Windows 10 Pro 22H2 desktop PC (10.0.19045, x64), standard user, on the local network; its Claude
+Desktop's Code tab followed `docs/setup-target.md` with the person. Controller: Linux, desktape at `main`.
+**Change:** `target-setup-guide`.
+
+| What | Result |
+|---|---|
+| `pair NAME --host user@address --os windows` | new ed25519 key, profile written, the line and the request printed |
+| key login with that key, a scratch `known_hosts` | ok; the driver at `0.34.1-x86_64-pc-windows-msvc`, ffmpeg from winget |
+| the stored host key for that address | **a different machine's** (the address had been another computer's): ssh refused. The new key was compared with the one the target serves, the target accepted our new pairing key, then `ssh-keygen -R <address>` and the new key added |
+| `pair NAME --check` | key login ok; no driver daemon yet, so desktape started it in the desktop session (18.8 s); 11 titled windows |
+| `doctor --target NAME` | 5 checked, 0 missing; ffmpeg 9.0.2 found in winget's package folder |
+| `look --target NAME` | the front window (Claude) read: 3 elements |
+| on the target, over SSH | the OpenSSH firewall rule `LocalSubnet` (no VPN address added); `Get-AuthenticodeSignature` of the driver: `Valid` |
+
+Not measured: the target's own report (not brought back), the guide's step 5 (screen awake), reaching it over the
+VPN.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

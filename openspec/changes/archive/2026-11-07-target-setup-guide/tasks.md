@@ -10,5 +10,5 @@
   host it writes the profile and the same line. [REQ: pairing-before-the-address-is-known]
 - [x] 1.4 Links: `docs/pairing.md`, `docs/windows-setup.md`, the skill, the changelog.
   [REQ: the-claude-on-a-new-target-sets-it-up-from-a-public-guide]
-- [ ] 2.1 Measure on the new Windows PC: its Claude follows the guide; `pair --check`, `doctor --target`, `look`
+- [x] 2.1 Measure on the new Windows PC: its Claude follows the guide; `pair --check`, `doctor --target`, `look`
   from the controller. Into `docs/MEASURED.md`. [REQ: the-claude-on-a-new-target-sets-it-up-from-a-public-guide]
