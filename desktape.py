@@ -44,7 +44,8 @@ ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_
            "set_value",          # a field's value, like typing, where a control hides its items (data-driven-import D1)
            "set_agent_cursor_enabled",   # only to hide the agent cursor for a `cursor: person` video (person-cursor D1)
            "get_desktop_state",   # read-only whole-screen PNG, for the panel's live screens (booking-and-panel D6)
-           "drag"}                # only the panel's control sends it, for a person's drag (panel-polish D2)
+           "drag",                # only the panel's control sends it, for a person's drag (panel-polish D2)
+           "move_cursor"}         # only the panel's control sends it, the pointer following the mouse (panel-live D2)
 DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
@@ -4579,7 +4580,16 @@ PANEL_PORT = 8645
 PANEL_HTML = os.path.join(HERE, "panel", "panel.html")
 FRAME_IDLE = 10.0             # D6: a grabber stops this long after the last frame request
 FRAME_RETRY = 5.0             # and waits this long after a failed frame
-FPS_RANGE, SIZE_RANGE = (0.2, 5.0), (320, 1920)
+FPS_RANGE, SIZE_RANGE = (0.2, 15.0), (320, 1920)
+DRIVER_FPS_MAX = 5.0           # panel-live D4: a driver frame costs 150 ms to 1 s; more than this is the stream's job
+ASK_WINDOW = 3.0               # seconds a viewer's ask for a rate and size counts (see FrameGrabber.want)
+STREAM_MIN_FPS = 2.0           # panel-live D3: a Windows target's zoomed view, asked above this, is streamed
+STREAM_START, STREAM_STALL = 10.0, 5.0   # seconds to the first streamed frame; a stream silent this long is dead
+STREAM_TASK = 30.0             # seconds for the capture task to be made over SSH (12 s measured on a slow PC)
+STREAM_SCRIPT_PUT = set()      # hosts that have this panel run's live-stream.ps1
+STREAM_RETRY = 60.0            # after a failed stream, driver frames for this long
+STREAM_PORTS = (48650, 48999)  # the target's loopback port is drawn from these, per stream
+LIVE_PS1 = os.path.join(HERE, "windows", "live-stream.ps1")
 CONTROL_IDLE = 120.0          # panel-control D2: control gives the lock back after this long without input
 CONTROL_KEYS = {"return", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "home", "end",
                 "pageup", "pagedown", "space", *(f"f{i}" for i in range(1, 13))}
@@ -4654,6 +4664,145 @@ def close_quietly(cua, host):
         logger.warning("panel: closing the driver connection to %s: %s", host, e)
 
 
+def split_jpegs(buf):
+    """panel-live D3: (whole JPEG frames, the unfinished rest) from an MJPEG byte stream. FFD9 cannot occur inside a
+    frame's coded data (a coded FF is followed by 00), so a frame runs from FFD8 to the next FFD9."""
+    frames = []
+    while True:
+        i = buf.find(b"\xff\xd8")
+        if i < 0:
+            return frames, b""
+        j = buf.find(b"\xff\xd9", i + 2)
+        if j < 0:
+            return frames, buf[i:]
+        frames.append(buf[i:j + 2]); buf = buf[j + 2:]
+
+
+class LiveStream:
+    """panel-live D3: a Windows target's screen as MJPEG. ffmpeg runs in the person's desktop session (an SSH session
+    cannot capture), serves one viewer on the loopback, and ends with it; an SSH relay brings the frames here."""
+
+    def __init__(self, host, fps, width, on_frame, start=True):
+        self.host, self.fps, self.width, self.on_frame = host, int(fps), int(width), on_frame
+        self.t0, self.last, self.frames, self.p, self.why, self.failed = time.time(), 0.0, 0, None, None, False
+        self.port, self.started, self.stopped = None, False, threading.Event()
+        if start:            # the task and the relay start off the grabber's thread: driver frames go on meanwhile
+            threading.Thread(target=self._run, daemon=True, name=f"stream-{host}").start()
+
+    def _run(self):
+        try:
+            self._start()
+        except Exception as e:
+            self.why, self.failed = str(e)[:200], True
+            return
+        self.t0, self.started = time.time(), True     # the first frame's deadline counts from a running capture
+        self._read()
+
+    def _start(self):
+        t = Target(self.host)
+        ff = t.ffmpeg()
+        if not ff:
+            raise RuntimeError(f"no ffmpeg on {self.host}")
+        self.port = random.SystemRandom().randint(*STREAM_PORTS)
+        if self.host not in STREAM_SCRIPT_PUT:          # each SSH round trip to a slow PC costs seconds (measured)
+            t.mkdir("desktape")
+            t.put(LIVE_PS1, "desktape/live-stream.ps1")
+            STREAM_SCRIPT_PUT.add(self.host)
+        tn = f"desktape-live-{self.port}"
+        tr = (HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "
+              f"\\\"%USERPROFILE%\\desktape\\live-stream.ps1\\\" -Port {self.port} -Fps {self.fps} -Width {self.width}")
+        r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{RL_SSH} /f >nul '
+                 f'&& schtasks /run /tn {tn} >nul & schtasks /delete /tn {tn} /f >nul')
+        if r.returncode:
+            raise RuntimeError(f"the stream task did not start on {self.host}: {(r.stderr or r.stdout).strip()[-200:]}")
+        self.relay = [*("ssh -o BatchMode=yes".split()), *t.opts, self.host,
+                      f'"{ff}" -hide_banner -loglevel error -fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0 '
+                      f'-f mjpeg -i tcp://127.0.0.1:{self.port} -c copy -flush_packets 1 -f mjpeg -']
+        logger.info("panel: live stream of %s starting (port %d on its loopback, %d fps, %d px)",
+                    self.host, self.port, self.fps, self.width)
+
+    def _read(self):
+        for attempt in range(5):            # the listener may not be up yet: the relay is refused and ends at once
+            if self.stopped.is_set():
+                return
+            time.sleep(0.8)
+            err = tempfile.TemporaryFile()
+            self.p = subprocess.Popen(self.relay, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
+            buf = b""
+            while True:
+                chunk = self.p.stdout.read1(1 << 16)
+                if not chunk:
+                    break
+                frames, buf = split_jpegs(buf + chunk)
+                if frames:
+                    self.frames += len(frames); self.last = time.time()
+                    self.on_frame(frames[-1])
+            self.p.wait()
+            err.seek(0); self.why = err.read().decode("utf-8", "replace").strip()[-200:] or f"relay ended ({self.p.returncode})"
+            if self.frames:
+                break
+        if not self.stopped.is_set():
+            logger.warning("panel: live stream of %s ended after %d frames: %s", self.host, self.frames, self.why)
+
+    def alive(self, now=None):
+        now = now or time.time()
+        if self.stopped.is_set() or self.failed:
+            return False
+        if not self.started:
+            return now - self.t0 < STREAM_TASK            # the task is still being made over SSH
+        if not self.frames:
+            return now - self.t0 < STREAM_START
+        return now - self.last < STREAM_STALL
+
+    def stop(self):
+        self.stopped.set()
+        if self.p is not None and self.p.poll() is None:
+            self.p.terminate()
+            try:
+                self.p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.p.kill()
+        logger.info("panel: live stream of %s stopped after %d frames", self.host, self.frames)
+        if self.port:          # a relay cut off while it starts never notices and keeps the capture: end both (measured)
+            threading.Thread(target=self._cleanup, daemon=True, name=f"stream-end-{self.host}").start()
+
+    def _cleanup(self):
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg.exe'\" | ? { $_.CommandLine -like "
+              f"'*127.0.0.1:{self.port}*' }} | % {{ Stop-Process -Id $_.ProcessId -Force; 'ended ' + $_.ProcessId }}")
+        try:
+            r = Target(self.host).sh("powershell -NoProfile -EncodedCommand " + base64.b64encode(ps.encode("utf-16-le")).decode())
+            ended = [l for l in (r.stdout or "").splitlines() if l.startswith("ended ")]
+            if ended:
+                logger.info("panel: ended %d leftover ffmpeg of the stream on %s (port %d)", len(ended), self.host, self.port)
+        except Exception as e:
+            logger.warning("panel: cleaning up the stream on %s (port %s): %s", self.host, self.port, e)
+
+
+class MacPointer:
+    """panel-live D2: one SSH connection to desktape's input helper on a Mac, kept open while the pointer follows the
+    mouse; each line is a move, posted as a real mouse-moved event (the driver's move does not raise the Dock)."""
+
+    def __init__(self, host):
+        t = Target(host)
+        exe = mac_helper(t, MAC_INPUT_SRC)
+        self.err = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
+        self.p = subprocess.Popen(["ssh", "-o", "BatchMode=yes", *t.opts, host, f'"$HOME/{exe}" serve'],
+                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self.err, text=True, bufsize=1)
+        logger.info("panel: pointer helper on %s started (pid %s)", host, self.p.pid)
+
+    def alive(self):
+        return self.p.poll() is None
+
+    def move(self, x, y):
+        self.p.stdin.write(f"move {x:.0f} {y:.0f}\n"); self.p.stdin.flush()
+
+    def close(self):
+        try:
+            self.p.stdin.close(); self.p.wait(timeout=3)
+        except Exception as e:
+            logger.warning("panel: closing the pointer helper: %s", e); self.p.kill()
+
+
 class FrameGrabber:
     """One target's live screen (D6): the newest frame in memory, pulled with `get_desktop_state` under the
     panel's own session label, only while someone asks for frames; no lock, no daemon start."""
@@ -4665,18 +4814,27 @@ class FrameGrabber:
         self.fps, self.size, self.wanted, self.thread = 1.0, 960, 0.0, None
         self.session, self.cua, self.fresh, self.frame_wh = None, None, False, None
         self.mu = threading.Lock()
-        self.io = threading.Lock()          # panel-control D1: frames and input share one connection
+        self.io = threading.Lock()          # the frame connection
         self.kick = threading.Event()       # an input wants the next frame now
+        self.mime, self.native, self.scale = "image/png", None, 1.0     # native: the screen in pixels (panel-live D1)
+        self.inp, self.inp_session, self.inp_mu = None, None, threading.Lock()   # panel-live D1: input's own connection
+        self.stream, self.stream_off_until, self.windows = None, 0.0, None       # panel-live D3
+        self.pointer, self.pointer_busy = None, False                            # panel-live D2, macOS
 
     def audit_path(self):
         os.makedirs(self.audit_dir, exist_ok=True)
         return os.path.join(self.audit_dir, f"audit-{time.strftime('%Y-%m-%d')}.jsonl")
 
     def want(self, fps=1.0, size=960):
+        """A viewer's ask. Several pages may watch one target (a grid and a zoomed view): the grabber serves the
+        largest ask of the last few seconds, so they do not take turns (panel-live: a stream restarted each time)."""
         with self.mu:
-            self.fps = min(max(float(fps), FPS_RANGE[0]), FPS_RANGE[1])
-            self.size = int(min(max(int(size), SIZE_RANGE[0]), SIZE_RANGE[1]))
-            self.wanted = time.time()
+            now = time.time()
+            ask = (min(max(float(fps), FPS_RANGE[0]), FPS_RANGE[1]), int(min(max(int(size), SIZE_RANGE[0]), SIZE_RANGE[1])))
+            self.asks = [a for a in getattr(self, "asks", []) if now - a[0] < ASK_WINDOW] + [(now, *ask)]
+            self.fps = max(a[1] for a in self.asks)
+            self.size = max(a[2] for a in self.asks)
+            self.wanted = now
             if not (self.thread and self.thread.is_alive()):
                 self.thread = threading.Thread(target=self._run, daemon=True, name=f"frames-{self.host}")
                 self.thread.start()
@@ -4684,11 +4842,96 @@ class FrameGrabber:
 
     def info(self):
         return {"at": self.at or None, "error": self.error, "ms": self.ms, "fps": self.fps, "size": self.size,
-                "active": bool(self.thread and self.thread.is_alive())}
+                "active": bool(self.thread and self.thread.is_alive()), "stream": bool(self.stream and self.stream.alive())}
+
+    def screen(self):
+        """The screen's native size in pixels: the driver's own report, else its last frame's size."""
+        return self.native or self.frame_wh
+
+    def _stream_wanted(self, now):
+        if self.fps <= STREAM_MIN_FPS or now < self.stream_off_until or self.host == "local":
+            return False
+        if self.windows is None:
+            try:
+                self.windows = not Target(self.host).mac
+            except Exception as e:
+                logger.warning("panel: OS of %s unknown (%s); no stream", self.host, e); self.windows = False
+        return self.windows
+
+    def _stream_frame(self, jpeg):
+        self.frame, self.at, self.error, self.mime, self.fresh = jpeg, time.time(), None, "image/jpeg", True
+
+    def _stream_step(self):
+        """One turn of the stream: start, watch, or give it up for driver frames. False: take a driver frame."""
+        now = time.time()
+        if not self._stream_wanted(now) or self.screen() is None:     # the native size comes from a driver frame
+            self._stop_stream(); return False
+        s = self.stream
+        if s is not None and (s.fps != int(min(self.fps, 15)) or s.width != self.size):
+            self._stop_stream(); s = None                      # the page asked for another rate or size
+        if s is not None and not s.alive(now):
+            why, ran = s.why or "no frame", s.frames
+            self._stop_stream()
+            if ran >= 50:                    # it ran, then ended (the capture's time limit, a hiccup): again at once
+                logger.info("panel: live stream of %s ended after %d frames (%s); starting it again", self.host, ran, why)
+                return False
+            self.stream_off_until = now + STREAM_RETRY
+            logger.warning("panel: no live stream from %s (%s); driver frames for %.0f s", self.host, why, STREAM_RETRY)
+            return False
+        if s is None:
+            try:
+                self.stream = s = LiveStream(self.host, min(self.fps, 15), self.size, self._stream_frame)
+            except Exception as e:
+                self.stream_off_until = now + STREAM_RETRY
+                logger.warning("panel: no live stream from %s (%s); driver frames for %.0f s", self.host, e, STREAM_RETRY)
+                return False
+        if not s.frames:
+            return False                     # starting: driver frames until the stream delivers
+        with self.io:                        # the driver's frame connection rests while the stream runs
+            if self.cua is not None:
+                close_quietly(self.cua, self.host); self.cua = None
+        self.kick.wait(0.25); self.kick.clear()
+        return True
+
+    def _stop_stream(self):
+        if self.stream is not None:
+            self.stream.stop(); self.stream = None
+            self.mime = "image/png"
+
+    def mac_move(self, x, y):
+        """A move on a Mac through the pointer helper; started in the background, moves dropped until it runs."""
+        if self.pointer is not None and self.pointer.alive():
+            try:
+                self.pointer.move(x, y); return
+            except (OSError, ValueError) as e:
+                logger.warning("panel: pointer helper on %s: %s", self.host, e)
+        if self.pointer_busy:
+            return
+        self.pointer_busy = True
+
+        def start():
+            try:
+                if self.pointer is not None:
+                    self.pointer.close()
+                self.pointer = MacPointer(self.host)
+            except Exception as e:
+                logger.warning("panel: no pointer helper on %s: %s", self.host, e)
+            finally:
+                self.pointer_busy = False
+        threading.Thread(target=start, daemon=True, name=f"pointer-{self.host}").start()
+
+    def close_input(self):
+        with self.inp_mu:
+            if self.inp is not None:
+                close_quietly(self.inp, self.host); self.inp = None
+        if self.pointer is not None:
+            self.pointer.close(); self.pointer = None
 
     def _run(self):
         try:
             while time.time() - self.wanted < FRAME_IDLE:
+                if self._stream_step():
+                    continue
                 t0 = time.time()
                 try:
                     with self.io:
@@ -4704,8 +4947,13 @@ class FrameGrabber:
                         if not img:
                             raise RuntimeError("the driver returned no screen image")
                         self.frame, self.at, self.error = base64.b64decode(img["data"]), time.time(), None
+                        self.mime = img.get("mimeType") or "image/png"
                         if self.frame[:8] == b"\x89PNG\r\n\x1a\n":
                             self.frame_wh = tuple(int.from_bytes(self.frame[i:i + 4], "big") for i in (16, 20))
+                        sc = self.cua.last.get("structuredContent") or {}
+                        if sc.get("screenshot_original_width") and sc.get("screenshot_original_height"):
+                            self.native = (int(sc["screenshot_original_width"]), int(sc["screenshot_original_height"]))
+                            self.scale = float(sc.get("scale_factor") or 1.0) or 1.0
                         self.fresh = True            # input may now use this connection's coordinates
                     self.ms = int((time.time() - t0) * 1000)
                 except Exception as e:          # any failure shows on the tile; the grabber retries
@@ -4717,13 +4965,15 @@ class FrameGrabber:
                             self.cua, self.fresh = None, False
                     time.sleep(FRAME_RETRY)
                     continue
-                self.kick.wait(max(0.0, 1.0 / self.fps - (time.time() - t0)))
+                self.kick.wait(max(0.0, 1.0 / min(self.fps, DRIVER_FPS_MAX) - (time.time() - t0)))
                 self.kick.clear()
         finally:
+            self._stop_stream()
             with self.io:
                 if self.cua is not None:
                     close_quietly(self.cua, self.host)
                     self.cua, self.fresh = None, False
+            self.close_input()
             logger.info("panel: live screen of %s stopped (nobody watching for %.0f s)", self.host, FRAME_IDLE)
 
 
@@ -4746,6 +4996,8 @@ def control_call(op, body):
         return "drag", {"from_x": round(num("from_x")), "from_y": round(num("from_y")), "to_x": round(num("to_x")),
                         "to_y": round(num("to_y")), "button": "left",
                         "duration_ms": int(min(max(float(body.get("duration_ms") or 500), 100), 3000))}, False
+    if op == "move":                    # panel-live D2: the pointer follows the mouse
+        return "move_cursor", {"x": round(num("x")), "y": round(num("y"))}, False
     if op == "type":
         text = body.get("text")
         if not isinstance(text, str) or not text or len(text) > 500:
@@ -4766,28 +5018,43 @@ def control_call(op, body):
 
 
 def grabber_act(g, op, body):
-    """Send one input on the grabber's connection and session (panel-control D1), then ask for a frame."""
+    """Send one input on the grabber's input connection (panel-live D1), at the native screen point that matches the
+    point on the page's frame, then ask for a frame. A move on a Mac goes to the pointer helper (D2)."""
     tool, args, secret = control_call(op, body)
-    with g.io:
-        if g.cua is None or not g.fresh:
-            raise RuntimeError("no live screen on this connection yet; wait for the next frame")
-        seen = body.get("w"), body.get("h")
-        if g.frame_wh and all(isinstance(v, (int, float)) and v > 0 for v in seen) and tuple(seen) != g.frame_wh:
-            # the page clicked on a frame of another size than the driver's last capture (the size just changed)
-            for kx, ky in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")):
-                if kx in args:
-                    args[kx], args[ky] = round(args[kx] * g.frame_wh[0] / seen[0]), round(args[ky] * g.frame_wh[1] / seen[1])
-            logger.debug("panel: %s point rescaled from a %sx%s frame to %sx%s", op, *seen, *g.frame_wh)
-        args = {**args, "scope": "desktop", "session": g.session}
+    if not g.fresh or not g.frame:
+        raise RuntimeError("no live screen yet; wait for the next frame")
+    screen, seen = g.screen(), (body.get("w"), body.get("h"))
+    if not all(isinstance(v, (int, float)) and v > 0 for v in seen):
+        seen = g.frame_wh                   # the page sent no frame size: the driver's own last frame
+    if screen and seen and tuple(seen) != tuple(screen):
+        for kx, ky in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")):
+            if kx in args:
+                args[kx], args[ky] = round(args[kx] * screen[0] / seen[0]), round(args[ky] * screen[1] / seen[1])
+        logger.debug("panel: %s point scaled from a %sx%s frame to the %sx%s screen", op, *seen, *screen)
+    if op == "move" and Target(g.host).mac:
+        g.mac_move(args["x"] / g.scale, args["y"] / g.scale)       # the helper works in screen points
+        return
+    with g.inp_mu:
+        if g.inp is None:
+            g.inp = g.connect()
+            g.inp.summarize = {"move_cursor"}                       # a move is not a step (D2)
+            g.inp_session = f"desktape-panel-input-{os.getpid()}-{int(time.time() * 1000)}"
+        args = {**args, "scope": "desktop", "session": g.inp_session}
         try:
-            g.cua.call(tool, args, secret=secret, timeout=10)
-        except RuntimeError as e:
-            if "background_unavailable" not in str(e):
-                raise
-            logger.info("panel: %s on %s needs foreground delivery; repeating it", tool, g.host)
-            g.cua.call(tool, {**args, "delivery_mode": "foreground"}, secret=secret, timeout=10)
-    g.wanted = time.time()
-    g.kick.set()
+            try:
+                g.inp.call(tool, args, secret=secret, timeout=10)
+            except RuntimeError as e:
+                if "background_unavailable" not in str(e):
+                    raise
+                logger.info("panel: %s on %s needs foreground delivery; repeating it", tool, g.host)
+                g.inp.call(tool, {**args, "delivery_mode": "foreground"}, secret=secret, timeout=10)
+        except Exception as e:
+            if "connection closed" in str(e) or isinstance(e, (CallBlocked, OSError)):
+                close_quietly(g.inp, g.host); g.inp = None           # the next input opens a new one
+            raise
+    if op != "move":
+        g.wanted = time.time()
+        g.kick.set()
 
 
 def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, alive=pid_alive, controls=None,
@@ -4885,7 +5152,11 @@ class PanelState:
                 return 200, {"on": True}
         elif op == "start":
             return 200, {"on": True}
-        other = ctl["lk"].try_acquire("panel control")     # renews the lock; ours unless the file was removed
+        # renews the lock; ours unless the file was removed. A move only every 5 s (panel-live D2: many a second)
+        renew = op != "move" or time.time() - ctl.get("renewed", 0) >= 5
+        other = ctl["lk"].try_acquire("panel control") if renew else None
+        if renew and not other:
+            ctl["renewed"] = time.time()
         if other:
             self.control_stop(name, "lock lost")
             return 409, {"error": f"{g.host} is {describe_block(other)}", "block": block_fields(ctl["lk"], other)}
@@ -4903,6 +5174,9 @@ class PanelState:
         with self.mu:
             ctl = self.controls.pop(name, None)
         if ctl:
+            g = self.grabbers.get(name)
+            if g is not None and g.pointer is not None:      # panel-live D2: the Mac's pointer helper goes with control
+                g.pointer.close(); g.pointer = None
             why_not = ctl["lk"].unlock()
             ctl["lk"].log("control-end", why=why, seconds=round(time.time() - ctl["since"], 1))
             logger.info("panel: control of %s given back (%s)%s", ctl["lk"].host, why,
@@ -4989,7 +5263,9 @@ def panel_handler(state):
                 info = {"X-Frame-At": str(g.at or 0), "X-Frame-Error": (g.error or "").encode("ascii", "replace").decode()[:200]}
                 if not g.frame:
                     return self.send(503, (g.error or "no frame yet").encode("utf-8"), "text/plain; charset=utf-8", **info)
-                return self.send(200, g.frame, "image/png", **info)
+                if q.get("since", [""])[0] == str(g.at):      # panel-live D4: the page has this one; asked often
+                    return self.send(204, b"", "text/plain", **info)
+                return self.send(200, g.frame, getattr(g, "mime", "image/png"), **info)
             return self.send(404, b"not found\n", "text/plain")
 
         def do_POST(self):
@@ -5204,6 +5480,12 @@ def selftest_booking_panel():
             g = FrameGrabber("user@box", d, connect=FakeCua)
             g.want(fps=20, size=99999)
             assert g.fps == FPS_RANGE[1] and g.size == SIZE_RANGE[1]
+            g.want(fps=1, size=960)
+            assert g.fps == FPS_RANGE[1] and g.size == SIZE_RANGE[1], "a grid's ask does not lower a zoomed view's"
+            g.asks = [(a[0] - ASK_WINDOW - 1, *a[1:]) for a in g.asks]
+            g.want(fps=1, size=960)
+            assert (g.fps, g.size) == (1, 960), "an old ask expires"
+            g.want(fps=20, size=99999)
             end = time.time() + 3
             while time.time() < end and len(calls) < 4:
                 time.sleep(0.02)
@@ -5219,6 +5501,18 @@ def selftest_booking_panel():
                 time.sleep(0.02)
             assert "session has ended" not in (g.error or "") and len({c[1]["session"] for c in calls[n0:]}) == 1
             g.wanted = 0; g.thread.join(3)
+            # panel-live D3: a stream that cannot start falls back to driver frames, and is not retried at once
+            g2 = FrameGrabber("user@box", d, connect=FakeCua)
+            g2.windows, g2.native, g2.fps = True, (1920, 1080), 10.0
+            real = globals()["LiveStream"]
+            globals()["LiveStream"] = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no ffmpeg on user@box"))
+            try:
+                assert g2._stream_step() is False and g2.stream_off_until > time.time() + STREAM_RETRY - 5
+                assert g2._stream_step() is False and g2.stream is None
+            finally:
+                globals()["LiveStream"] = real
+            g2.stream_off_until, g2.fps = 0, 1.0
+            assert g2._stream_step() is False, "the grid's rate is never streamed"
             # the handler: status JSON, a frame, a refused Host, an unknown target
             from http.server import ThreadingHTTPServer
             import urllib.request, urllib.error
@@ -5241,6 +5535,9 @@ def selftest_booking_panel():
                 assert st["targets"][0]["name"] == "box", st
                 r = urllib.request.urlopen(base_url + "/frame/box?fps=1&size=480")
                 assert r.status == 200 and r.read() == b"\x89PNG fake" and float(r.headers["X-Frame-At"]) > 0
+                r2 = urllib.request.urlopen(base_url + f"/frame/box?fps=1&size=480&since={r.headers['X-Frame-At']}")
+                assert (r2.status == 204 and r2.read() == b"") or r2.headers["X-Frame-At"] != r.headers["X-Frame-At"], \
+                    "the frame the page already has is not sent again (unless a newer one came in between)"
                 assert b"desktape" in urllib.request.urlopen(base_url + "/").read()
                 for path, hdr, code in (("/api/status", "evil.example", 403), ("/frame/nope", None, 404),
                                         ("/frame/box?fps=x", None, 400)):
@@ -5283,7 +5580,8 @@ def selftest_booking_panel():
             code, out = st.control("box", {"op": "click", "x": 5, "y": 6})  # the first click takes control
             assert code == 200 and out["on"] and BoxLock("user@box").read()["label"] == "panel", out
             sent = [c for c in calls if c[0] == "click"]
-            assert sent[-1][1]["scope"] == "desktop" and sent[-1][1]["session"] == g.session and sent[-1][1]["x"] == 5
+            assert sent[-1][1]["scope"] == "desktop" and sent[-1][1]["session"] == g.inp_session and sent[-1][1]["x"] == 5
+            assert g.inp_session.startswith("desktape-panel-input-") and g.inp_session != g.session, "input: its own session"
             g.frame_wh = (1920, 1080)
             assert st.control("box", {"op": "click", "x": 480, "y": 270, "w": 960, "h": 540})[0] == 200
             assert [c[1] for c in calls if c[0] == "click"][-1]["x"] == 960, "a click on a smaller frame is rescaled"
@@ -5330,6 +5628,16 @@ def selftest_booking_panel():
                                       "duration_ms": 9000, "w": 960, "h": 540})[0] == 200
             dr = [c[1] for c in calls if c[0] == "drag"][-1]
             assert dr["from_x"] == 200 and dr["to_x"] == 400 and dr["duration_ms"] == 3000 and dr["scope"] == "desktop", dr
+            # panel-live D1/D2: the driver's native size wins over the frame's; a move goes like a click
+            g.native = (3840, 2160)
+            assert st.control("box", {"op": "move", "x": 480, "y": 270, "w": 960, "h": 540})[0] == 200
+            mv = [c[1] for c in calls if c[0] == "move_cursor"][-1]
+            assert (mv["x"], mv["y"], mv["scope"], mv["session"]) == (1920, 1080, "desktop", g.inp_session), mv
+            assert g.inp.summarize == {"move_cursor"}, "moves are counted, not logged one by one"
+            renewed = st.controls["box"]["renewed"]
+            st.control("box", {"op": "move", "x": 1, "y": 1, "w": 960, "h": 540})
+            assert st.controls["box"]["renewed"] == renewed, "a move does not rewrite the lock every time"
+            g.native = None
             st.control("box", {"op": "stop"})
             assert PanelState("0.0.0.0", probe=False).control("box", {"op": "start"})[0] == 403
             from http.server import ThreadingHTTPServer
@@ -5430,6 +5738,24 @@ def selftest_panel_audit():
         Runner(c, "test").step({"drag": {"from_x": 1}}); raise AssertionError("a tape must not drag")
     except ValueError as e:
         assert "unknown step 'drag'" in str(e), e
+    try:
+        Runner(c, "test").step({"move_cursor": {"x": 1, "y": 1}}); raise AssertionError("a tape must not move the pointer")
+    except ValueError as e:
+        assert "unknown step 'move_cursor'" in str(e), e
+    # panel-live D3: MJPEG split on the markers; a coded FF is followed by 00, so FFD9 ends a frame
+    a, b = b"\xff\xd8\x01\xff\x00\x02\xff\xd9", b"\xff\xd8\x03\xff\xd9"
+    frames, rest = split_jpegs(b"junk" + a + b + b"\xff\xd8\x04")
+    assert frames == [a, b] and rest == b"\xff\xd8\x04", (frames, rest)
+    assert split_jpegs(b"no frame") == ([], b"")
+    s = LiveStream("user@box", 10, 1280, lambda f: None, start=False)
+    assert s.alive(s.t0 + STREAM_START + 1) and not s.alive(s.t0 + STREAM_TASK + 1), "the task's own time, then dead"
+    s.started = True
+    assert s.alive(s.t0 + 1) and not s.alive(s.t0 + STREAM_START + 1), "no first frame in time: dead"
+    s.frames, s.last = 3, s.t0 + 20
+    assert s.alive(s.t0 + 22) and not s.alive(s.t0 + 20 + STREAM_STALL + 1), "a silent stream is dead"
+    s.stop(); assert not s.alive()
+    s = LiveStream("user@box", 10, 1280, lambda f: None, start=False); s.failed = True
+    assert not s.alive(s.t0 + 1), "a capture task that failed is dead at once"
 
 
 def selftest_knowledge():

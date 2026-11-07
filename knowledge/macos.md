@@ -104,6 +104,11 @@ Measured: 2026-10-25, macOS 26.4, Claude Desktop.
   background for a window the program's accessibility does not list (a file dialog).
 - The driver's `move_cursor` jumps the pointer once per call (0.09 s locally, 0.27 s over SSH). A smooth
   move needs the helper: `cursor: person`.
+- The driver's `move_cursor` warps the pointer: hover effects and the hidden Dock (autohide) do not react. The
+  helper posts real mouse-moved events, which do: `glide`, or `serve` reading `move x y` lines over one kept SSH
+  connection (the panel's "Follow the pointer"). Measured: 2026-11-07, macOS 26.4.
+- An SSH session cannot capture the screen: `screencapture` says "could not create image from display" and ffmpeg's
+  avfoundation hangs. Only the driver's app holds the screen-recording grant. Same day.
 - Text typed by the helper is unicode, so the keyboard layout does not matter. Key names (`cmd+shift+g`)
   follow US key positions, which match the letters in use on a Hungarian layout too.
 

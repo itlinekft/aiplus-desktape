@@ -6,6 +6,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- The panel as a remote desktop (`panel-live`): a Windows machine's zoomed screen is a live stream (ffmpeg in its
+  desktop session, on its loopback only, relayed over SSH; up to 15 frames a second, about 0.3 s behind), with the
+  driver's frames as the fallback; **Follow the pointer** sends the mouse's moves too (hover menus, the Mac's Dock),
+  through the driver on Windows and desktape's input helper (`desktape-input serve`) on a Mac; clicks and keys get a
+  driver connection of their own and no longer wait for a frame; typed text goes out after 40 ms. `move_cursor` is on
+  the allowlist for the panel's control only.
 - Bookings: `book --for 45m [--at 14:00] [--note …]` books a target for a project for up to 4 hours, up to 7 days
   ahead; `bookings` lists them, `unbook ID` removes one. During another project's booking, `run`, `look`, `act` and
   `tidy` stop with exit code 3 naming it; a running command is never cut off. Plain JSON files next to the lock

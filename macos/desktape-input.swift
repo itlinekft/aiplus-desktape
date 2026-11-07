@@ -4,6 +4,9 @@
 //   desktape-input key <combo>           press one key or combination, e.g. cmd+shift+g, return, escape, cmd+a
 //   desktape-input type <text>           type text as unicode characters, whatever the keyboard layout
 //   desktape-input type -                the text from standard input (a secret never shows in the process list)
+//   desktape-input serve                 read "move <x> <y>" lines (screen points) from standard input and post
+//                                        each as a mouse move, until the input ends (panel-live D2: the panel's
+//                                        pointer following the mouse over one kept SSH connection)
 //   desktape-input front                 the ordinary windows front to back (top 6), as JSON lines
 //                                        {"window_id", "pid", "app", "alpha"}; the caller skips overlays
 //
@@ -46,7 +49,7 @@ func post(_ code: CGKeyCode, _ flags: CGEventFlags, text: String? = nil) {
 }
 
 let a = Array(CommandLine.arguments.dropFirst())
-guard let cmd = a.first else { fail("usage: desktape-input glide <x> <y> [ms] | key <combo> | type <text>") }
+guard let cmd = a.first else { fail("usage: desktape-input glide <x> <y> [ms] | key <combo> | type <text> | serve | front") }
 switch cmd {
 case "glide":
     let n = a.dropFirst().compactMap { Double($0) }
@@ -82,6 +85,14 @@ case "type":
         usleep(12_000)
     }
     print("ok")
+case "serve":
+    // a real mouse-moved event, not a warp: the hidden Dock and hover effects react only to events (measured)
+    while let line = readLine() {
+        let f = line.split(separator: " ")
+        guard f.count == 3, f[0] == "move", let x = Double(f[1]), let y = Double(f[2]) else { continue }
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x, y: y),
+                mouseButton: .left)?.post(tap: .cghidEventTap)
+    }
 case "front":
     // The system's window list runs front to back. Layer 0 holds ordinary windows; the first one that is not an
     // overlay (the driver's agent cursor is a layer-0 window too, measured) gets a keyboard's events. Ids and

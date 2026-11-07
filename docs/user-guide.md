@@ -190,7 +190,10 @@ under the panel's own session, only while the tab is open, with no lock. The pag
 so the panel listens only on this machine unless `--bind` says otherwise.
 
 **Control from the panel, instead of a remote desktop.** A click on a screen shows it alone, full screen, sharp
-(1920 px) and faster (4 frames per second by default, "Zoomed" in the toolbar). There the first click or key press
+(1920 px) and faster (10 frames per second by default, "Zoomed" in the toolbar). On a Windows machine with ffmpeg the
+zoomed screen is a live stream, captured in the machine's desktop session and served only on its loopback, at up to
+15 frames per second, about a third of a second behind; the first few seconds still show the driver's frames, and if
+the stream cannot start the view stays on them. A Mac shows the driver's frames (up to about 4 a second). There the first click or key press
 takes the machine: clicks, right clicks, the wheel and the keyboard (accented text, Enter, Tab, arrows, Ctrl and Alt
 combinations) go to its screen at the point you see. While you have it, the machine's lock is held by `panel`, so an
 agent's command waits and stops as for any other holder; and you cannot take a machine where an agent's command
@@ -199,7 +202,10 @@ ended less than 3 minutes ago), **Take over** in the bar above the screen takes 
 agent's lease and session state come back and its next command runs. A quick second click is a double click; press,
 move and release is a drag (select text, move a window, a slider). The bar's **Esc**, **Start** and **Alt+Tab**
 send what the browser keeps for itself; in full screen Chrome also passes Escape and its own shortcuts (hold Esc to
-leave). A yellow ring marks where your click went. "Back", two minutes without input, or closing the page gives it
+leave). A yellow ring marks where your click went. **Follow the pointer** in the bar sends the mouse's moves too, not only
+clicks, so menus that open on hover and the Mac's hidden Dock show (off by default; on a Mac through desktape's input
+helper, which is compiled there on first use). Clicks and keys travel on a driver connection of their own, so they
+never wait for a frame. "Back", two minutes without input, or closing the page gives it
 back.
 Control works only when the panel listens on 127.0.0.1, and only from the page it served (a per-start token).
 What the driver cannot reach, a person still does at the machine or over RDP: the Windows UAC prompt and lock

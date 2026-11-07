@@ -110,6 +110,17 @@ open.
 - **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
   minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
 
+- **An SSH session cannot capture the screen.** ffmpeg's gdigrab from an SSH logon fails with "Failed to capture
+  image (error 5)": the logon has no desktop of its own. Started in the person's desktop session (a one-off
+  `schtasks /create … /it` task, the way desktape starts the driver daemon) the same command captures at 10–15 frames a
+  second. Making and running that task over SSH took up to 12 s on a slower PC. Measured: 2026-11-07, Windows 10 Pro
+  22H2, ffmpeg 9.0.2.
+- **A process an SSH session started can outlive it.** An ffmpeg relay whose SSH client was cut off while it was
+  still starting kept running (and kept its capture alive) for minutes; one that was already writing ended with the
+  connection. End such helpers yourself, by something unique on their command line. Same PC, same day.
+- **`[System.Windows.Forms.Screen]` over SSH reports 1024×768** on a 1920×1080 screen: an SSH logon does not see the
+  real desktop. Ask the driver (`get_desktop_state`'s `screenshot_original_width/height`). Same PC, same day.
+
 ## Claude Desktop
 
 - **„Add folder” leaves a native „Folder access request” window open.** In a new Cowork task, „Project or folder” ›

@@ -219,6 +219,35 @@ Desktop's Code tab followed `docs/setup-target.md` with the person. Controller: 
 Not measured: the target's own report (not brought back), the guide's step 5 (screen awake), reaching it over the
 VPN.
 
+## 2026-11-07: the panel as a remote desktop (live stream, following pointer)
+
+**Machines:** the Windows 10 PC (1920×1080, on the local network) and the Mac mini (macOS 26.4, arm64); Cua Driver
+0.34.1; ffmpeg 9.0.2 (Windows, winget) and Homebrew's (Mac). Controller: Linux, the panel on 127.0.0.1, the page in
+headless Chrome at 1600×1000 and plain HTTP to the panel. **Change:** `panel-live`.
+
+| What | Result |
+|---|---|
+| a driver frame (`get_desktop_state`), Windows | 150–220 ms; PNG 300–490 KB |
+| a driver frame, Mac | 950–1100 ms in one run, 160–350 ms in a later one (the machine was busy in the first) |
+| `move_cursor` with `scope: desktop` | Windows 5–6 ms; Mac 160–1030 ms |
+| a second driver connection while frames run on the first | Windows: cursor read and `move_cursor` median 46 ms (max 163); Mac: 14 ms. Input no longer waits for a frame |
+| a fresh session's `move_cursor` (1000, 500) | the pointer at (1000, 500): native pixels, no frame needed first |
+| the panel's `move` of (480, 270) on a 960×540 frame | the pointer at (960, 540) |
+| the hidden Dock (autohide on) | the driver's `move_cursor` to the bottom edge: no Dock; desktape's helper (`glide`, and the new `serve` over one SSH connection, 21 moves written at once): the Dock showed |
+| screen capture from an SSH session | Windows gdigrab: "Failed to capture image (error 5)"; macOS: `screencapture` "could not create image from display", ffmpeg's avfoundation hung |
+| ffmpeg gdigrab in the desktop session (a one-off `/it` task) → MJPEG on 127.0.0.1 → an ffmpeg relay over SSH | 204 frames in ~10 s on the first try, 1920×1080 at `-q:v 6`, 120–350 KB a frame |
+| the stream through the panel, asked 10 and 15 frames/s | 10.0 and 15.0 frames/s received |
+| a pointer move until it shows in the stream | 570–650 ms; with `nobuffer`/`low_delay` on the capture and the relay 360–395 ms at 10 frames/s, 256–387 ms at 15 |
+| the page, zoomed, polling twice a frame (204 when unchanged) | 9.7 frames/s drawn of 10; the first ~6 s show driver frames while the capture task starts (up to 12 s over SSH to this PC) |
+| 40 page mouse moves with "Follow the pointer" on | sent the newest only, one in flight; round trips 6–13 ms |
+| ffmpeg on the target after the view closed | none left (checked after each run). Before the fix a relay cut off during its start kept its capture running: now the panel ends both by their port |
+| a grid page (1 frame/s, 960 px) and a zoomed page (10, 1920) on one target | before: the grabber took turns and restarted the stream; now it serves the largest ask of the last 3 s |
+
+Not measured: a hover menu on Windows, typing speed on the target by eye, the stream over a VPN, a stream on the Mac
+(it needs a screen-recording grant). During the Mac measurements another project had booked the Mac for a recording
+(from 23:20): probes at 23:24–23:34 (pointer moves, the Dock raised once) went straight to the driver, outside
+desktape's lock; the panel's own control was refused there (409), as it should be.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
