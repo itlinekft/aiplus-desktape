@@ -45,3 +45,25 @@ splits them on the JPEG markers and keeps the newest as its frame. When the view
 
 The zoomed view offers 2, 4, 5, 10 and 15 frames a second; above 5 the driver path is capped at 5 (the stream is
 what delivers more). The grid keeps its 0.2–5.
+
+## D5. Keys through desktape's own input helper
+
+Measured on the Windows 10 PC (2026-11-07): the driver's desktop-scope `press_key` and `type_text` take about 2 s every
+few presses, more often after a click with the agent cursor on, also with it off and with `delivery_mode:
+foreground`; clicks take 400–950 ms with the agent cursor on, 130–210 ms off. A person typing feels each stall.
+
+- The input connection turns the driver's agent cursor off when it is made (`set_agent_cursor_enabled false`): the
+  person's own pointer is the one that matters while they drive.
+- Keys and text go through desktape's own helper when it is ready, the driver otherwise (and for any key the helper
+  has no name for):
+  - Windows: `windows/desktape-input.cs`, compiled on the target with the .NET Framework's own `csc.exe` once per
+    source version (as the Mac helper is with `swiftc`). `serve` runs in the desktop session from a one-off `/it` task
+    and sends `SendInput` keyboard events (text as Unicode events, so any layout and accents work); it listens on the
+    loopback for one connection, whose first line must be a random token the panel left in a file there (read and
+    deleted), so another local program cannot type through it, and it gives up after 20 s without one. `relay` runs
+    in the SSH session and copies lines both ways. PowerShell (and .NET's console stream) hand over only the first
+    chunk of an SSH session's piped input and then wait forever (measured), so the relay reads its input with
+    `ReadFile`.
+  - macOS: the helper's `serve` (D2) also reads `key <combo>` and `text <base64>` lines.
+- The helper starts in the background when control starts and ends with control. Real input reaches the window in
+  front, which is what a person at the page means; it is the same input the driver's `os: true` steps send.

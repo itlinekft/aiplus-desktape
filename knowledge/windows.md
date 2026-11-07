@@ -121,6 +121,16 @@ open.
 - **`[System.Windows.Forms.Screen]` over SSH reports 1024×768** on a 1920×1080 screen: an SSH logon does not see the
   real desktop. Ask the driver (`get_desktop_state`'s `screenshot_original_width/height`). Same PC, same day.
 
+- **A program reading its standard input over SSH gets only the first line** when the lines come one by one: .NET's
+  console stream and PowerShell's `[Console]::In` (also with `-EncodedCommand`) read the first chunk and then wait
+  forever; written all at once, every line arrives. A native read (`ReadFile` on the standard input handle) gets each
+  line as it comes. desktape's keyboard relay reads that way. Measured: 2026-11-08, Windows 10 Pro 22H2, OpenSSH.
+- **The driver's keys can stall for 2 s.** `press_key` / `type_text` in desktop scope took about 2010 ms every few
+  presses (more often after a click with the agent cursor on). For a person typing, desktape sends keys with
+  `SendInput` from its own helper in the desktop session instead (14–29 ms). Same PC, 2026-11-07/08.
+- **A window started from a one-off `/it` task stays behind** the window in front (foreground lock), so keys sent
+  afterwards go to that other window. Check what is in front before sending real input. Same PC, 2026-11-08.
+
 ## Claude Desktop
 
 - **„Add folder” leaves a native „Folder access request” window open.** In a new Cowork task, „Project or folder” ›

@@ -205,7 +205,8 @@ send what the browser keeps for itself; in full screen Chrome also passes Escape
 leave). A yellow ring marks where your click went. **Follow the pointer** in the bar sends the mouse's moves too, not only
 clicks, so menus that open on hover and the Mac's hidden Dock show (off by default; on a Mac through desktape's input
 helper, which is compiled there on first use). Clicks and keys travel on a driver connection of their own, so they
-never wait for a frame. "Back", two minutes without input, or closing the page gives it
+never wait for a frame; keys and text go through desktape's own input helper on the target (compiled there on first
+use: on Windows with the system's .NET Framework compiler), which types like a keyboard, into the window in front. "Back", two minutes without input, or closing the page gives it
 back.
 Control works only when the panel listens on 127.0.0.1, and only from the page it served (a per-start token).
 What the driver cannot reach, a person still does at the machine or over RDP: the Windows UAC prompt and lock

@@ -4,9 +4,9 @@
 //   desktape-input key <combo>           press one key or combination, e.g. cmd+shift+g, return, escape, cmd+a
 //   desktape-input type <text>           type text as unicode characters, whatever the keyboard layout
 //   desktape-input type -                the text from standard input (a secret never shows in the process list)
-//   desktape-input serve                 read "move <x> <y>" lines (screen points) from standard input and post
-//                                        each as a mouse move, until the input ends (panel-live D2: the panel's
-//                                        pointer following the mouse over one kept SSH connection)
+//   desktape-input serve                 read lines from standard input until it ends, over one kept SSH
+//                                        connection (panel-live D2, D5): "move <x> <y>" (screen points) posts a
+//                                        mouse move, "key <combo>" a key, "text <base64 UTF-8>" the characters
 //   desktape-input front                 the ordinary windows front to back (top 6), as JSON lines
 //                                        {"window_id", "pid", "app", "alpha"}; the caller skips overlays
 //
@@ -88,10 +88,20 @@ case "type":
 case "serve":
     // a real mouse-moved event, not a warp: the hidden Dock and hover effects react only to events (measured)
     while let line = readLine() {
-        let f = line.split(separator: " ")
-        guard f.count == 3, f[0] == "move", let x = Double(f[1]), let y = Double(f[2]) else { continue }
-        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x, y: y),
-                mouseButton: .left)?.post(tap: .cghidEventTap)
+        let f = line.split(separator: " ").map(String.init)
+        if f.count == 3, f[0] == "move", let x = Double(f[1]), let y = Double(f[2]) {
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x, y: y),
+                    mouseButton: .left)?.post(tap: .cghidEventTap)
+        } else if f.count == 2, f[0] == "key" {
+            var flags: CGEventFlags = []
+            var key: CGKeyCode? = nil
+            for part in f[1].lowercased().split(separator: "+").map(String.init) {
+                if let m = mods[part] { flags.insert(m) } else if let c = codes[part] { key = c }
+            }
+            if let k = key { post(k, flags) }
+        } else if f.count == 2, f[0] == "text", let d = Data(base64Encoded: f[1]), let s = String(data: d, encoding: .utf8) {
+            for ch in s { post(0, [], text: String(ch)) }
+        }
     }
 case "front":
     // The system's window list runs front to back. Layer 0 holds ordinary windows; the first one that is not an

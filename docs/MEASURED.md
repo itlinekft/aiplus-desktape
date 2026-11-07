@@ -248,6 +248,27 @@ Not measured: a hover menu on Windows, typing speed on the target by eye, the st
 (from 23:20): probes at 23:24–23:34 (pointer moves, the Dock raised once) went straight to the driver, outside
 desktape's lock; the panel's own control was refused there (409), as it should be.
 
+## 2026-11-08: keys through desktape's own input helper (Windows)
+
+**Machine:** the Windows 10 PC (Windows 10 Pro 22H2, 1920×1080, an administrator account, on the local network); Cua
+Driver 0.34.1; .NET Framework 4 `csc.exe` from the system. Controller: Linux. Each probe held desktape's lock on the
+target. **Change:** `panel-live` D5.
+
+| What | Result |
+|---|---|
+| the driver's `press_key` / `type_text`, desktop scope (2026-11-07) | mostly fast, but about 2010 ms every few presses: more often after a click with the agent cursor on, also with it off and with `delivery_mode: foreground` |
+| the driver's `click` with the agent cursor on / off (2026-11-07) | 400–950 ms / 130–210 ms |
+| compiling `windows/desktape-input.cs` on the target, first use | about 2 s (`csc.exe /optimize`); later runs reuse the exe of the same source version |
+| from starting the helper (token file, `/it` task, relay) to its `ready` | 4.6–4.7 s |
+| 15 shift presses through the helper (`keys 16`, sent 0.2 s apart) | 14–29 ms each, every one answered `ok 2`; no stall |
+| an 18-character text with accents (`text`, 36 Unicode events) | answered in 7 ms; it reached the window in front, accents intact (read back from its UI Automation tree) |
+| .NET's console stream and PowerShell's `[Console]::In`, reading an SSH session's piped input written line by line | only the first line arrives, then the read waits forever; all lines arrive when they are written at once. `ReadFile` on the standard input handle (a pipe) gets each line as it comes |
+
+The helper's text goes to whatever has the keyboard focus. A Notepad started from a one-off `/it` task did not come to
+the front (Windows' foreground lock), so the test text went into the window that was in front; it was removed with the
+same number of backspaces and the field read back as before. Not measured yet: typing through the panel page by a
+person, the Mac's keys through `serve`.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

@@ -10,6 +10,22 @@ waits for a frame being captured, at the point of the target's screen that match
 - **WHEN** control is on for a target whose frames take about a second and the person presses a key
 - **THEN** the key reaches the target without waiting for the frame being captured
 
+### Requirement: Keys reach a controlled target at typing speed
+
+While control is on, key presses and text SHALL go through desktape's own input helper in the person's desktop
+session when it is ready, and through the driver otherwise. The Windows helper SHALL listen only on the target's
+loopback and accept only the connection that presents the token the panel left for it.
+
+#### Scenario: typing on a Windows target
+
+- **WHEN** control is on for a Windows target and the person types
+- **THEN** each key reaches the target in well under a second, with no stall of seconds between keys
+
+#### Scenario: the helper cannot start
+
+- **WHEN** the helper cannot be compiled or started on the target
+- **THEN** keys go through the driver as before and the panel logs why
+
 ### Requirement: The pointer can follow the mouse
 
 The zoomed view SHALL offer a switch, off by default, that sends the mouse's moves over the frame to the target's

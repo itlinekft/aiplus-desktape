@@ -1645,6 +1645,25 @@ def mac_helper(t, src):
     return exe
 
 
+def win_helper(t, src):
+    """panel-live D5: a C# helper compiled on a Windows target once per source version, with the .NET Framework's own
+    csc.exe; returns its path under %USERPROFILE%, cached per host for this run."""
+    import hashlib
+    if t.host in WIN_HELPERS:
+        return WIN_HELPERS[t.host]
+    name = os.path.splitext(os.path.basename(src))[0]
+    exe = f"desktape\\bin\\{name}-" + hashlib.sha256(open(src, "rb").read()).hexdigest()[:12] + ".exe"
+    t.mkdir("desktape/bin")
+    if t.sh(f'if exist "%USERPROFILE%\\{exe}" echo yes').stdout.strip() != "yes":
+        t.put(src, f"desktape/{name}.cs")
+        r = t.sh(f'"{CSC}" /nologo /optimize /out:"%USERPROFILE%\\{exe}" "%USERPROFILE%\\desktape\\{name}.cs"')
+        if r.returncode:
+            raise RuntimeError(f"compiling {name} on {t.host} failed: {(r.stdout + r.stderr).strip()[-300:]}")
+        logger.info("compiled %s on %s: %%USERPROFILE%%\\%s", name, t.host, exe)
+    WIN_HELPERS[t.host] = exe
+    return exe
+
+
 def shlex_quote(s):
     import shlex
     return shlex.quote(s)
@@ -4586,7 +4605,14 @@ ASK_WINDOW = 3.0               # seconds a viewer's ask for a rate and size coun
 STREAM_MIN_FPS = 2.0           # panel-live D3: a Windows target's zoomed view, asked above this, is streamed
 STREAM_START, STREAM_STALL = 10.0, 5.0   # seconds to the first streamed frame; a stream silent this long is dead
 STREAM_TASK = 30.0             # seconds for the capture task to be made over SSH (12 s measured on a slow PC)
+WIN_HELPERS = {}               # host -> the compiled input helper's path there, for this panel run
 STREAM_SCRIPT_PUT = set()      # hosts that have this panel run's live-stream.ps1
+WIN_INPUT_SRC = os.path.join(HERE, "windows", "desktape-input.cs")
+CSC = r"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"   # the .NET Framework's compiler, on every Windows 10/11
+WIN_VK = {"return": 0x0D, "tab": 0x09, "escape": 0x1B, "backspace": 0x08, "delete": 0x2E, "up": 0x26, "down": 0x28,
+          "left": 0x25, "right": 0x27, "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22, "space": 0x20,
+          "ctrl": 0x11, "alt": 0x12, "shift": 0x10, "win": 0x5B, "cmd": 0x5B,
+          **{f"f{i}": 0x6F + i for i in range(1, 13)}, **{c: ord(c.upper()) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}}
 STREAM_RETRY = 60.0            # after a failed stream, driver frames for this long
 STREAM_PORTS = (48650, 48999)  # the target's loopback port is drawn from these, per stream
 LIVE_PS1 = os.path.join(HERE, "windows", "live-stream.ps1")
@@ -4778,6 +4804,76 @@ class LiveStream:
             logger.warning("panel: cleaning up the stream on %s (port %s): %s", self.host, self.port, e)
 
 
+def input_line(tool, args, mac=False):
+    """panel-live D5: one driver-style key input as a line for desktape's own input helper; None when it has no
+    equivalent (the driver then sends it). Windows: virtual-key codes; macOS: the helper's key names."""
+    keys = [args["key"]] if tool == "press_key" else args.get("keys") if tool == "hotkey" else None
+    if tool == "type_text":
+        return "text " + base64.b64encode(args["text"].encode("utf-8")).decode()
+    if not keys:
+        return None
+    if mac:
+        names = [{"delete": "forwarddelete", "win": "cmd"}.get(k, k) for k in keys]
+        known = set(MAC_KEY_NAMES)
+        return "key " + "+".join(names) if all(n in known for n in names) else None
+    vks = [WIN_VK.get(k) for k in keys]
+    return "keys " + ",".join(str(v) for v in vks) if all(vks) else None
+
+
+MAC_KEY_NAMES = ("cmd shift alt ctrl return tab space delete backspace escape forwarddelete home end pageup pagedown "
+                 "left right down up / . , - = " + " ".join("abcdefghijklmnopqrstuvwxyz0123456789")).split()
+
+
+class WinInput:
+    """panel-live D5: desktape's keyboard helper in a Windows desktop session (real SendInput), reached by a relay over
+    SSH; the first line is a token the panel leaves in a file there, so another local program cannot type."""
+
+    def __init__(self, host):
+        t = Target(host)
+        self.host, self.port = host, random.SystemRandom().randint(*STREAM_PORTS)
+        token = "%032x" % random.SystemRandom().getrandbits(128)
+        exe = win_helper(t, WIN_INPUT_SRC)
+        tok = f"%USERPROFILE%\\desktape\\input-{self.port}.token"
+        t.sh(f'echo {token}> "{tok}"')
+        tn = f"desktape-input-{self.port}"
+        tr = HIDDEN + f"\\\"%USERPROFILE%\\{exe}\\\" serve {self.port} \\\"{tok}\\\""
+        r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{RL_SSH} /f >nul '
+                 f'&& schtasks /run /tn {tn} >nul & schtasks /delete /tn {tn} /f >nul')
+        if r.returncode:
+            raise RuntimeError(f"the input task did not start on {host}: {(r.stderr or r.stdout).strip()[-200:]}")
+        # the relay is the same exe in the SSH session: PowerShell reads only the first line of a piped input (measured)
+        self.err = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
+        self.p = subprocess.Popen(["ssh", "-o", "BatchMode=yes", *t.opts, host, f'"%USERPROFILE%\\{exe}" relay {self.port}'],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, text=True, bufsize=1)
+        self.lines = queue.Queue()
+        threading.Thread(target=Cua._read, args=(self.p.stdout, self.lines), daemon=True).start()
+        try:
+            ready = self.send(token, timeout=25)
+        except Exception as e:
+            ready = str(e)
+        if ready != "ready":
+            self.err.seek(0)
+            why = self.err.read().strip()[-200:]
+            self.close(); raise RuntimeError(f"the input helper on {host} did not answer ({ready}; {why})")
+        logger.info("panel: keyboard helper on %s ready (port %d)", host, self.port)
+
+    def send(self, line, timeout=5.0):
+        self.p.stdin.write(line + "\n"); self.p.stdin.flush()
+        out = self.lines.get(timeout=timeout)
+        if out is None:
+            raise RuntimeError("the input helper's connection closed")
+        return out.strip()
+
+    def alive(self):
+        return self.p.poll() is None
+
+    def close(self):
+        try:
+            self.p.stdin.close(); self.p.wait(timeout=3)
+        except Exception as e:
+            logger.warning("panel: closing the keyboard helper on %s: %s", self.host, e); self.p.kill()
+
+
 class MacPointer:
     """panel-live D2: one SSH connection to desktape's input helper on a Mac, kept open while the pointer follows the
     mouse; each line is a move, posted as a real mouse-moved event (the driver's move does not raise the Dock)."""
@@ -4794,7 +4890,10 @@ class MacPointer:
         return self.p.poll() is None
 
     def move(self, x, y):
-        self.p.stdin.write(f"move {x:.0f} {y:.0f}\n"); self.p.stdin.flush()
+        self.send(f"move {x:.0f} {y:.0f}")
+
+    def send(self, line):
+        self.p.stdin.write(line + "\n"); self.p.stdin.flush()
 
     def close(self):
         try:
@@ -4820,6 +4919,8 @@ class FrameGrabber:
         self.inp, self.inp_session, self.inp_mu = None, None, threading.Lock()   # panel-live D1: input's own connection
         self.stream, self.stream_off_until, self.windows = None, 0.0, None       # panel-live D3
         self.pointer, self.pointer_busy = None, False                            # panel-live D2, macOS
+        self.keyboard, self.keyboard_busy, self.keyboard_off_until = None, False, 0.0   # panel-live D5, Windows
+        self.helpers = connect is None      # a test's fake driver gets no helpers on a real machine
 
     def audit_path(self):
         os.makedirs(self.audit_dir, exist_ok=True)
@@ -4901,6 +5002,8 @@ class FrameGrabber:
     def mac_move(self, x, y):
         """A move on a Mac through the pointer helper; started in the background, moves dropped until it runs."""
         if self.pointer is not None and self.pointer.alive():
+            if x is None:
+                return
             try:
                 self.pointer.move(x, y); return
             except (OSError, ValueError) as e:
@@ -4920,12 +5023,41 @@ class FrameGrabber:
                 self.pointer_busy = False
         threading.Thread(target=start, daemon=True, name=f"pointer-{self.host}").start()
 
+    def helper_ready(self):
+        """panel-live D5: the target's own input helper (Windows: the keyboard helper; macOS: the pointer helper,
+        which also types), or None while it starts in the background; the driver sends meanwhile."""
+        mac = Target(self.host).mac
+        h = self.pointer if mac else self.keyboard
+        if h is not None and h.alive():
+            return h
+        if mac:
+            self.mac_move(None, None)          # starts it; a None move is not sent
+            return None
+        if self.keyboard_busy or time.time() < self.keyboard_off_until or self.host == "local":
+            return None
+        self.keyboard_busy = True
+
+        def start():
+            try:
+                if self.keyboard is not None:
+                    self.keyboard.close()
+                self.keyboard = WinInput(self.host)
+            except Exception as e:
+                self.keyboard, self.keyboard_off_until = None, time.time() + STREAM_RETRY
+                logger.warning("panel: no keyboard helper on %s (%s); the driver types for %.0f s", self.host, e, STREAM_RETRY)
+            finally:
+                self.keyboard_busy = False
+        threading.Thread(target=start, daemon=True, name=f"keyboard-{self.host}").start()
+        return None
+
     def close_input(self):
         with self.inp_mu:
             if self.inp is not None:
                 close_quietly(self.inp, self.host); self.inp = None
         if self.pointer is not None:
             self.pointer.close(); self.pointer = None
+        if self.keyboard is not None:
+            self.keyboard.close(); self.keyboard = None
 
     def _run(self):
         try:
@@ -5034,11 +5166,36 @@ def grabber_act(g, op, body):
     if op == "move" and Target(g.host).mac:
         g.mac_move(args["x"] / g.scale, args["y"] / g.scale)       # the helper works in screen points
         return
+    if tool in ("press_key", "hotkey", "type_text") and g.host != "local" and g.helpers:
+        mac = Target(g.host).mac
+        line = input_line(tool, args, mac=mac)
+        h = g.helper_ready() if line else None
+        if h is not None:
+            t0 = time.time()
+            try:
+                out = h.send(line) if mac else h.send(line, timeout=5)
+                if mac or (out or "").startswith("ok"):
+                    with g.inp_mu:
+                        if g.inp is not None:
+                            g.inp.count_call(f"helper {tool}", t0, int((time.time() - t0) * 1000))
+                    g.wanted = time.time(); g.kick.set()
+                    return
+                logger.warning("panel: the input helper on %s answered %r; the driver sends it", g.host, out)
+            except Exception as e:
+                logger.warning("panel: the input helper on %s failed (%s); the driver sends it", g.host, e)
+                if mac:
+                    g.pointer = None
+                else:
+                    g.keyboard = None
     with g.inp_mu:
         if g.inp is None:
             g.inp = g.connect()
-            g.inp.summarize = {"move_cursor"}                       # a move is not a step (D2)
+            g.inp.summarize = {"move_cursor", "helper press_key", "helper hotkey", "helper type_text"}   # not steps (D2, D5)
             g.inp_session = f"desktape-panel-input-{os.getpid()}-{int(time.time() * 1000)}"
+            try:      # D5: the agent cursor's glide made each click 0.4-0.9 s and keys after it stall (measured)
+                g.inp.call("set_agent_cursor_enabled", {"enabled": False, "session": g.inp_session}, timeout=10)
+            except Exception as e:
+                logger.warning("panel: agent cursor of the input session on %s left on: %s", g.host, e)
         args = {**args, "scope": "desktop", "session": g.inp_session}
         try:
             try:
@@ -5147,6 +5304,8 @@ class PanelState:
             if took:
                 lk.log("control-takeover", replaced=took.get("label"), replaced_holder=took.get("holder"))
             lk.log("control-start")
+            if getattr(g, "helpers", False):
+                g.helper_ready()                  # panel-live D5: the keyboard helper starts now, not at the first key
             logger.info("panel: control of %s taken%s", g.host, f" over the lease of {took.get('label')}" if took else "")
             if op == "start":
                 return 200, {"on": True}
@@ -5177,6 +5336,8 @@ class PanelState:
             g = self.grabbers.get(name)
             if g is not None and g.pointer is not None:      # panel-live D2: the Mac's pointer helper goes with control
                 g.pointer.close(); g.pointer = None
+            if g is not None and getattr(g, "keyboard", None) is not None:      # D5: and the keyboard helper
+                g.keyboard.close(); g.keyboard = None
             why_not = ctl["lk"].unlock()
             ctl["lk"].log("control-end", why=why, seconds=round(time.time() - ctl["since"], 1))
             logger.info("panel: control of %s given back (%s)%s", ctl["lk"].host, why,
@@ -5633,7 +5794,8 @@ def selftest_booking_panel():
             assert st.control("box", {"op": "move", "x": 480, "y": 270, "w": 960, "h": 540})[0] == 200
             mv = [c[1] for c in calls if c[0] == "move_cursor"][-1]
             assert (mv["x"], mv["y"], mv["scope"], mv["session"]) == (1920, 1080, "desktop", g.inp_session), mv
-            assert g.inp.summarize == {"move_cursor"}, "moves are counted, not logged one by one"
+            assert "move_cursor" in g.inp.summarize, "moves are counted, not logged one by one"
+            assert [c for c in calls if c[0] == "set_agent_cursor_enabled"][-1][1]["enabled"] is False, "no agent cursor"
             renewed = st.controls["box"]["renewed"]
             st.control("box", {"op": "move", "x": 1, "y": 1, "w": 960, "h": 540})
             assert st.controls["box"]["renewed"] == renewed, "a move does not rewrite the lock every time"
@@ -5742,6 +5904,16 @@ def selftest_panel_audit():
         Runner(c, "test").step({"move_cursor": {"x": 1, "y": 1}}); raise AssertionError("a tape must not move the pointer")
     except ValueError as e:
         assert "unknown step 'move_cursor'" in str(e), e
+    # panel-live D5: keys as lines for desktape's own input helpers
+    assert input_line("press_key", {"key": "backspace"}) == "keys 8"
+    assert input_line("hotkey", {"keys": ["ctrl", "shift", "s"]}) == "keys 17,16,83"
+    assert input_line("hotkey", {"keys": ["ctrl", "escape"]}) == "keys 17,27" and input_line("press_key", {"key": "f5"}) == "keys 116"
+    assert input_line("type_text", {"text": "árvíz"}) == "text " + base64.b64encode("árvíz".encode()).decode()
+    assert input_line("press_key", {"key": "delete"}, mac=True) == "key forwarddelete"
+    assert input_line("hotkey", {"keys": ["cmd", "a"]}, mac=True) == "key cmd+a"
+    assert input_line("press_key", {"key": "f5"}, mac=True) is None, "no F keys in the Mac helper: the driver sends it"
+    src = open(WIN_INPUT_SRC, encoding="utf-8").read()
+    assert src.isascii() and "SendInput" in src and "!= token" in src and "IPAddress.Loopback" in src
     # panel-live D3: MJPEG split on the markers; a coded FF is followed by 00, so FFD9 ends a frame
     a, b = b"\xff\xd8\x01\xff\x00\x02\xff\xd9", b"\xff\xd8\x03\xff\xd9"
     frames, rest = split_jpegs(b"junk" + a + b + b"\xff\xd8\x04")

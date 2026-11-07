@@ -10,7 +10,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   desktop session, on its loopback only, relayed over SSH; up to 15 frames a second, about 0.3 s behind), with the
   driver's frames as the fallback; **Follow the pointer** sends the mouse's moves too (hover menus, the Mac's Dock),
   through the driver on Windows and desktape's input helper (`desktape-input serve`) on a Mac; clicks and keys get a
-  driver connection of their own and no longer wait for a frame; typed text goes out after 40 ms. `move_cursor` is on
+  driver connection of their own and no longer wait for a frame; typed text goes out after 40 ms. Keys and text go
+  through desktape's own input helper in the target's desktop session (`windows/desktape-input.cs`, compiled there
+  with the system's .NET Framework compiler; the Mac helper's `serve`): 14–29 ms a key instead of the driver's
+  occasional 2 s, with the driver as the fallback; the driver's agent cursor is off while a person drives. `move_cursor` is on
   the allowlist for the panel's control only.
 - Bookings: `book --for 45m [--at 14:00] [--note …]` books a target for a project for up to 4 hours, up to 7 days
   ahead; `bookings` lists them, `unbook ID` removes one. During another project's booking, `run`, `look`, `act` and
