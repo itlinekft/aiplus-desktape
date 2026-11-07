@@ -64,7 +64,9 @@
   .tile.stale img { opacity: .35; filter: grayscale(1); }
   .tile .ov { position: absolute; left: 0; right: 0; padding: 4px 8px; color: #fff; font-size: 13px;
               display: flex; gap: 8px; align-items: center; text-shadow: 0 1px 2px #000; pointer-events: none; }
-  .tile .top { top: 0; background: linear-gradient(#000a, #0000); }
+  .tile .top { top: 0; background: linear-gradient(#000a, #0000); white-space: nowrap; overflow: hidden; }
+  .tile .top > * { flex: none; }
+  .tile .top .cmd { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #fff; }
   .tile .bottom { bottom: 0; justify-content: flex-end; background: linear-gradient(#0000, #000a); font-size: 12px; }
   .tile .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                color: #ddd; padding: 20px; text-align: center; font-size: 13px; pointer-events: none; }
@@ -163,6 +165,7 @@ const ago = (t, now) => {
   const s = Math.max(0, Math.round(now - t));
   return s < 90 ? `${s} ${T.sec}` : s < 5400 ? `${Math.round(s / 60)} ${T.min}` : `${(s / 3600).toFixed(1)} ${T.h}`;
 };
+const short = (s, n) => { s = String(s ?? "").replace(/\s+/g, " "); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const store = {
   get(k, d) { try { const v = localStorage.getItem("desktape-panel-" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem("desktape-panel-" + k, JSON.stringify(v)); } catch (e) { /* private window */ } }
@@ -328,7 +331,7 @@ function overlays() {
     if (!t) continue;
     tile.el.classList.toggle("ctl", !!(control.on === n));
     tile.el.querySelector(".top").innerHTML = `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
-      (t.lock && t.lock.held && !t.control ? ` <code style="color:#fff">${esc(t.lock.command)}</code>` : "") +
+      (t.lock && t.lock.held && !t.control ? ` <code class="cmd" title="${esc(t.lock.command)}">${esc(short(t.lock.command, 80))}</code>` : "") +
       (solo === n ? ` <span>${!data.control_enabled ? T.viewonly : control.on === n ? T.ctlon : T.ctloff}</span>` : "");
     const old = tile.at && now - tile.at > Math.max(3 / fps, 4);
     tile.el.classList.toggle("stale", !!(tile.at && old));
