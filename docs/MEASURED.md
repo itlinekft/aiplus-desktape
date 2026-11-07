@@ -213,6 +213,7 @@ Desktop's Code tab followed `docs/setup-target.md` with the person. Controller: 
 | `pair NAME --check` | key login ok; no driver daemon yet, so desktape started it in the desktop session (18.8 s); 11 titled windows |
 | `doctor --target NAME` | 5 checked, 0 missing; ffmpeg 9.0.2 found in winget's package folder |
 | `look --target NAME` | the front window (Claude) read: 3 elements |
+| renamed: a second key's line added over SSH, then `unpair` of the first | `unpair` said "removed" but the line stayed: on Windows it cleaned only the user's `authorized_keys`, and this user is an administrator (`ProgramData\\ssh\\administrators_authorized_keys`). Fixed: both files; a test line with the new command: "removed 1, left 0", the other line and its login kept, the file's 3 ACL entries unchanged; a missing line: "removed 0, left 0" |
 | on the target, over SSH | the OpenSSH firewall rule `LocalSubnet` (no VPN address added); `Get-AuthenticodeSignature` of the driver: `Valid` |
 
 Not measured: the target's own report (not brought back), the guide's step 5 (screen awake), reaching it over the

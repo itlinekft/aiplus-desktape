@@ -43,6 +43,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   (`--no-vpn` leaves them out), and no longer puts container bridges (docker, br-, veth …) into `from=`.
 
 ### Fixed
+- `unpair` on Windows now removes the line from `ProgramData\ssh\administrators_authorized_keys` too, where an
+  administrator's key lives; it used to clean only the user's own file and still say "removed", and it now says so
+  when the line was not there.
 - Web pages (Edge, Chrome): `click` on a button outside the visible part of the window scrolls it into view first;
   before, Chromium accepted the element click and nothing happened. A web element that a few scrolls do not bring in
   fails naming where it is.

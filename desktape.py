@@ -4241,10 +4241,14 @@ def accept_pair(line, path=None):
 def remove_line_cmd(os_name, comment):
     """The command that takes the paired line out of the target user's authorized_keys (target-pairing D4)."""
     if os_name == "windows":
-        # a placeholder until the Windows session's measured command (target-pairing task 2.2): last field, exactly
-        ps = ("$c='" + comment + "';$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys';if(Test-Path $f){"
-              "$l=@(Get-Content $f|?{($_ -split ' ')[-1] -ne $c});[IO.File]::WriteAllLines($f,[string[]]$l)};"
-              "'left '+@(Get-Content $f -EA 0|?{($_ -split ' ')[-1] -eq $c}).Count")
+        # last field, exactly; both files sshd reads: an administrator's line is in ProgramData (measured
+        # 2026-11-07: only the user's file was cleaned and unpair said "removed"). A file is rewritten only when a
+        # line goes, in place, so the ProgramData file keeps the ACL sshd insists on.
+        ps = ("$c='" + comment + "';$n=0;$r=0;foreach($f in @((Join-Path $env:USERPROFILE '.ssh\\authorized_keys'),"
+              "(Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'))){if(Test-Path $f){"
+              "$a=@(Get-Content $f -EA 0);$l=@($a|?{($_ -split ' ')[-1] -ne $c});"
+              "if($l.Count -ne $a.Count){[IO.File]::WriteAllLines($f,[string[]]$l);$r+=$a.Count-$l.Count};"
+              "$n+=@(Get-Content $f -EA 0|?{($_ -split ' ')[-1] -eq $c}).Count}};'removed '+$r+', left '+$n")
         return f"powershell -NoProfile -EncodedCommand {base64.b64encode(ps.encode('utf-16-le')).decode()}"
     import shlex
     c = shlex.quote(comment)            # the line's LAST field, exactly: not a prefix of another comment
@@ -4267,7 +4271,10 @@ def cmd_unpair(a):
                             remove_line_cmd(t.get("os") or "windows", comment)], capture_output=True, text=True, errors="replace")
         left = re.search(r"left (\d+)", r.stdout)
         remote_ok = r.returncode == 0 and left and left.group(1) == "0"
-        if remote_ok:
+        gone = re.search(r"removed (\d+)", r.stdout)
+        if remote_ok and gone and gone.group(1) == "0":
+            print(f"the line '… {comment}' was not on {a.name} (already removed?)")
+        elif remote_ok:
             print(f"removed the line '… {comment}' from {a.name}")
         else:
             print(f"could NOT remove it on {a.name} ({(r.stderr or r.stdout).strip()[-200:] or r.returncode}).\n"
@@ -5614,6 +5621,8 @@ def selftest_pairing():
                                  text=True, env={**os.environ, "HOME": d}).stdout
             assert "left 0" in out and open(ak).read() == "ssh-ed25519 AAA1 me@laptop\nssh-ed25519 AAA3 desktape-pair-box1@mini-other\n", (out, open(ak).read())
     assert "EncodedCommand" in remove_line_cmd("windows", "desktape-pair-box1@mini")
+    wps = base64.b64decode(remove_line_cmd("windows", "desktape-pair-box1@mini").split()[-1]).decode("utf-16-le")
+    assert "administrators_authorized_keys" in wps and ".ssh\\authorized_keys" in wps and "removed " in wps, wps
     # target-setup-guide D3: pairing before the address is known, then with it; the same key and line
     import io
     with tempfile.TemporaryDirectory() as d:
