@@ -11,6 +11,8 @@
   desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py targets                             the named targets, with lock and status
+  desktape.py book --for 45m [--at 14:00] [--note T]  book the target for this project; bookings; unbook ID
+  desktape.py panel [--port 8645]                 a local web page: every target's lock, bookings and live screen
   desktape.py doctor [--local] [--video]          what this machine still needs, with the command for each
   desktape.py --selftest                          offline checks, no host needed
 
@@ -20,7 +22,8 @@ targets.example.yaml).
 Test mode runs as fast as the UI allows. Video mode records the screen (Cua start_recording), pauses
 between steps, and burns the tape's captions into the video afterwards.
 Every tool call is appended to runs/<stamp>/audit.jsonl. Only tools on ALLOWED can be called.
-One session drives a target at a time: run, look and act wait for, or stop on, another session's lock.
+One session drives a target at a time: run, look and act wait for, or stop on, another session's lock, and
+another project's booking.
 Every driver call has a deadline, and a click or typed text must show an effect; three failed steps in a
 row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a blocked or stuck session.
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
@@ -39,7 +42,8 @@ ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_
            "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state",
            "set_window_frame",   # geometry only, for a tape's `window:` (runner-robustness D2)
            "set_value",          # a field's value, like typing, where a control hides its items (data-driven-import D1)
-           "set_agent_cursor_enabled"}   # only to hide the agent cursor for a `cursor: person` video (person-cursor D1)
+           "set_agent_cursor_enabled",   # only to hide the agent cursor for a `cursor: person` video (person-cursor D1)
+           "get_desktop_state"}   # read-only whole-screen PNG, for the panel's live screens (booking-and-panel D6)
 DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
@@ -317,7 +321,7 @@ class Cua:
     """One MCP session to cua-driver: `ssh … cua-driver mcp --socket`, or the driver itself when local.
     A target with no daemon gets one started, once (driver-autostart)."""
 
-    def __init__(self, host, audit_path):
+    def __init__(self, host, audit_path, autostart=True):
         self.audit = open(audit_path, "a", encoding="utf-8")
         self.host, self.on_blocked = host, None     # on_blocked(tool, args, waited): the status hook (D5)
         t = Target(host)
@@ -327,6 +331,8 @@ class Cua:
         except RuntimeError as e:
             refused = PIPE_REFUSED in str(e) and not t.mac and not t.local
             if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e) and not refused:
+                raise
+            if not autostart:      # booking-and-panel D6: a watcher never changes the target
                 raise
             if refused:      # a daemon started by hand, unelevated: it refuses the elevated SSH client (RL_SSH)
                 logger.warning("the driver daemon on %s refuses this SSH session (os error 233: started unelevated?); "
@@ -456,6 +462,11 @@ class Cua:
 
 LEASE = 180.0         # seconds a holder keeps the target after its command ends (box-lock D2)
 LOCK_WAIT = 60.0      # seconds a second session waits before it stops (box-lock D3)
+BOOK_MAX = 4 * 3600.0         # booking-and-panel D3: the longest booking
+BOOK_AHEAD = 7 * 86400.0      # how far ahead a booking may start
+BOOK_WARN = 15 * 60.0         # D2 rule 5: a command this close to another project's booking is warned
+ACTIVITY_MAX = 1 << 20        # D4: activity.jsonl is cut to its last ACTIVITY_KEEP lines past this size
+ACTIVITY_KEEP = 2000
 
 
 class TargetBusy(RuntimeError):
@@ -497,6 +508,60 @@ def describe_lock(cur):
     return f"{cur.get('label') or cur.get('holder')} ({cur.get('command')}, since {hm(cur.get('since'))}, {state})"
 
 
+def when(t, now=None):
+    """`14:00`, or `2026-11-08 14:00` when not today."""
+    now = now or time.time()
+    same = time.strftime("%Y-%m-%d", time.localtime(t)) == time.strftime("%Y-%m-%d", time.localtime(now))
+    return time.strftime("%H:%M" if same else "%Y-%m-%d %H:%M", time.localtime(t))
+
+
+def describe_booking(b, now=None):
+    """`some-project, 14:00–14:45 (end-to-end suite; booking a3f9c1)`."""
+    note = f"{b['note']}; " if b.get("note") else ""
+    return f"{b.get('label')}, {when(b['from'], now)}–{when(b['until'], now)} ({note}booking {b.get('id')})"
+
+
+def describe_block(x, now=None):
+    """What keeps a session out: another session's lock, or another project's booking (booking-and-panel D2)."""
+    if x.get("booking"):
+        b = x["booking"]
+        note = f"{b['note']}; " if b.get("note") else ""
+        return f"booked by {b.get('label')} until {when(b['until'], now)} ({note}booking {b.get('id')})"
+    return f"held by {describe_lock(x)}"
+
+
+def parse_duration(text):
+    """`45m`, `2h`, `1h30m`, `90s` or a bare number of minutes, in seconds (booking-and-panel D3)."""
+    s = str(text).strip().lower().replace(" ", "")
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        return float(s) * 60
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m(?:in)?)?(?:(\d+)s)?", s)
+    if not s or not m or not any(m.groups()):
+        raise ValueError(f"not a duration: {text!r} (examples: 45m, 2h, 1h30m)")
+    h, mi, se = (int(g or 0) for g in m.groups())
+    return float(h * 3600 + mi * 60 + se)
+
+
+def parse_at(text, now=None):
+    """`now`, `+30m`, `HH:MM` (today) or `YYYY-MM-DD HH:MM`, local time, as an epoch (booking-and-panel D3)."""
+    now = now or time.time()
+    s = (text or "now").strip()
+    if s.lower() == "now":
+        return now
+    if s.startswith("+"):
+        return now + parse_duration(s[1:])
+    for fmt in ("%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+        try:
+            t = time.strptime(s, fmt)
+        except ValueError:
+            continue
+        if fmt == "%H:%M":
+            day = time.localtime(now)
+            t = time.struct_time((day.tm_year, day.tm_mon, day.tm_mday, t.tm_hour, t.tm_min, 0, 0, 0, -1))
+        return time.mktime(t)
+    raise ValueError(f"not a start time: {text!r} (examples: now, +30m, 14:00, 2026-11-08 14:00)")
+
+
 class BoxLock:
     """The lock file of one target on this controller (box-lock D1). The holder is the agent's session
     (D2): DESKTAPE_HOLDER, else CLAUDE_CODE_SESSION_ID, else this process, which then keeps no lease."""
@@ -505,6 +570,8 @@ class BoxLock:
         self.dir, self.host, self.alive, self.now = directory or lock_dir(), host, alive, now
         self.path = os.path.join(self.dir, re.sub(r"[^\w.@-]+", "_", host) + ".json")
         self.mutex = self.path[:-len(".json")] + ".mutex"
+        self.bookings_path = self.path[:-len(".json")] + ".bookings.json"     # booking-and-panel D1
+        self.activity_path = os.path.join(self.dir, "activity.jsonl")         # D4
         h = os.environ.get("DESKTAPE_HOLDER") or os.environ.get("CLAUDE_CODE_SESSION_ID")
         self.holder, self.keeps = (h, True) if h else (f"pid{os.getpid()}", False)
         self.label = os.environ.get("DESKTAPE_LABEL") or os.path.basename(os.getcwd())
@@ -555,16 +622,37 @@ class BoxLock:
             return cur
         return None
 
+    def blocker(self, cur, bookings):
+        """What keeps this session out (booking-and-panel D2), or None: 1. another session's running command;
+        2. another project's active booking; 3. another session's lease, unless this project's own booking beats a
+        lease of another project; 4. otherwise the target is free (or ours)."""
+        if not cur or cur.get("holder") == self.holder:
+            cur = None
+        if cur and self.alive(cur.get("pid")):
+            return cur
+        now = self.now()
+        active = [b for b in bookings if b["from"] <= now < b["until"]]
+        theirs = next((b for b in active if b.get("label") != self.label), None)
+        if theirs:
+            return {"booking": theirs}
+        if cur and (cur.get("until") or 0) > now:
+            if any(b.get("label") == self.label for b in active) and cur.get("label") != self.label:
+                logger.info("%s: this project's booking beats the lease of %s", self.host, describe_lock(cur))
+                return None
+            return cur
+        return None
+
     def try_acquire(self, command):
         def take():
             cur = self.read()
-            other = self.held_by(cur)
+            other = self.blocker(cur, self.read_bookings())
             if other:
                 return other
             mine = cur and cur.get("holder") == self.holder
             if cur and not mine:
-                logger.info("taking %s over from %s: its process is gone and its lease is over",
-                            self.host, describe_lock(cur))
+                logger.info("taking %s over from %s: its process is gone and its lease is %s",
+                            self.host, describe_lock(cur), "over" if (cur.get("until") or 0) <= self.now()
+                            else "beaten by this project's booking")
             t = self.now()
             new = {"holder": self.holder, "label": self.label, "pid": os.getpid(), "command": command,
                    "since": cur["since"] if mine else t, "until": t + (LEASE if self.keeps else 0)}
@@ -580,13 +668,117 @@ class BoxLock:
             other = self.try_acquire(command)
             if not other:
                 logger.debug("lock on %s taken by %s (pid %s) for %r", self.host, self.label, os.getpid(), command)
+                self.warn_next_booking()
                 return
             if time.time() >= end:
-                raise TargetBusy(f"{self.host} is held by {describe_lock(other)}; try again later")
+                raise TargetBusy(f"{self.host} is {describe_block(other)}; try again later")
             if not told:
-                logger.info("%s is held by %s; waiting up to %d s", self.host, describe_lock(other), wait)
+                logger.info("%s is %s; waiting up to %d s", self.host, describe_block(other), wait)
                 told = True
             time.sleep(2.0)
+
+    def warn_next_booking(self):
+        """D2 rule 5: another project's booking starts soon; the command runs, but is told."""
+        now = self.now()
+        soon = [b for b in self.read_bookings() if b.get("label") != self.label and now < b["from"] <= now + BOOK_WARN]
+        if soon:
+            b = min(soon, key=lambda b: b["from"])
+            logger.warning("%s is booked by %s from %s (in %d min): finish before then", self.host, b.get("label"),
+                           when(b["from"], now), round((b["from"] - now) / 60))
+
+    # ---- bookings (booking-and-panel D1, D3) ----
+
+    def read_bookings(self):
+        """The bookings that have not ended, earliest first."""
+        try:
+            items = json.load(open(self.bookings_path, encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except ValueError:
+            logger.warning("unreadable bookings file %s: treating %s as unbooked", self.bookings_path, self.host)
+            return []
+        now = self.now()
+        return sorted((b for b in items if isinstance(b, dict) and (b.get("until") or 0) > now),
+                      key=lambda b: b["from"])
+
+    def _write_bookings(self, items):
+        if items:
+            json.dump(sorted(items, key=lambda b: b["from"]), open(self.bookings_path, "w", encoding="utf-8"),
+                      ensure_ascii=False)
+        elif os.path.exists(self.bookings_path):
+            os.remove(self.bookings_path)
+
+    def book(self, start, length, note=None):
+        """Book [start, start+length) for this project. Returns (booking, None) or (None, why not)."""
+        now = self.now()
+        if length <= 0:
+            return None, "the booking needs a length (--for 45m)"
+        if length > BOOK_MAX:
+            return None, f"a booking is at most {BOOK_MAX / 3600:.0f} h"
+        if start < now - 60:
+            return None, f"the start {when(start, now)} is in the past"
+        if start > now + BOOK_AHEAD:
+            return None, f"a booking starts at most {BOOK_AHEAD / 86400:.0f} days ahead"
+        start, end = max(start, now), start + length
+
+        def put():
+            items = self.read_bookings()
+            for b in items:
+                if b.get("label") != self.label and b["from"] < end and start < b["until"]:
+                    return None, f"overlaps the booking of {describe_booking(b, now)}"
+            own = [b for b in items if b.get("label") == self.label and b["from"] <= end and start <= b["until"]]
+            lo, hi = min([start] + [b["from"] for b in own]), max([end] + [b["until"] for b in own])
+            if hi - lo > BOOK_MAX:
+                return None, (f"with this project's booking {describe_booking(own[0], now)} it would last "
+                              f"{(hi - lo) / 3600:.1f} h; a booking is at most {BOOK_MAX / 3600:.0f} h")
+            new = {"id": own[0]["id"] if own else "%06x" % random.getrandbits(24), "label": self.label,
+                   "holder": self.holder, "from": lo, "until": hi,
+                   "note": note or next((b.get("note") for b in own if b.get("note")), None), "created": now}
+            self._write_bookings([b for b in items if b not in own] + [new])
+            logger.info("%s booked by %s: %s%s", self.host, self.label, describe_booking(new, now),
+                        " (extended)" if own else "")
+            return new, None
+        made, why = self._under_mutex(put)
+        if made:
+            self.log("book", id=made["id"], at=made["from"], until=made["until"], note=made.get("note"))
+        return made, why
+
+    def unbook(self, booking_id, force=False):
+        """Remove a booking of this project, or any with force. Returns None when done, else why not."""
+        def drop():
+            items = self.read_bookings()
+            b = next((b for b in items if b.get("id") == booking_id), None)
+            if not b:
+                return f"no booking {booking_id} on {self.host}", None
+            if b.get("label") != self.label and not force:
+                return (f"booking {booking_id} belongs to {b.get('label')}; only that project removes it "
+                        "(a person clearing a stale one: --force)"), None
+            if b.get("label") != self.label:
+                logger.warning("%s: booking of %s removed by %s with --force", self.host, describe_booking(b), self.label)
+            self._write_bookings([x for x in items if x is not b])
+            return None, b
+        why, gone = self._under_mutex(drop)
+        if gone:
+            self.log("unbook", id=booking_id, owner=gone.get("label"), force=bool(force and gone.get("label") != self.label))
+        return why
+
+    # ---- the activity log (booking-and-panel D4) ----
+
+    def log(self, event, **fields):
+        line = json.dumps({"at": round(self.now(), 3), "event": event, "target": self.host, "label": self.label,
+                           "holder": self.holder, **fields}, ensure_ascii=False) + "\n"
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            with open(self.activity_path, "a", encoding="utf-8") as f:
+                f.write(line)
+            if os.path.getsize(self.activity_path) > ACTIVITY_MAX:
+                keep = open(self.activity_path, encoding="utf-8").readlines()[-ACTIVITY_KEEP:]
+                tmp = self.activity_path + ".tmp"
+                open(tmp, "w", encoding="utf-8").writelines(keep)
+                os.replace(tmp, self.activity_path)
+                logger.info("activity log %s cut to its last %d lines", self.activity_path, len(keep))
+        except OSError as e:
+            logger.warning("activity line not written to %s: %s", self.activity_path, e)
 
     def release(self):
         """End of a command: an agent session keeps a lease for its next step; a bare process lets go."""
@@ -690,10 +882,17 @@ def passed(lk, step):
 def box_lock(host, command):
     lk = BoxLock(host)
     lk.acquire(command)
+    t0, err = time.time(), None
     try:
         yield lk
+    except BaseException as e:
+        err = type(e).__name__
+        raise
     finally:
+        state = (lk.read() or {}).get("state")
         lk.release()
+        lk.log("end", command=command, start=round(t0, 3), seconds=round(time.time() - t0, 1), state=state,
+               error=err)          # booking-and-panel D4
 
 
 # ---- the app map (design D3) -------------------------------------------------------------------
@@ -4035,11 +4234,57 @@ def cmd_tidy(a):
 
 def cmd_lock(a):
     lk = BoxLock(a.host)
-    cur = lk.read()
-    other = lk.held_by(cur)
-    print(f"{a.host}: " + ("held by " + describe_lock(other) if other else
+    cur, bookings = lk.read(), lk.read_bookings()
+    other = lk.blocker(cur, bookings)
+    print(f"{a.host}: " + (describe_block(other) if other else
                            ("held by this session, " + describe_lock(cur) if cur and cur.get("holder") == lk.holder
                             else "free")))
+    for b in bookings:
+        print(f"  booking: {describe_booking(b)}")
+    return 0
+
+
+def cmd_book(a):
+    """booking-and-panel D3: book the target for this project."""
+    lk = BoxLock(a.host)
+    made, why = lk.book(parse_at(a.at), parse_duration(a.length), a.note)
+    if why:
+        print(f"desktape: {a.host}: not booked: {why}", file=sys.stderr)
+        return 1
+    print(f"{a.host}: booked for {lk.label}: {describe_booking(made)}")
+    other = lk.held_by(lk.read())
+    if other:
+        print(f"  note: {a.host} is {describe_block(other)} now; a running command finishes first")
+    return 0
+
+
+def cmd_unbook(a):
+    why = BoxLock(a.host).unbook(a.id, force=a.force)
+    print(f"{a.host}: " + (why or f"booking {a.id} removed"), file=sys.stderr if why else sys.stdout)
+    return 1 if why else 0
+
+
+def known_hosts(cfg):
+    """[(name, host, profile)] of the targets file, plus hosts that only have lock or booking files."""
+    rows, seen = [], set()
+    for name, t in sorted(cfg["targets"].items()):
+        rows.append((name, ssh_host(t), t)); seen.add(re.sub(r"[^\w.@-]+", "_", ssh_host(t)))
+    for f in sorted(glob.glob(os.path.join(lock_dir(), "*.json"))):
+        stem = os.path.basename(f)[:-len(".json")]
+        stem = stem[:-len(".bookings")] if stem.endswith(".bookings") else stem
+        if stem not in seen:
+            rows.append((stem, stem, {})); seen.add(stem)
+    return rows
+
+
+def cmd_bookings(a):
+    """Every target's bookings (booking-and-panel D3)."""
+    n = 0
+    for name, host, _ in known_hosts(load_targets()):
+        for b in BoxLock(host).read_bookings():
+            print(f"{name} [{host}]: {describe_booking(b)}"); n += 1
+    if not n:
+        print("no bookings")
     return 0
 
 
@@ -4192,7 +4437,10 @@ def cmd_targets(a):
         print(f"{mark} {name}{default}: {t.get('label') or ''} [{host}]".replace(":  [", ": ["))
         if t.get("note"):
             print(f"    note: {t['note']}")
-        print("    " + status_line(host, BoxLock(host).read()))
+        lk = BoxLock(host)
+        print("    " + status_line(host, lk.read()))
+        for b in lk.read_bookings():
+            print(f"    booking: {describe_booking(b)}")
     return 0
 
 
@@ -4202,7 +4450,496 @@ def cmd_unlock(a):
     return 0 if why in (None, "not held") else 1
 
 
+# ---- the panel (booking-and-panel D5, D6) -------------------------------------------------------
+
+PANEL_PORT = 8645
+PANEL_HTML = os.path.join(HERE, "panel", "panel.html")
+FRAME_IDLE = 10.0             # D6: a grabber stops this long after the last frame request
+FRAME_RETRY = 5.0             # and waits this long after a failed frame
+FPS_RANGE, SIZE_RANGE = (0.2, 5.0), (320, 1920)
+REACH_EVERY = 30.0            # D5: how often the SSH endpoints are probed
+PANEL_AUDIT_DAYS = 7
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def ssh_endpoint(host):
+    """(hostname, port) that ssh connects to for this destination (`ssh -G`, so ~/.ssh/config aliases count);
+    None for `local` or a destination behind a proxy, where a TCP probe says nothing."""
+    if host == "local":
+        return None
+    try:
+        r = subprocess.run(["ssh", "-G", *SSH_OPTS.get(host, []), host], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("ssh -G %s failed (%s); probing the name as written", host, e)
+        return host.split("@")[-1], 22
+    kv = dict(l.split(" ", 1) for l in r.stdout.splitlines() if " " in l)
+    if kv.get("proxyjump", "none") != "none" or kv.get("proxycommand", "none") != "none":
+        return None
+    return kv.get("hostname") or host.split("@")[-1], int(kv.get("port") or 22)
+
+
+def probe(host, timeout=2.0):
+    """{"ok": bool or None, "checked": t, "detail": …}: does the target's SSH port accept a connection?"""
+    import socket
+    ep = ssh_endpoint(host)
+    if not ep:
+        return {"ok": None, "checked": time.time(), "detail": "local" if host == "local" else "behind a proxy"}
+    t0 = time.time()
+    try:
+        try:
+            socket.getaddrinfo(ep[0], ep[1])
+        except socket.gaierror:
+            # a Python with its own libc (Homebrew on Linux) lacks the system's mDNS module: ask the system resolver
+            r = subprocess.run(["getent", "ahostsv4", ep[0]], capture_output=True, text=True, timeout=5) \
+                if shutil.which("getent") else None
+            if not (r and r.stdout.split()):
+                raise
+            logger.debug("%s resolved by getent: %s", ep[0], r.stdout.split()[0])
+            ep = (r.stdout.split()[0], ep[1])
+        socket.create_connection(ep, timeout=timeout).close()
+        return {"ok": True, "checked": t0, "detail": f"ssh answered in {int((time.time() - t0) * 1000)} ms"}
+    except OSError as e:
+        return {"ok": False, "checked": t0, "detail": f"ssh: {e.strerror or e}"}
+
+
+def read_activity(directory=None, last=400):
+    path = os.path.join(directory or lock_dir(), "activity.jsonl")
+    try:
+        lines = open(path, encoding="utf-8").readlines()[-last:]
+    except FileNotFoundError:
+        return []
+    out = []
+    for l in lines:
+        try:
+            out.append(json.loads(l))
+        except ValueError:
+            logger.warning("skipping a broken line in %s", path)
+    return out
+
+
+def close_quietly(cua, host):
+    """Close a driver connection and reap its ssh process, so an idle panel leaves no zombie behind."""
+    try:
+        cua.close()
+        if getattr(cua, "p", None) is not None:
+            cua.p.wait(timeout=5)
+    except Exception as e:
+        logger.warning("panel: closing the driver connection to %s: %s", host, e)
+
+
+class FrameGrabber:
+    """One target's live screen (D6): the newest frame in memory, pulled with `get_desktop_state` under the
+    panel's own session label, only while someone asks for frames; no lock, no daemon start."""
+
+    def __init__(self, host, audit_dir, connect=None):
+        self.host, self.audit_dir = host, audit_dir
+        self.connect = connect or (lambda: Cua(host, self.audit_path(), autostart=False))
+        self.frame, self.at, self.error, self.ms = None, 0.0, None, None
+        self.fps, self.size, self.wanted, self.thread = 1.0, 960, 0.0, None
+        self.session = None
+        self.mu = threading.Lock()
+
+    def audit_path(self):
+        os.makedirs(self.audit_dir, exist_ok=True)
+        return os.path.join(self.audit_dir, f"audit-{time.strftime('%Y-%m-%d')}.jsonl")
+
+    def want(self, fps=1.0, size=960):
+        with self.mu:
+            self.fps = min(max(float(fps), FPS_RANGE[0]), FPS_RANGE[1])
+            self.size = int(min(max(int(size), SIZE_RANGE[0]), SIZE_RANGE[1]))
+            self.wanted = time.time()
+            if not (self.thread and self.thread.is_alive()):
+                self.thread = threading.Thread(target=self._run, daemon=True, name=f"frames-{self.host}")
+                self.thread.start()
+                logger.info("panel: live screen of %s started (%.1f fps, %d px)", self.host, self.fps, self.size)
+
+    def info(self):
+        return {"at": self.at or None, "error": self.error, "ms": self.ms, "fps": self.fps, "size": self.size,
+                "active": bool(self.thread and self.thread.is_alive())}
+
+    def _run(self):
+        cua = None
+        try:
+            while time.time() - self.wanted < FRAME_IDLE:
+                t0 = time.time()
+                try:
+                    if cua is None:
+                        cua = self.connect()
+                        # the driver ends a session with its connection and refuses its label after that (measured
+                        # 2026-11-07: "session has ended … use a new session label"): one label per connection
+                        self.session = f"desktape-panel-{os.getpid()}-{int(time.time() * 1000)}"
+                    cua.call("get_desktop_state", {"max_image_dimension": self.size, "session": self.session},
+                             timeout=10)
+                    img = next((c for c in cua.last.get("content", []) if c.get("type") == "image"), None)
+                    if not img:
+                        raise RuntimeError("the driver returned no screen image")
+                    self.frame, self.at, self.error = base64.b64decode(img["data"]), time.time(), None
+                    self.ms = int((time.time() - t0) * 1000)
+                except Exception as e:          # any failure shows on the tile; the grabber retries
+                    self.error = str(e)[:300]
+                    logger.warning("panel: no frame from %s: %s", self.host, self.error)
+                    if cua is not None:
+                        close_quietly(cua, self.host)
+                        cua = None
+                    time.sleep(FRAME_RETRY)
+                    continue
+                time.sleep(max(0.0, 1.0 / self.fps - (time.time() - t0)))
+        finally:
+            if cua is not None:
+                close_quietly(cua, self.host)
+            logger.info("panel: live screen of %s stopped (nobody watching for %.0f s)", self.host, FRAME_IDLE)
+
+
+def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, alive=pid_alive):
+    """/api/status (D5): every target's profile, lock, bookings, recent activity, SSH probe and frame state."""
+    now = now or time.time()
+    acts = read_activity(directory)
+    out = []
+    for name, host, t in rows:
+        lk = BoxLock(host, directory, alive=alive, now=lambda: now)
+        cur, lock = lk.read(), None
+        if cur:
+            running = alive(cur.get("pid"))
+            lock = {k: cur.get(k) for k in ("label", "command", "since", "until", "state", "step", "strikes", "error",
+                                             "last_ok_at", "updated", "stuck")}
+            lock.update(running=running, held=running or (cur.get("until") or 0) > now,
+                        pid=cur.get("pid") if running else None)
+        bookings = [{k: b.get(k) for k in ("id", "label", "from", "until", "note")} for b in lk.read_bookings()]
+        out.append({"name": name, "host": host, "label": t.get("label"), "note": t.get("note"),
+                    "os": t.get("os") or TARGET_OS.get(host), "lock": lock, "bookings": bookings,
+                    "booked_now": next((b for b in bookings if b["from"] <= now < b["until"]), None),
+                    "activity": [x for x in acts if x.get("target") == host][-10:][::-1],
+                    "reach": (reach or {}).get(host),
+                    "frame": grabbers[name].info() if grabbers and name in grabbers else None})
+    return {"now": now, "targets": out}
+
+
+def host_allowed(header, allowed):
+    """D5: refuse a Host header that names another host (DNS rebinding); `allowed` None accepts any."""
+    if allowed is None:
+        return True
+    h = (header or "").strip().lower()
+    h = h[1:h.index("]")] if h.startswith("[") and "]" in h else h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+    return h in allowed
+
+
+class PanelState:
+    def __init__(self, bind):
+        self.allowed = LOOPBACK if bind in LOOPBACK else None
+        self.audit_dir = os.path.join(os.path.dirname(lock_dir()), "panel")
+        self.grabbers, self.reach, self._rows = {}, {}, []
+        self.mu, self.stopping = threading.Lock(), threading.Event()
+        cutoff = time.time() - PANEL_AUDIT_DAYS * 86400
+        for f in glob.glob(os.path.join(self.audit_dir, "audit-*.jsonl")):
+            if os.path.getmtime(f) < cutoff:
+                os.remove(f); logger.info("panel: removed the old frame audit %s", f)
+        threading.Thread(target=self._probe_loop, daemon=True, name="reach").start()
+
+    def rows(self):
+        try:
+            cfg = load_targets()
+            for name in cfg["targets"]:
+                choose_target(None, name, {}, cfg)        # the profile's SSH key and declared OS
+            self._rows = known_hosts(cfg)
+        except ValueError as e:
+            logger.warning("panel: targets file not read (%s); showing the last good list", e)
+        return self._rows
+
+    def grabber(self, name):
+        with self.mu:
+            if name not in self.grabbers:
+                host = next((h for n, h, _ in self._rows or self.rows() if n == name), None)
+                if not host:
+                    return None
+                self.grabbers[name] = FrameGrabber(host, self.audit_dir)
+            return self.grabbers[name]
+
+    def _probe_loop(self):
+        while not self.stopping.is_set():
+            hosts = {h for _, h, _ in self.rows()}
+            threads = [threading.Thread(target=lambda h=h: self.reach.__setitem__(h, probe(h)), daemon=True)
+                       for h in hosts]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join(10)
+            self.stopping.wait(REACH_EVERY)
+
+
+def panel_handler(state):
+    from http.server import BaseHTTPRequestHandler
+    from urllib.parse import urlsplit, parse_qs, unquote
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            logger.debug("panel: " + fmt, *args)
+
+        def send(self, code, body, ctype, **headers):
+            self.send_response(code)
+            for k, v in {"Content-Type": ctype, "Content-Length": str(len(body)), "Cache-Control": "no-store",
+                         "X-Content-Type-Options": "nosniff", **headers}.items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if not host_allowed(self.headers.get("Host"), state.allowed):
+                logger.warning("panel: refused a request for host %r", self.headers.get("Host"))
+                return self.send(403, b"forbidden host\n", "text/plain")
+            u, q = urlsplit(self.path), parse_qs(urlsplit(self.path).query)
+            if u.path in ("/", "/index.html"):
+                return self.send(200, open(PANEL_HTML, "rb").read(), "text/html; charset=utf-8")
+            if u.path == "/api/status":
+                body = panel_status(state.rows(), state.grabbers, state.reach)
+                return self.send(200, json.dumps(body, ensure_ascii=False).encode("utf-8"), "application/json")
+            m = re.fullmatch(r"/frame/([^/]+)", u.path)
+            if m:
+                g = state.grabber(unquote(m.group(1)))
+                if not g:
+                    return self.send(404, b"no such target\n", "text/plain")
+                try:
+                    g.want(float(q.get("fps", ["1"])[0]), int(float(q.get("size", ["960"])[0])))
+                except ValueError:
+                    return self.send(400, b"fps and size are numbers\n", "text/plain")
+                info = {"X-Frame-At": str(g.at or 0), "X-Frame-Error": (g.error or "").encode("ascii", "replace").decode()[:200]}
+                if not g.frame:
+                    return self.send(503, (g.error or "no frame yet").encode("utf-8"), "text/plain; charset=utf-8", **info)
+                return self.send(200, g.frame, "image/png", **info)
+            return self.send(404, b"not found\n", "text/plain")
+
+    return Handler
+
+
+def cmd_panel(a):
+    """booking-and-panel D5: serve the panel until Ctrl+C or SIGTERM."""
+    from http.server import ThreadingHTTPServer
+    import signal
+    state = PanelState(a.bind)
+    state.rows()
+    try:
+        srv = ThreadingHTTPServer((a.bind, a.port), panel_handler(state))
+    except OSError as e:
+        state.stopping.set()
+        print(f"desktape: panel: cannot listen on {a.bind}:{a.port} ({e.strerror or e}); pass another --port",
+              file=sys.stderr)
+        return 1
+    srv.daemon_threads = True
+    if state.allowed is None:
+        logger.warning("panel: listening on %s, not only this machine: anyone who reaches it sees every screen", a.bind)
+    shown = "127.0.0.1" if a.bind in LOOPBACK else a.bind
+    print(f"desktape panel: http://{shown}:{a.port}/  (live screens: http://{shown}:{a.port}/#cctv; Ctrl+C stops it)",
+          flush=True)
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("panel: stopping")
+    finally:
+        state.stopping.set()
+        srv.server_close()
+    return 0
+
+
 # ---- offline selftest --------------------------------------------------------------------------
+
+def selftest_booking_panel():
+    """booking-and-panel: bookings and their limits, the lock's booking rules, the activity log, the panel."""
+    level = logger.level
+    logger.setLevel(logging.CRITICAL)
+    keys = ("DESKTAPE_HOLDER", "CLAUDE_CODE_SESSION_ID", "DESKTAPE_LABEL", "XDG_STATE_HOME", "DESKTAPE_TARGETS")
+    env = {k: os.environ.pop(k, None) for k in keys}
+    global FRAME_IDLE, FRAME_RETRY
+    idle0, retry0 = FRAME_IDLE, FRAME_RETRY
+    try:
+        assert parse_duration("45m") == 2700 and parse_duration("2h") == 7200 and parse_duration("1h30m") == 5400
+        assert parse_duration("90") == 5400 and parse_duration("30s") == 30
+        for bad in ("", "abc", "h"):
+            try:
+                parse_duration(bad); raise AssertionError(f"expected ValueError for {bad!r}")
+            except ValueError:
+                pass
+        base = time.mktime((2026, 11, 7, 10, 0, 0, 0, 0, -1))
+        assert parse_at("now", base) == base and parse_at("+30m", base) == base + 1800
+        assert parse_at("14:00", base) == base + 4 * 3600
+        assert parse_at("2026-11-08 09:30", base) == base + 23.5 * 3600
+        with tempfile.TemporaryDirectory() as d:
+            clock, live = [base], set()
+
+            def as_(holder, label):
+                os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = holder, label
+                return BoxLock("user@box", d, alive=lambda p: p in live, now=lambda: clock[0])
+            p1, p2, q = as_("P1", "proj-p"), as_("P2", "proj-p"), as_("Q", "proj-q")
+            # D3: limits, overlap, own extension, unbook
+            assert "at most 4 h" in p1.book(base, 5 * 3600)[1]
+            assert "in the past" in p1.book(base - 3600, 600)[1]
+            assert "days ahead" in p1.book(base + 8 * 86400, 600)[1]
+            b, why = p1.book(base + 3600, 2700, "suite")                       # 11:00–11:45
+            assert why is None and b["label"] == "proj-p" and len(b["id"]) == 6, why
+            assert "overlaps the booking of proj-p" in q.book(base + 3600 + 600, 1800)[1]
+            assert q.book(base + 2 * 3600, 1800)[1] is None                    # 12:00–12:30, after it: fine
+            b2, why = p2.book(base + 3600 + 2700, 900)                         # touches P's own: extended to 12:00
+            assert why is None and b2["id"] == b["id"] and b2["until"] == base + 2 * 3600 and b2["note"] == "suite"
+            assert len(p1.read_bookings()) == 2
+            qid = next(x["id"] for x in q.read_bookings() if x["label"] == "proj-q")
+            assert "belongs to proj-q" in p1.unbook(qid) and p1.unbook("nope").startswith("no booking")
+            assert p1.unbook(qid, force=True) is None and len(p1.read_bookings()) == 1
+            assert "with this project's booking" in p1.book(base + 5400, 4 * 3600)[1]   # 11:30–15:30 joins 11:00: 4.5 h
+            # D2: the lock and the bookings
+            clock[0] = base + 3600 + 60                                       # inside P's booking
+            other = q.try_acquire("look")
+            assert other and other.get("booking", {}).get("label") == "proj-p", other
+            assert "booked by proj-p until" in describe_block(other) and "suite" in describe_block(other)
+            assert p1.try_acquire("look") is None                             # the booking project gets it
+            p1.release()
+            assert p2.try_acquire("act x")["holder"] == "P1"                  # its own project's lease still counts
+            clock[0] += LEASE + 1
+            assert p2.try_acquire("act x") is None; p2.release(); p2.unlock()
+            # rule 1: Q's running command is not interrupted; rule 3: P's booking beats Q's lease
+            p1.unlock()
+            p1._write_bookings([]); clock[0] = base
+            assert q.try_acquire("run t") is None
+            p1.book(base + 60, 1800)
+            clock[0] = base + 120
+            live.add(os.getpid())                                             # Q's run still running
+            assert p1.try_acquire("look")["holder"] == "Q"
+            live.clear(); q.release()                                         # Q ended: its lease
+            assert q.try_acquire("look").get("booking")                        # Q kept out of P's booking
+            assert p1.try_acquire("look") is None and p1.read()["holder"] == "P1"   # booking beats Q's lease
+            # rule 5: a warning, not a refusal, shortly before another project's booking
+            p1.unlock(); p1._write_bookings([]); clock[0] = base
+            p1.book(base + 600, 600)
+            seen = []
+
+            class Grab(logging.Handler):
+                def emit(self, rec):
+                    seen.append(rec.getMessage())
+            h = Grab(); logger.addHandler(h); logger.setLevel(logging.WARNING)
+            try:
+                q.acquire("look", wait=0)
+            finally:
+                logger.removeHandler(h); logger.setLevel(logging.CRITICAL)
+            assert any("booked by proj-p from" in m and "in 10 min" in m for m in seen), seen
+            q.release()
+            # D4: the activity log
+            acts = read_activity(d)
+            assert [a["event"] for a in acts][:2] == ["book", "book"] and any(a["event"] == "unbook" and a["force"] for a in acts)
+            # D5: the status JSON
+            st = panel_status([("box", "user@box", {"label": "Test box", "note": "n"})], directory=d, now=base + 700,
+                              alive=lambda p: False)
+            t = st["targets"][0]
+            assert t["label"] == "Test box" and t["booked_now"]["label"] == "proj-p" and t["lock"]["label"] == "proj-q"
+            assert not t["lock"]["held"] and not t["lock"]["running"] and t["activity"][0]["event"] in ("book", "unbook")
+            st = panel_status([("box", "user@box", {})], directory=d, now=base + 100, alive=lambda p: False)
+            assert st["targets"][0]["lock"]["held"] and st["targets"][0]["booked_now"] is None   # Q's lease, before P
+        # D4: box_lock writes an end line, also when the command fails
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_STATE_HOME"], os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = d, "A", "proj-a"
+            with box_lock("user@box", "look"):
+                pass
+            try:
+                with box_lock("user@box", "act y"):
+                    raise RuntimeError("boom")
+            except RuntimeError:
+                pass
+            ends = [a for a in read_activity() if a["event"] == "end"]
+            assert [e["command"] for e in ends] == ["look", "act y"] and ends[1]["error"] == "RuntimeError", ends
+            assert ends[0]["label"] == "proj-a" and ends[0]["seconds"] >= 0
+            # trimming
+            lk = BoxLock("user@box")
+            global ACTIVITY_MAX, ACTIVITY_KEEP
+            m0, k0 = ACTIVITY_MAX, ACTIVITY_KEEP
+            ACTIVITY_MAX, ACTIVITY_KEEP = 2000, 5
+            try:
+                for i in range(40):
+                    lk.log("end", command=f"look {i}")
+                assert len(open(lk.activity_path).readlines()) <= 20
+            finally:
+                ACTIVITY_MAX, ACTIVITY_KEEP = m0, k0
+            assert {n for n, _, _ in known_hosts({"targets": {}})} == {"user@box"}
+        # D5: the Host check
+        assert host_allowed("127.0.0.1:8765", LOOPBACK) and host_allowed("localhost:8765", LOOPBACK)
+        assert host_allowed("[::1]:8765", LOOPBACK) and not host_allowed("evil.example:8765", LOOPBACK)
+        assert not host_allowed(None, LOOPBACK) and host_allowed("anything", None)
+        # D6: a grabber with a fake driver: frames while watched, then it stops and closes the connection
+        FRAME_IDLE, FRAME_RETRY = 0.6, 0.1
+        png = base64.b64encode(b"\x89PNG fake").decode()
+        made, closed, calls, ended = [], [], [], set()
+
+        class FakeCua:
+            def __init__(self):
+                self.last, self.labels = {}, set()
+                made.append(self)
+
+            def call(self, tool, args, timeout=None):
+                calls.append((tool, args))
+                if args["session"] in ended:
+                    raise RuntimeError("get_desktop_state failed: session has ended")
+                self.labels.add(args["session"])
+                if len(calls) == 2:
+                    raise RuntimeError("driver hiccup")
+                self.last = {"content": [{"type": "text", "text": "desktop"}, {"type": "image", "data": png}]}
+                return {}, "desktop"
+
+            def close(self):
+                closed.append(self); ended.update(self.labels)
+        with tempfile.TemporaryDirectory() as d:
+            g = FrameGrabber("user@box", d, connect=FakeCua)
+            g.want(fps=20, size=99999)
+            assert g.fps == FPS_RANGE[1] and g.size == SIZE_RANGE[1]
+            end = time.time() + 3
+            while time.time() < end and len(calls) < 4:
+                time.sleep(0.02)
+            assert g.frame == b"\x89PNG fake" and g.at, (g.frame, calls)
+            assert all(c[0] == "get_desktop_state" and c[1]["session"].startswith("desktape-panel-") for c in calls)
+            assert len(made) >= 2 and closed, "a failed frame drops the connection and opens a new one"
+            g.thread.join(3)
+            assert not g.thread.is_alive() and len(closed) == len(made), "an idle grabber holds no connection"
+            n0 = len(calls)
+            g.want(fps=5)                                      # watched again: a new connection, a new label
+            end = time.time() + 3
+            while time.time() < end and g.at < time.time() - 0.1:
+                time.sleep(0.02)
+            assert "session has ended" not in (g.error or "") and len({c[1]["session"] for c in calls[n0:]}) == 1
+            g.wanted = 0; g.thread.join(3)
+            # the handler: status JSON, a frame, a refused Host, an unknown target
+            from http.server import ThreadingHTTPServer
+            import urllib.request, urllib.error
+
+            class FakeState:
+                allowed, reach = LOOPBACK, {}
+                grabbers = {"box": g}
+
+                def rows(self):
+                    return [("box", "user@box", {})]
+
+                def grabber(self, name):
+                    return self.grabbers.get(name)
+            g.connect = FakeCua
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), panel_handler(FakeState()))
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            base_url = f"http://127.0.0.1:{srv.server_address[1]}"
+            try:
+                st = json.loads(urllib.request.urlopen(base_url + "/api/status").read())
+                assert st["targets"][0]["name"] == "box", st
+                r = urllib.request.urlopen(base_url + "/frame/box?fps=1&size=480")
+                assert r.status == 200 and r.read() == b"\x89PNG fake" and float(r.headers["X-Frame-At"]) > 0
+                assert b"desktape" in urllib.request.urlopen(base_url + "/").read()
+                for path, hdr, code in (("/api/status", "evil.example", 403), ("/frame/nope", None, 404),
+                                        ("/frame/box?fps=x", None, 400)):
+                    req = urllib.request.Request(base_url + path, headers={"Host": hdr} if hdr else {})
+                    try:
+                        urllib.request.urlopen(req); raise AssertionError(f"expected {code} for {path}")
+                    except urllib.error.HTTPError as e:
+                        assert e.code == code, (path, e.code)
+            finally:
+                srv.shutdown(); srv.server_close()
+    finally:
+        FRAME_IDLE, FRAME_RETRY = idle0, retry0
+        logger.setLevel(level)
+        for k, v in env.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
 
 def selftest_knowledge():
     """os-knowledge: the base page first, then the user's pages; --where names the page not written yet."""
@@ -5653,8 +6390,9 @@ def selftest():
     selftest_person_cursor()
     selftest_mac_file_dialog()
     selftest_knowledge()
+    selftest_booking_panel()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
-                "knowledge"):
+                "knowledge", "book", "unbook", "bookings", "panel"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     print("selftest ok")
@@ -5690,6 +6428,16 @@ def main():
     sub.add_parser("lock", help="who holds the target (box-lock)")
     sub.add_parser("unlock", help="give back this session's lock on the target now")
     sub.add_parser("targets", help="the named targets, with lock and status")
+    p = sub.add_parser("book", help="book the target for this project for a time window (booking-and-panel)")
+    p.add_argument("--for", dest="length", required=True, metavar="DURATION", help="45m, 2h, 1h30m (at most 4 h)")
+    p.add_argument("--at", default="now", metavar="WHEN", help="now (default), +30m, 14:00 or 2026-11-08 14:00")
+    p.add_argument("--note", help="what the booking is for, shown to the other projects")
+    p = sub.add_parser("unbook", help="remove a booking of this project")
+    p.add_argument("id"); p.add_argument("--force", action="store_true", help="also another project's (a stale one)")
+    sub.add_parser("bookings", help="every target's bookings")
+    p = sub.add_parser("panel", help="a local web page: every target's lock, bookings, activity and live screen")
+    p.add_argument("--port", type=int, default=PANEL_PORT)
+    p.add_argument("--bind", default="127.0.0.1", help="the address to listen on (default 127.0.0.1: this machine only)")
     p = sub.add_parser("doctor", help="what this machine still needs, with the command that installs each")
     p.add_argument("--local", action="store_true", help="a Windows target on this machine")
     p.add_argument("--video", action="store_true", help="recording videos too")
@@ -5729,6 +6477,10 @@ def main():
     try:
         if a.cmd == "targets":
             return cmd_targets(a)
+        if a.cmd == "bookings":
+            return cmd_bookings(a)
+        if a.cmd == "panel":                                     # booking-and-panel D5: every target, no choice
+            return cmd_panel(a)
         if a.cmd == "doctor":
             return cmd_doctor(a)
         if a.cmd == "knowledge":                                 # os-knowledge: needs a target only to learn its OS
@@ -5740,7 +6492,8 @@ def main():
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "
                      f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
-                "status": cmd_status, "tidy": cmd_tidy, "record": cmd_record}[a.cmd](a)
+                "status": cmd_status, "tidy": cmd_tidy, "record": cmd_record, "book": cmd_book,
+                "unbook": cmd_unbook}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
         return 3

@@ -34,6 +34,15 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Javítás:** várd meg, amíg a másik végez. A zárat csak az engedheti el, aki tartja.
 - **Ki:** aki futtatja. **Óta:** 0.1.0.
 
+### „… is booked by … until …; try again later” (kilépési kód 3)
+
+- **Hol:** `run`, `look`, `act`, `tidy`.
+- **Ok:** egy másik projekt lefoglalta a gépet erre az időre (`desktape.py book`).
+- **Ellenőrzés:** `desktape.py bookings` vagy a panel (`desktape.py panel`) mutatja, ki, mikortól, meddig és mire.
+- **Javítás:** válassz másik gépet, vagy várd meg a foglalás végét. Más projekt foglalását csak ember törölheti
+  (`unbook ID --force`), ha biztosan elavult.
+- **Ki:** aki futtatja. **Óta:** a booking-and-panel változás.
+
 ### „no effect: … after 3.0 s”
 
 - **Hol:** egy `run` vagy `act` lépés.
@@ -188,7 +197,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 | 0 | every step passed |
 | 1 | a step failed (`run`), or `act` stopped; the run folder holds the repair note (`repair.md`) |
 | 2 | a bad command or tape: no target, an unknown map name, a click the map denies, a malformed map entry |
-| 3 | the target is held by another session |
+| 3 | the target is held by another session, or booked by another project |
 
 ### "no target: pass --target NAME or --host user@host …"
 
@@ -205,6 +214,15 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Check:** `desktape.py lock` shows the holder and since when.
 - **Fix:** wait for the other one to finish. Only the holder can release the hold.
 - **Who:** whoever runs it. **Since:** 0.1.0.
+
+### "… is booked by … until …; try again later" (exit code 3)
+
+- **Where:** `run`, `look`, `act`, `tidy`.
+- **Cause:** another project booked the target for this time (`desktape.py book`).
+- **Check:** `desktape.py bookings`, or the panel (`desktape.py panel`), shows who, from when, until when and why.
+- **Fix:** pick another target, or wait for the booking to end. Only a person removes another project's booking
+  (`unbook ID --force`), when it is surely stale.
+- **Who:** whoever runs it. **Since:** the booking-and-panel change.
 
 ### "no effect: … after 3.0 s"
 

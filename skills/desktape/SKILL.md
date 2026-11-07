@@ -133,8 +133,32 @@ A recorded take must run on its own, with no person stepping in, and show only w
 - **The answer key is for checking only.** A take's inputs come from what the assistant reads in the scene (a PDF, a
   price list); the expected values are compared only after the take, never fed in.
 
+## Sharing a machine with other projects
+
+Several projects drive the same machines. Before a long job, look and book:
+
+```bash
+dt bookings                                            # every machine's bookings, with project, time and note
+dt targets                                             # who holds each machine now, and its session state
+dt book --target NAME --for 45m --note "what it is for"     # from now; --at 14:00 or --at +30m for later
+dt unbook ID                                           # when the job is done early
+```
+
+- **Book** a video take, an end-to-end suite, or any flow with pauses longer than a few minutes. A booking is the
+  project's (the work folder's name, or `DESKTAPE_LABEL`), at most 4 h, at most 7 days ahead. Booking again right
+  after your own booking extends it.
+- During another project's booking, `run`, `look`, `act` and `tidy` stop with exit code 3 naming the booking: pick
+  another machine (`dt bookings`) or wait. Do not `unbook --force` another project's booking; that is the person's
+  call.
+- A command that is already running is never cut off when a booking starts; a command started 15 min before
+  another project's booking gets a warning: finish before it.
+- **The panel:** `dt panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,
+  and `#cctv` with every machine's screen live at about 1 frame per second. It takes no lock and acts on nothing.
+  Close the live view before a video take on a Mac (the screen-capture indicator may show).
+
 ## Rules
 
-- One driver session per machine: a run waits for, or stops on, another session's lock (`dt lock`).
+- One driver session per machine: a run waits for, or stops on, another session's lock (`dt lock`) and another
+  project's booking (`dt bookings`).
 - Everything sent to the driver is logged in the run folder's `audit.jsonl`, secrets redacted.
 - Only the controls a person could use are touched; a map can deny controls (`Delete`, `Log out`) outright.

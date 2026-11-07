@@ -6,6 +6,15 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- Bookings: `book --for 45m [--at 14:00] [--note …]` books a target for a project for up to 4 hours, up to 7 days
+  ahead; `bookings` lists them, `unbook ID` removes one. During another project's booking, `run`, `look`, `act` and
+  `tidy` stop with exit code 3 naming it; a running command is never cut off. Plain JSON files next to the lock
+  files, no server.
+- `activity.jsonl` next to the lock files: one line per locked command and per booking change.
+- `panel`: a local web page (127.0.0.1:8645) with every target's holder, session state, bookings and recent commands,
+  and a live grid of every target's screen at about 1 frame per second (columns, rate, size and full screen set in
+  the page). It takes no lock; frames come from the driver's read-only `get_desktop_state`, the one tool added to the
+  allowlist, only while the grid is open.
 - A map can carry `answers:`, like a tape: they apply to every tape on that map, and a tape answer with the same
   name replaces the map's. An unplanned dialog is offered to the answers before it fails a step. Meant for pop-ups
   any tape on the app may meet, such as Claude Desktop's auto-sync card (closed with its X, never "Grant access");

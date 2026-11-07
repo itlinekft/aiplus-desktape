@@ -168,6 +168,25 @@ your own lock early, for example at the end of a flow. A holder that crashed fre
 lease runs out. The lock lives on the controller, so two controllers on different machines do not see each
 other's locks.
 
+**Bookings: a machine for a project, for a time window.** A lease covers the gap between two steps; a video take
+or a long suite needs the machine for longer. `desktape.py book --for 45m [--at 14:00] [--note "suite"]` books the
+target for your project (the working directory's name, or `DESKTAPE_LABEL`): at most 4 hours, at most 7 days ahead,
+never over another project's booking. During it, every other project's `run`, `look`, `act` and `tidy` waits and
+then stops with exit code 3, naming the booking; your project's sessions take turns as usual, and get the machine
+even over another project's 180 s lease. A running command is never cut off when a booking starts. Booking again
+right after your own booking extends it. `desktape.py bookings` lists every target's bookings, `desktape.py unbook
+ID` removes your project's (`--force` removes another project's: for a person clearing a stale one). Bookings are
+JSON files next to the lock files; every locked command and every booking change also leaves a line in
+`activity.jsonl` there.
+
+**The panel.** `desktape.py panel` serves a page on http://127.0.0.1:8645/ (`--port`, `--bind`): every target,
+whether its SSH port answers, who holds it with which command, its session state, its bookings and its last
+commands, refreshed every 3 s. The **Live screens** tab (`#cctv`) shows the targets' whole screens in a grid at
+about one frame per second: choose the columns, the frame rate, the image size and the targets; full screen with
+the button or `f`; a click on a screen shows it alone. Frames come from the driver's read-only `get_desktop_state`
+under the panel's own session, only while the tab is open, with no lock. The page shows everything on the screens,
+so the panel listens only on this machine unless `--bind` says otherwise.
+
 **Several machines: name them.** Copy [`targets.example.yaml`](../targets.example.yaml) to
 `~/.config/desktape/targets.yaml` (on Windows `%APPDATA%\desktape\targets.yaml`) and give each machine a
 name, a host, the account, the SSH key, a label and a note for people. Then `--target NAME` (or

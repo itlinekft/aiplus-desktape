@@ -115,6 +115,31 @@ minute 5 on the Windows test PC).
 | closing it | `act '{"key": {"key": "escape", "into": "Open", "os": true}}'`, then Cancel in the upload dialog: both ok |
 | a test of a known path as one tape instead of single `act` steps | 6 steps in 22.5 s; a Claude Desktop question and its answer in 39 s, where single `act` calls had taken 10 to 20 s each |
 
+## 2026-11-07: bookings and the panel's live screens on three targets
+
+**Machines:** the Windows 11 test PC; a Windows VM (Hungarian, build 26300) on a Linux host; a Mac mini, macOS 26.4,
+arm64. Cua Driver 0.34.1 on all three. Controller: Linux, Python 3.14, over SSH. **Change:** `booking-and-panel`.
+
+```bash
+python3 desktape.py panel                    # then /frame/<target>?fps=1&size=960 and /#cctv
+DESKTAPE_LABEL=proj-a python3 desktape.py book --target <pc> --for 5m --note "booking measurement"
+DESKTAPE_LABEL=proj-b python3 desktape.py look --target <pc>
+```
+
+| What | Result |
+|---|---|
+| `get_desktop_state`, `max_image_dimension` 960, on a kept connection, 5 calls each | Windows PC 0.14–0.16 s, about 150 KB; Mac mini 0.15–0.29 s, about 144 KB; Windows VM 0.30–0.34 s, about 286 KB. PNG, 960×540 of a 1920×1080 screen |
+| the panel, all three targets at 1 fps for 15 s | 14–15 distinct frames per target; per call 172 ms (PC), 326 ms (VM), 360 ms (Mac); the first frame 2–6 s after the first request (connecting) |
+| the grid closed for 10 s | each target's grabber stopped and its driver connection closed (log: "stopped (nobody watching for 10 s)") |
+| watched again, before the fix | every frame refused: "session has ended … use a new session label". The driver ends a session with its connection and refuses its label after that; the panel now takes a new label per connection, and a second round gave 11–13 frames per target with no error |
+| a click by element token while the panel pulls the same PC's screen at 5 fps | 3 of 3 `click` calls accepted ("Posted click on Chromium element"), no stale token; 118 frames served in those 25 s |
+| another session driving the Mac with `look`/`act` while the panel pulled its screen | 1 element click in a pull window, accepted; the session's failed steps that morning (a `set_value` with no matching item, `type_text` delivering 0 characters) also happened with the panel idle |
+| project B's `look` during project A's booking | exit code 3 after 60.1 s: "… is booked by proj-a until 11:43 (booking measurement; booking …); try again later"; B's `unbook` refused, A's accepted |
+
+The status page and the grid were checked in headless Chrome (1600×1000): the three cards with holder, session,
+bookings and recent commands, and the 2×2 grid with live frames and the holder on each tile. Not measured: the
+macOS screen-capture indicator while the grid is open.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

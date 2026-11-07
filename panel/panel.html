@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>desktape panel</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #667085; --line: #e3e6eb;
+    --free: #1a7f37; --busy: #b54708; --booked: #6941c6; --bad: #c4320a; --off: #98a2b3;
+    --tile: #000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11141a; --card: #1a1f27; --ink: #e6e9ef; --muted: #98a2b3; --line: #2a313c;
+            --free: #3fb950; --busy: #f0883e; --booked: #a68cff; --bad: #ff7b72; --off: #667085; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+           background: var(--card); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  nav a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
+  nav a.on { color: var(--ink); background: var(--bg); font-weight: 600; }
+  .spacer { flex: 1; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  main { padding: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  .card h2 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--off); flex: none; }
+  .dot.ok { background: var(--free); } .dot.bad { background: var(--bad); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+           color: #fff; background: var(--off); white-space: nowrap; }
+  .badge.free { background: var(--free); } .badge.busy { background: var(--busy); }
+  .badge.lease { background: var(--busy); opacity: .75; } .badge.booked { background: var(--booked); }
+  .badge.bad { background: var(--bad); }
+  .row { margin-top: 8px; }
+  .label { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  ul.plain { list-style: none; padding: 0; margin: 4px 0 0; }
+  ul.plain li { padding: 3px 0; border-top: 1px dashed var(--line); overflow-wrap: anywhere; }
+  ul.plain li:first-child { border-top: 0; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  code { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .err { color: var(--bad); overflow-wrap: anywhere; }
+
+  /* live screens */
+  #cctv { display: none; }
+  body.cctv #status { display: none; }
+  body.cctv #cctv { display: block; }
+  body.cctv main { padding: 8px; }
+  .tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .tools label { display: inline-flex; gap: 4px; align-items: center; }
+  .tools select, .tools button { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
+                                 background: var(--card); color: var(--ink); }
+  .tools button { cursor: pointer; }
+  .grid { display: grid; gap: 6px; }
+  .tile { position: relative; background: var(--tile); aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden;
+          cursor: zoom-in; }
+  .tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .tile.stale img { opacity: .35; filter: grayscale(1); }
+  .tile .ov { position: absolute; left: 0; right: 0; padding: 4px 8px; color: #fff; font-size: 13px;
+              display: flex; gap: 8px; align-items: center; text-shadow: 0 1px 2px #000; pointer-events: none; }
+  .tile .top { top: 0; background: linear-gradient(#000a, #0000); }
+  .tile .bottom { bottom: 0; justify-content: flex-end; background: linear-gradient(#0000, #000a); font-size: 12px; }
+  .tile .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+               color: #ddd; padding: 20px; text-align: center; font-size: 13px; pointer-events: none; }
+  body.solo .tile { cursor: zoom-out; }
+  :fullscreen #cctv .grid, :fullscreen .grid { gap: 2px; }
+  body.fs header { display: none; }
+  body.fs main { padding: 0; }
+  body.fs .tile { border-radius: 0; }
+  body.fs .tools { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 9;
+                   background: var(--card); padding: 6px 10px; border-radius: 8px; opacity: 0; transition: opacity .2s; }
+  body.fs .tools:hover { opacity: .95; }
+</style>
+</head>
+<body>
+<header>
+  <h1>desktape</h1>
+  <nav>
+    <a href="#status" id="nav-status" data-t="status">Állapot</a>
+    <a href="#cctv" id="nav-cctv" data-t="cctv">Élő képek</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="muted small" id="updated"></span>
+</header>
+<main>
+  <section id="status"><div class="cards" id="cards"></div></section>
+  <section id="cctv">
+    <div class="tools" id="tools">
+      <label><span data-t="cols">Oszlopok</span>
+        <select id="cols"><option value="auto">auto</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+      <label><span data-t="fps">Kép/mp</span>
+        <select id="fps"><option>0.5</option><option selected>1</option><option>2</option><option>5</option></select></label>
+      <label><span data-t="size">Méret</span>
+        <select id="size"><option>480</option><option selected>960</option><option>1280</option><option>1920</option></select></label>
+      <span id="picks"></span>
+      <button id="fsbtn" data-t="fullscreen">Teljes képernyő</button>
+    </div>
+    <div class="grid" id="grid" style="margin-top:8px"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const HU = {
+  status: "Állapot", cctv: "Élő képek", cols: "Oszlopok", fps: "Kép/mp", size: "Méret", fullscreen: "Teljes képernyő",
+  free: "Szabad", running: "Fut", lease: "Lease", booked: "Foglalva", unreachable: "Nem érhető el", reachable: "Elérhető",
+  unknown: "Ismeretlen", holder: "Ki használja", since: "óta", until: "eddig", bookings: "Foglalások", none: "nincs",
+  activity: "Legutóbb", session: "Session", step: "lépés", strikes: "hibák", lastok: "utolsó jó lépés",
+  note: "Megjegyzés", noframe: "Még nincs kép", stale: "régi kép", ago: "ezelőtt", updated: "frissítve",
+  error: "Hiba", booknow: "Most foglalva", nobody: "senki", sec: "mp", min: "perc", h: "óra",
+  noserver: "A panel szervere nem válaszol", noTargets: "Nincs gép a targets fájlban",
+  book: "foglalás", unbook: "foglalás törölve", end: "vége"
+};
+const EN = {
+  status: "Status", cctv: "Live screens", cols: "Columns", fps: "Frames/s", size: "Size", fullscreen: "Full screen",
+  free: "Free", running: "Running", lease: "Lease", booked: "Booked", unreachable: "Unreachable", reachable: "Reachable",
+  unknown: "Unknown", holder: "Held by", since: "since", until: "until", bookings: "Bookings", none: "none",
+  activity: "Recent", session: "Session", step: "step", strikes: "strikes", lastok: "last good step",
+  note: "Note", noframe: "No frame yet", stale: "old frame", ago: "ago", updated: "updated",
+  error: "Error", booknow: "Booked now", nobody: "nobody", sec: "s", min: "min", h: "h",
+  noserver: "The panel's server does not answer", noTargets: "No targets in the targets file",
+  book: "booking", unbook: "booking removed", end: "end"
+};
+const params = new URLSearchParams(location.search);
+const lang = params.get("lang") || ((navigator.language || "hu").toLowerCase().startsWith("hu") ? "hu" : "en");
+const T = lang === "en" ? EN : HU;
+document.documentElement.lang = lang;
+document.querySelectorAll("[data-t]").forEach(e => { e.textContent = T[e.dataset.t] || e.textContent; });
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const hm = t => t ? new Date(t * 1000).toLocaleTimeString(lang, {hour: "2-digit", minute: "2-digit"}) : "";
+const day = t => {
+  const d = new Date(t * 1000), n = new Date();
+  return d.toDateString() === n.toDateString() ? hm(t) : d.toLocaleDateString(lang, {month: "short", day: "numeric"}) + " " + hm(t);
+};
+const ago = (t, now) => {
+  if (!t) return "";
+  const s = Math.max(0, Math.round(now - t));
+  return s < 90 ? `${s} ${T.sec}` : s < 5400 ? `${Math.round(s / 60)} ${T.min}` : `${(s / 3600).toFixed(1)} ${T.h}`;
+};
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("desktape-panel-" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("desktape-panel-" + k, JSON.stringify(v)); } catch (e) { /* private window */ } }
+};
+
+let data = null, serverDown = false;
+
+function badge(t) {
+  const L = t.lock;
+  if (L && L.running) return `<span class="badge busy">${T.running}: ${esc(L.label)}</span>`;
+  if (t.booked_now) return `<span class="badge booked">${T.booked}: ${esc(t.booked_now.label)}</span>`;
+  if (L && L.held) return `<span class="badge lease">${T.lease}: ${esc(L.label)} → ${hm(L.until)}</span>`;
+  return `<span class="badge free">${T.free}</span>`;
+}
+function reachDot(t) {
+  const r = t.reach;
+  const cls = !r || r.ok === null ? "" : r.ok ? "ok" : "bad";
+  const title = !r ? T.unknown : r.ok === null ? r.detail : (r.ok ? T.reachable : T.unreachable) + " — " + r.detail;
+  return `<span class="dot ${cls}" title="${esc(title)}"></span>`;
+}
+function actLine(a, now) {
+  const what = a.event === "end" ? `<code>${esc(a.command)}</code> ${a.seconds ?? ""} ${T.sec}` +
+    (a.state ? ` · ${esc(a.state)}` : "") + (a.error ? ` · <span class="err">${esc(a.error)}</span>` : "")
+    : a.event === "book" ? `${T.book} ${day(a.at)}–${hm(a.until)}${a.note ? " · " + esc(a.note) : ""}`
+    : a.event === "unbook" ? `${T.unbook} (${esc(a.id)})` : esc(a.event);
+  return `<li><span class="muted small">${ago(a.at, now)} ${T.ago}</span> · <b>${esc(a.label)}</b> · ${what}</li>`;
+}
+
+function renderStatus() {
+  const box = $("cards");
+  if (!data) { box.innerHTML = `<p class="muted">${serverDown ? T.noserver : "…"}</p>`; return; }
+  if (!data.targets.length) { box.innerHTML = `<p class="muted">${T.noTargets}</p>`; return; }
+  const now = data.now;
+  box.innerHTML = data.targets.map(t => {
+    const L = t.lock;
+    let lockHtml = `<span class="muted">${T.nobody}</span>`;
+    if (L && L.held) {
+      lockHtml = `<b>${esc(L.label)}</b> · <code>${esc(L.command)}</code> · ${T.since} ${hm(L.since)}` +
+        (L.running ? ` · pid ${esc(L.pid)}` : ` · ${T.until} ${hm(L.until)}`);
+    }
+    let sess = "";
+    if (L && L.state) {
+      const bad = ["failed", "stuck", "blocked"].includes(L.state);
+      sess = `<div class="row"><span class="label">${T.session}</span>
+        <span class="badge ${bad ? "bad" : "free"}">${esc(L.state)}</span>
+        ${L.step ? ` ${T.step}: <code>${esc(L.step)}</code>` : ""}
+        ${L.strikes ? ` · ${T.strikes}: ${esc(L.strikes)}` : ""}
+        ${L.last_ok_at ? ` · ${T.lastok}: ${ago(L.last_ok_at, now)} ${T.ago}` : ""}
+        ${L.error && bad ? `<div class="err small">${esc(L.error)}</div>` : ""}</div>`;
+    }
+    const books = t.bookings.length ? `<ul class="plain">${t.bookings.map(b =>
+      `<li><b>${esc(b.label)}</b> · ${day(b.from)}–${hm(b.until)}${b.note ? " · " + esc(b.note) : ""} <span class="muted small">(${esc(b.id)})</span></li>`).join("")}</ul>`
+      : `<span class="muted">${T.none}</span>`;
+    const acts = t.activity.length ? `<ul class="plain small">${t.activity.map(a => actLine(a, now)).join("")}</ul>`
+      : `<span class="muted">${T.none}</span>`;
+    return `<div class="card">
+      <h2>${reachDot(t)}${esc(t.name)} <span class="spacer"></span>${badge(t)}</h2>
+      <div class="muted small">${esc(t.label || t.host)}${t.os ? " · " + esc(t.os) : ""}</div>
+      <div class="row"><span class="label">${T.holder}</span>${lockHtml}</div>
+      ${sess}
+      <div class="row"><span class="label">${T.bookings}</span>${books}</div>
+      <div class="row"><span class="label">${T.activity}</span>${acts}</div>
+      ${t.note ? `<details><summary>${T.note}</summary><div class="small">${esc(t.note)}</div></details>` : ""}
+    </div>`;
+  }).join("");
+}
+
+/* ---- live screens ---- */
+const tiles = {};             // name -> {el, img, url, at, err, busy}
+let solo = null;
+
+function picked() {
+  const all = (data ? data.targets : []).map(t => t.name);
+  const off = store.get("off", []);
+  return all.filter(n => !off.includes(n) && (!solo || n === solo));
+}
+function renderPicks() {
+  if (!data) return;
+  const off = store.get("off", []);
+  $("picks").innerHTML = data.targets.map(t =>
+    `<label><input type="checkbox" data-n="${esc(t.name)}" ${off.includes(t.name) ? "" : "checked"}>${esc(t.name)}</label>`).join(" ");
+  $("picks").querySelectorAll("input").forEach(i => i.onchange = () => {
+    const o = new Set(store.get("off", []));
+    i.checked ? o.delete(i.dataset.n) : o.add(i.dataset.n);
+    store.set("off", [...o]); layout();
+  });
+}
+function layout() {
+  const names = picked(), grid = $("grid");
+  let cols = $("cols").value;
+  if (solo) cols = 1;
+  else if (cols === "auto") cols = names.length <= 1 ? 1 : names.length <= 4 ? 2 : names.length <= 9 ? 3 : 4;
+  grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  document.body.classList.toggle("solo", !!solo);
+  for (const n of Object.keys(tiles)) if (!names.includes(n)) { tiles[n].el.remove(); delete tiles[n]; }
+  for (const n of names) {
+    if (!tiles[n]) {
+      const el = document.createElement("div");
+      el.className = "tile";
+      el.innerHTML = `<img alt=""><div class="msg">${T.noframe}</div><div class="ov top"></div><div class="ov bottom"></div>`;
+      el.onclick = () => { solo = solo ? null : n; layout(); };
+      tiles[n] = {el, img: el.querySelector("img"), url: null, at: 0, err: null, busy: false};
+    }
+    grid.appendChild(tiles[n].el);
+  }
+  if (document.body.classList.contains("fs") || document.fullscreenElement) {
+    const rows = Math.ceil(names.length / cols) || 1;    // fill the screen: tiles as large as the rows allow
+    grid.style.height = "100vh";
+    grid.style.gridAutoRows = `calc((100vh - ${(rows - 1) * 2}px) / ${rows})`;
+    Object.values(tiles).forEach(t => t.el.style.aspectRatio = "auto");
+  } else {
+    grid.style.height = ""; grid.style.gridAutoRows = "";
+    Object.values(tiles).forEach(t => t.el.style.aspectRatio = "");
+  }
+  overlays();
+}
+function overlays() {
+  if (!data) return;
+  const now = Date.now() / 1000, fps = parseFloat($("fps").value);
+  for (const [n, tile] of Object.entries(tiles)) {
+    const t = data.targets.find(x => x.name === n);
+    if (!t) continue;
+    tile.el.querySelector(".top").innerHTML = `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
+      (t.lock && t.lock.held ? ` <code style="color:#fff">${esc(t.lock.command)}</code>` : "");
+    const old = tile.at && now - tile.at > Math.max(3 / fps, 4);
+    tile.el.classList.toggle("stale", !!(tile.at && old));
+    tile.el.querySelector(".bottom").innerHTML = tile.at
+      ? `${old ? T.stale + " · " : ""}${ago(tile.at, now)} ${T.ago}` : "";
+    const msg = tile.el.querySelector(".msg");
+    msg.style.display = !tile.at || tile.err ? "flex" : "none";
+    msg.innerHTML = tile.err ? `<span class="err">${T.error}: ${esc(tile.err)}</span>` : T.noframe;
+  }
+}
+async function pull(n) {
+  const tile = tiles[n];
+  if (!tile || tile.busy) return;
+  tile.busy = true;
+  try {
+    const r = await fetch(`frame/${encodeURIComponent(n)}?fps=${$("fps").value}&size=${$("size").value}`, {cache: "no-store"});
+    const at = parseFloat(r.headers.get("X-Frame-At") || "0");
+    tile.err = r.headers.get("X-Frame-Error") || (r.ok || r.status === 503 ? null : (await r.text()).slice(0, 200));
+    if (r.ok && at && at !== tile.at) {
+      const url = URL.createObjectURL(await r.blob());
+      tile.img.onload = () => { if (tile.url) URL.revokeObjectURL(tile.url); tile.url = url; };
+      tile.img.src = url;
+      tile.at = at;
+    }
+  } catch (e) {
+    tile.err = T.noserver;
+  } finally {
+    tile.busy = false;
+  }
+}
+let timer = null;
+function cctvLoop() {
+  clearTimeout(timer);
+  if (!document.body.classList.contains("cctv") || document.hidden) { timer = setTimeout(cctvLoop, 1000); return; }
+  Object.keys(tiles).forEach(pull);
+  overlays();
+  timer = setTimeout(cctvLoop, 1000 / parseFloat($("fps").value));
+}
+
+/* ---- view, settings, polling ---- */
+function view() {
+  const cctv = location.hash === "#cctv";
+  document.body.classList.toggle("cctv", cctv);
+  $("nav-cctv").classList.toggle("on", cctv); $("nav-status").classList.toggle("on", !cctv);
+  if (cctv) { renderPicks(); layout(); }
+}
+for (const id of ["cols", "fps", "size"]) {
+  $(id).value = store.get(id, $(id).value);
+  $(id).onchange = () => { store.set(id, $(id).value); layout(); cctvLoop(); };
+}
+$("fsbtn").onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else (document.documentElement.requestFullscreen ? document.documentElement.requestFullscreen() : Promise.reject()).catch(() => {
+    document.body.classList.toggle("fs"); layout();       // no Fullscreen API: fill the window instead
+  });
+};
+document.addEventListener("fullscreenchange", () => { document.body.classList.toggle("fs", !!document.fullscreenElement); layout(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && solo) { solo = null; layout(); }
+  if (e.key === "f" && document.body.classList.contains("cctv") && !e.target.closest("select,input")) $("fsbtn").click();
+});
+window.addEventListener("hashchange", view);
+
+async function poll() {
+  try {
+    const r = await fetch("api/status", {cache: "no-store"});
+    data = await r.json(); serverDown = false;
+    $("updated").textContent = `${T.updated} ${new Date().toLocaleTimeString(lang)}`;
+  } catch (e) {
+    serverDown = true;
+    $("updated").textContent = T.noserver;
+  }
+  renderStatus();
+  if (document.body.classList.contains("cctv")) {
+    if ($("picks").childElementCount !== (data ? data.targets.length : 0)) renderPicks();
+    layout();
+  }
+}
+view(); poll(); setInterval(poll, 3000); cctvLoop();
+</script>
+</body>
+</html>
