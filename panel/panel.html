@@ -343,6 +343,11 @@ function fit(n, W, H, gap, colsSetting) {
   for (let c = 2; c <= Math.max(n, 1); c++) { const r = tryCols(c); if (r.w > best.w) best = r; }
   return best;
 }
+/* What the last layout was computed for. A full-screen change can end without a layout in the new state (a grid
+   sized for full screen, shown under the toolbar, its last row cut off), so the frame loop compares and redoes it. */
+let laidOut = "";
+const layoutKey = () => [isFs(), solo, innerWidth, innerHeight, Math.round($("grid").getBoundingClientRect().top),
+  picked().join()].join("|");
 function layout() {
   const names = picked(), grid = $("grid");
   document.body.classList.toggle("solo", !!solo);
@@ -359,6 +364,7 @@ function layout() {
   grid.style.gridTemplateColumns = `repeat(${c}, ${w}px)`;
   grid.style.height = `${H}px`;
   for (const n of names) { tiles[n].el.style.width = `${w}px`; tiles[n].el.style.height = `${Math.floor(w / aspect)}px`; }
+  laidOut = layoutKey();
   overlays();
 }
 function makeTile(n) {
@@ -498,8 +504,9 @@ let timer = null;
 function cctvLoop() {
   clearTimeout(timer);
   if (!document.body.classList.contains("cctv") || document.hidden) { timer = setTimeout(cctvLoop, 1000); return; }
+  if (layoutKey() !== laidOut) layout();      // calls overlays() itself
+  else overlays();
   Object.keys(tiles).forEach(pull);
-  overlays();
   timer = setTimeout(cctvLoop, 1000 / curFps());
 }
 

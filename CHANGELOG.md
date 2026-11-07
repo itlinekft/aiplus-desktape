@@ -43,6 +43,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   (`--no-vpn` leaves them out), and no longer puts container bridges (docker, br-, veth …) into `from=`.
 
 ### Fixed
+- The live screens' grid no longer stays sized for full screen after leaving it (its last row cut off under the
+  toolbar): the frame loop redoes the layout whenever full screen, the zoom, the window or the grid's top changed.
 - `unpair` on Windows now removes the line from `ProgramData\ssh\administrators_authorized_keys` too, where an
   administrator's key lives; it used to clean only the user's own file and still say "removed", and it now says so
   when the line was not there.
