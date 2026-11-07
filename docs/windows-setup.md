@@ -1,5 +1,9 @@
 # Setting up a Windows target
 
+**Shortcut:** if the new PC has Claude on it, `desktape.py pair NAME` prints a request to paste there; that Claude
+follows [`setup-target.md`](setup-target.md), which does sections 1, 2 and 4 below with the person. This page
+stays the reference.
+
 What desktape expects on the machine it drives, and how the reference target was set up. Tested on
 Windows 11 with a standard (non-admin) user and Cua Driver 0.34.1.
 Every install on both machines, with versions, admin needs and checks, is listed in [`install.md`](install.md),

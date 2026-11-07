@@ -4023,6 +4023,9 @@ def cmd_record(a):
 PAIR_OPTS = "no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty"
 # D2: LAN only. Python knows the private ranges; these private-looking ones are not a LAN (documentation, benchmark,
 # IETF); a tailnet (100.64/10) and a public address are not private at all
+VPN_NET = "100.64.0.0/10"      # target-setup-guide: shared address space, used by Tailscale and other VPNs
+VIRTUAL_IFACES = ("docker", "br-", "veth", "virbr", "cni", "flannel", "podman", "lxc", "vmnet", "vboxnet")
+GUIDE_URL = "https://github.com/itlinekft/aiplus-desktape/blob/main/docs/setup-target.md"
 NOT_LAN = ("0.0.0.0/8", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24")
 NAME_OK = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -4042,9 +4045,16 @@ def pair_comment(name):
     return f"desktape-pair-{name}@{controller_name()}"
 
 
-def lan_addresses(text=None):
-    """The controller's private IPv4 addresses, every interface (target-pairing D2)."""
-    import ipaddress
+def pairable(ip, vpn=True):
+    """A local-network address, or (target-setup-guide, owner 2026-11-07: "lokális hálózat és VPN is") a VPN one."""
+    a = ipaddress.ip_address(ip)
+    if a.is_loopback or a.is_link_local or any(a in ipaddress.ip_network(n) for n in NOT_LAN):
+        return False
+    return (a.is_private and not a.is_reserved) or (vpn and a in ipaddress.ip_network(VPN_NET))
+
+
+def lan_addresses(text=None, vpn=True):
+    """The controller's local-network and VPN IPv4 addresses (target-pairing D2), without container bridges."""
     if text is None:
         cmd = ["ipconfig"] if os.name == "nt" else ["ifconfig"] if sys.platform == "darwin" else ["ip", "-4", "-o", "addr"]
         try:
@@ -4052,13 +4062,14 @@ def lan_addresses(text=None):
         except OSError as e:
             logger.warning("pair: could not list this machine's addresses (%s): %s", " ".join(cmd), e)
             text = ""
-    skip = [ipaddress.ip_network(n) for n in NOT_LAN]
     found = []
-    for ip in re.findall(r"(?:inet |IPv4[^:]*:\s*)(\d+\.\d+\.\d+\.\d+)", text):
-        a = ipaddress.ip_address(ip)
-        if a.is_private and not (a.is_loopback or a.is_link_local or a.is_reserved or any(a in n for n in skip)) \
-                and ip not in found:
-            found.append(ip)
+    for line in text.splitlines():
+        m = re.match(r"\s*\d+:\s+(\S+)\s+inet\s", line)        # `ip -o addr`: the interface is named on the line
+        if m and m.group(1).startswith(VIRTUAL_IFACES):
+            continue
+        for ip in re.findall(r"(?:inet |IPv4[^:]*:\s*)(\d+\.\d+\.\d+\.\d+)", line):
+            if pairable(ip, vpn) and ip not in found:
+                found.append(ip)
     return found
 
 
@@ -4068,7 +4079,7 @@ def pair_line(pub, addrs, comment):
     if kind != "ssh-ed25519":
         raise ValueError(f"pair: expected an ed25519 key, got {kind}")
     if not addrs:
-        raise ValueError("pair: this machine has no private LAN address to put in from=; give --from")
+        raise ValueError("pair: this machine has no local-network or VPN address to put in from=; give --from")
     return f'from="{",".join(addrs)}",{PAIR_OPTS} {kind} {blob} {comment}'
 
 
@@ -4137,28 +4148,44 @@ def cmd_pair(a):
             cua.close()
         print(f"the driver on {a.name} answers: {len(wins)} titled windows")
         return 0
-    if not a.host:
-        raise ValueError("pair: give --host ADDR (and --user)")
     if not os.path.exists(key):
         os.makedirs(os.path.dirname(key), exist_ok=True)
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", pair_comment(a.name), "-f", key], check=True)
         logger.info("pair: made %s", key)
     else:
         print(f"# {key} exists: reused (pairing again, for example after the addresses changed)")
-    addrs = a.from_addr.split(",") if a.from_addr else lan_addresses()
+    addrs = a.from_addr.split(",") if a.from_addr else lan_addresses(vpn=not a.no_vpn)
     pub = open(key + ".pub", encoding="utf-8").read()
     line = pair_line(pub, addrs, pair_comment(a.name))
     path = targets_path()
-    profile = {"host": a.host, "user": a.user, "identity": key.replace(os.path.expanduser("~"), "~", 1),
-               "os": a.os, "label": a.label or f"paired from {controller_name()}",
-               "paired": time.strftime("%Y-%m-%d %H:%M")}
-    profile = {k: v for k, v in profile.items() if v}
-    added = write_profile(path, a.name, profile)
     print(f"key: {key}\nfingerprint: {fingerprint(key + '.pub')}")
-    print(f"target {a.name!r} " + (f"added to {path}" if added else f"is already in {path}: left as it is"))
+    if a.host:
+        profile = {"host": a.host, "user": a.user, "identity": key.replace(os.path.expanduser("~"), "~", 1),
+                   "os": a.os, "label": a.label or f"paired from {controller_name()}",
+                   "paired": time.strftime("%Y-%m-%d %H:%M")}
+        profile = {k: v for k, v in profile.items() if v}
+        added = write_profile(path, a.name, profile)
+        print(f"target {a.name!r} " + (f"added to {path}" if added else f"is already in {path}: left as it is"))
+    else:                                  # target-setup-guide D3: the address comes back in the target's report
+        print(f"target {a.name!r}: no --host yet, so not added to {path}; when the target's report gives its address:\n"
+              f"  desktape.py pair {a.name} --host <user>@<address> --os <windows|macos>")
     print(f"\nOn {a.name}, accept this ONE line (the target's own `pair --accept`, or the user's authorized_keys):\n\n{line}\n")
-    print(f"Then: desktape.py pair {a.name} --check      Undo: desktape.py unpair {a.name}")
+    print(f"Or paste this to the Claude on {a.name} (Claude Code, or Claude Desktop's Code tab):\n")
+    print(setup_request(a.name, line))
+    print(f"\nThen: desktape.py pair {a.name} --check      Undo: desktape.py unpair {a.name}")
     return 0
+
+
+def setup_request(name, line):
+    """target-setup-guide: the request a person pastes into the Claude on the new target (Hungarian first)."""
+    return (f"---\nÁllítsd be ezt a gépet desktape-célgépnek ({name}) ezen az útmutatón: {GUIDE_URL}\n"
+            "Minden lépés előtt mutasd meg, mit futtatsz és honnan, és kérdezz meg. A vezérlő párosító sora, "
+            "pontosan ezt fogadd el:\n\n"
+            f"{line}\n\n"
+            "A végén írd ki az útmutató szerinti jelentést (gépnév, felhasználó, címek, fingerprint), azt viszem "
+            "vissza a vezérlőhöz.\n"
+            f"(English: set this computer up as a desktape target following {GUIDE_URL}; show and ask before each "
+            "step; accept exactly the line above; end with the guide's report.)\n---")
 
 
 PAIR_LINE = re.compile(r'from="([0-9.,]+)",' + re.escape(PAIR_OPTS) +
@@ -4173,14 +4200,13 @@ def check_pair_line(line):
         raise ValueError("pair --accept: not a desktape pairing line (from=\"<LAN addresses>\"," + PAIR_OPTS +
                          " ssh-ed25519 <key> desktape-pair-<name>@<controller>); nothing written")
     addrs, blob, comment = m.group(1).split(","), m.group(2), m.group(3)
-    skip = [ipaddress.ip_network(n) for n in NOT_LAN]
     for ip in addrs:
         try:
-            a = ipaddress.ip_address(ip)
+            ok = pairable(ip)
         except ValueError:
             raise ValueError(f"pair --accept: {ip!r} in from= is not an address; nothing written")
-        if not a.is_private or a.is_loopback or a.is_link_local or any(a in n for n in skip):
-            raise ValueError(f"pair --accept: {ip} is not a LAN address; nothing written")
+        if not ok:
+            raise ValueError(f"pair --accept: {ip} is not a local-network or VPN address; nothing written")
     raw = base64.b64decode(blob)
     if raw[4:15] != b"ssh-ed25519":
         raise ValueError("pair --accept: the key inside is not an ed25519 key; nothing written")
@@ -5538,8 +5564,18 @@ def selftest_pairing():
     mac_if = ("lo0: flags\n\tinet 127.0.0.1 netmask 0xff000000\nen0: flags\n\tinet 172.20.1.50 netmask 0xffffff00\n"
               "en1: flags\n\tinet 10.0.0.12 netmask\nutun4: flags\n\tinet 100.101.7.9 --> 100.101.7.9\n"
               "en5: flags\n\tinet 203.0.113.5 netmask\nen6: flags\n\tinet 169.254.3.4 netmask\nen7: flags\n\tinet 8.8.4.4\n")
-    assert lan_addresses(mac_if) == ["172.20.1.50", "10.0.0.12"], lan_addresses(mac_if)   # no tailnet, public, test-net
-    assert lan_addresses("2: eth0    inet 10.1.2.3/24 brd\n3: docker0    inet 172.17.0.1/16") == ["10.1.2.3", "172.17.0.1"]
+    # target-setup-guide: the VPN address (owner 2026-11-07) unless --no-vpn; never public, test-net or link-local
+    assert lan_addresses(mac_if) == ["172.20.1.50", "10.0.0.12", "100.101.7.9"], lan_addresses(mac_if)
+    assert lan_addresses(mac_if, vpn=False) == ["172.20.1.50", "10.0.0.12"]
+    assert lan_addresses("2: eth0    inet 10.1.2.3/24 brd\n3: docker0    inet 172.17.0.1/16\n"
+                         "4: br-5f7    inet 172.18.0.1/16\n5: tailscale0    inet 100.104.1.2/32") == ["10.1.2.3", "100.104.1.2"]
+    ok_line = 'from="10.0.0.12,100.101.7.9",' + PAIR_OPTS + " ssh-ed25519 " + \
+        base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00" * 36).decode() + " desktape-pair-box3@mini"
+    assert check_pair_line(ok_line)[0] == ["10.0.0.12", "100.101.7.9"]
+    try:
+        check_pair_line(ok_line.replace("100.101.7.9", "8.8.8.8")); raise AssertionError("a public address was accepted")
+    except ValueError as e:
+        assert "not a local-network or VPN address" in str(e), e
     assert lan_addresses("   IPv4 Address. . . . . . . . . . . : 172.20.1.50\n") == ["172.20.1.50"]
     line = pair_line("ssh-ed25519 AAAAC3Nza key-comment\n", ["172.20.1.50", "10.0.0.12"], "desktape-pair-box1@mini")
     assert line == ('from="172.20.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty '
@@ -5578,6 +5614,32 @@ def selftest_pairing():
                                  text=True, env={**os.environ, "HOME": d}).stdout
             assert "left 0" in out and open(ak).read() == "ssh-ed25519 AAA1 me@laptop\nssh-ed25519 AAA3 desktape-pair-box1@mini-other\n", (out, open(ak).read())
     assert "EncodedCommand" in remove_line_cmd("windows", "desktape-pair-box1@mini")
+    # target-setup-guide D3: pairing before the address is known, then with it; the same key and line
+    import io
+    with tempfile.TemporaryDirectory() as d:
+        real_key, old = globals()["pair_key"], os.environ.get("DESKTAPE_TARGETS")
+        globals()["pair_key"] = lambda name: os.path.join(d, f"desktape_{name}_ed25519")
+        os.environ["DESKTAPE_TARGETS"] = os.path.join(d, "targets.yaml")
+        open(os.environ["DESKTAPE_TARGETS"], "w").write("targets: {}\n")
+        ns = dict(name="box3", accept=None, check=False, user=None, os="windows", label=None, from_addr="10.0.0.12",
+                  no_vpn=False)
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_pair(argparse.Namespace(host=None, **ns))
+            first = out.getvalue()
+            assert GUIDE_URL in first and "Állítsd be ezt a gépet" in first and "box3" not in load_targets()["targets"], first
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_pair(argparse.Namespace(host="10.0.0.23", **{**ns, "user": "demo"}))
+            line1 = next(l for l in first.splitlines() if l.startswith("from="))
+            assert line1 in out.getvalue() and load_targets()["targets"]["box3"]["host"] == "10.0.0.23", out.getvalue()
+        finally:
+            globals()["pair_key"] = real_key
+            if old is None:
+                os.environ.pop("DESKTAPE_TARGETS", None)
+            else:
+                os.environ["DESKTAPE_TARGETS"] = old
 
 
 def selftest_record():
@@ -6714,14 +6776,15 @@ def selftest():
             raise AssertionError(f"accepted {bad}")
         except ValueError:
             pass
-    # target-pairing §2: the target accepts only the exact line, LAN addresses only, and replaces its own earlier one
+    # target-pairing §2: the target accepts only the exact line, local-network and (since target-setup-guide) VPN
+    # addresses only, and replaces its own earlier one
     raw = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + bytes(range(32))
     blob = base64.b64encode(raw).decode()
     good = f'from="10.20.30.10,10.20.30.11",{PAIR_OPTS} ssh-ed25519 {blob} desktape-pair-box1@macmini'
     addrs, fp, comment = check_pair_line(good)
     assert addrs == ["10.20.30.10", "10.20.30.11"] and comment == "desktape-pair-box1@macmini" and fp.startswith("SHA256:")
     for bad in (good.replace("no-pty", "pty"), good.replace("10.20.30.11", "8.8.8.8"),
-                good.replace("10.20.30.11", "100.64.0.1"), good + " extra", good.replace("ssh-ed25519", "ssh-rsa")):
+                good.replace("10.20.30.11", "100.128.0.1"), good + " extra", good.replace("ssh-ed25519", "ssh-rsa")):
         try:
             check_pair_line(bad)
             raise AssertionError(f"accepted {bad[:60]}")
@@ -6904,7 +6967,9 @@ def main():
     p = sub.add_parser("pair", help="pair this controller with a target: its own key, one restricted line (target-pairing)")
     p.add_argument("name", nargs="?")                         # --host (common) is the target's address here
     p.add_argument("--user"); p.add_argument("--os", choices=list(OSES)); p.add_argument("--label")
-    p.add_argument("--from", dest="from_addr", metavar="IP,IP", help="the addresses for from= (default: this machine's LAN IPv4)")
+    p.add_argument("--from", dest="from_addr", metavar="IP,IP",
+                   help="the addresses for from= (default: this machine's local-network and VPN IPv4)")
+    p.add_argument("--no-vpn", action="store_true", help="leave VPN addresses (100.64.0.0/10) out of from=")
     p.add_argument("--check", action="store_true", help="key login, then the driver's window list")
     p.add_argument("--accept", metavar="LINE", help="on the target: add the controller's printed line (or @file holding it) for this user")
     p = sub.add_parser("unpair", help="take a paired target's line back, then the key and the profile")

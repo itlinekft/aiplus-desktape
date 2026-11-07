@@ -6,7 +6,14 @@ approved; a person or a Claude session on the controller can follow this page. O
 `target-pairing`.
 
 The rules, from the owner (2026-10-25): a key, never a password; the key only in the target user's own
-`authorized_keys`; `from=` the controller's LAN addresses; LAN only; `unpair` removes it again.
+`authorized_keys`; `from=` the controller's addresses; `unpair` removes it again. Since 2026-11-07 ("lokális
+hálózat és VPN is") those addresses are the local network's **and the VPN's** (`100.64.0.0/10`, Tailscale's range;
+`--no-vpn` leaves them out); a public address is still never added.
+
+**A new target with Claude on it:** run `pair NAME` (no `--host` needed yet) and paste the request it prints into
+the Claude on the new computer: it follows [`setup-target.md`](setup-target.md) (SSH server, this line, the pinned
+Cua Driver, ffmpeg), asking before each step, and ends with a report holding the target's address. Then
+`pair NAME --host user@address --os windows` adds it to the targets file, and `pair NAME --check`.
 
 ## 1. On the controller: make the key and the line
 
@@ -24,7 +31,8 @@ It prints:
   from="172.20.1.50,10.0.0.12",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA… desktape-pair-box1@mini
   ```
 
-  `from=` lists the controller's private LAN addresses (a tailnet or public address is never added;
+  `from=` lists the controller's local-network and VPN addresses (container bridges and public addresses are never
+  added;
   `--from` overrides). The key cannot forward ports, agents or X11, and gets no terminal;
 - the target `box1` added to the controller's targets file, marked `paired:`.
 

@@ -18,6 +18,11 @@ Ask once, if it is not clear: is the program on **this** computer, or on another
 `--local`. ffmpeg is required on the driven machine either way: `doctor` checks it, and over SSH it checks the
 named target's.
 
+**A new machine to drive, not set up yet?** `dt pair NAME` (no address needed yet) makes its key and prints a request
+for the person to paste into the Claude on that machine; that Claude follows `docs/setup-target.md` from the public
+repository with them and reports back the address; then `dt pair NAME --host user@address --os windows` and
+`dt pair NAME --check`. Local network and VPN both work; a public address is never paired.
+
 ## 2. Check: `doctor` installs nothing
 
 ```bash

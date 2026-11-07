@@ -34,6 +34,14 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   in the page's language; a stuck, blocked or failed session marks its screen red and counts in the tab's title.
 - The panel's audit counts frame calls and writes one line a minute per target instead of one per frame.
 
+- `docs/setup-target.md`: a guide for the Claude on a new target computer (Windows; macOS by its setup page;
+  Linux is not a target yet): SSH server limited to the local network and VPN, the controller's pairing line, the
+  pinned Cua Driver with its installer's checksum, ffmpeg, the screen kept awake with the person's yes, and a
+  report to carry back. `pair NAME` without `--host` makes the key and the line and prints the request to paste
+  into that Claude; `pair NAME --host …` adds the target afterwards.
+- Pairing accepts the controller's VPN addresses (`100.64.0.0/10`, such as Tailscale) besides the local network's
+  (`--no-vpn` leaves them out), and no longer puts container bridges (docker, br-, veth …) into `from=`.
+
 ### Fixed
 - Web pages (Edge, Chrome): `click` on a button outside the visible part of the window scrolls it into view first;
   before, Chromium accepted the element click and nothing happened. A web element that a few scrolls do not bring in
