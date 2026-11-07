@@ -181,7 +181,9 @@ JSON files next to the lock files; every locked command and every booking change
 
 **The panel.** `desktape.py panel` serves a page on http://127.0.0.1:8645/ (`--port`, `--bind`): every target,
 whether its SSH port answers, who holds it with which command, its session state, its bookings and its last
-commands, refreshed every 3 s. The **Live screens** tab (`#cctv`) shows the targets' whole screens in a grid at
+commands (one project's run of commands folded into one line), and a 24-hour strip of its bookings and current
+hold, refreshed every 3 s; a machine whose session is stuck, blocked or failed gets a red frame and is counted in the
+tab's title. The **Live screens** tab (`#cctv`) shows the targets' whole screens in a grid at
 about one frame per second: choose the columns, the frame rate, the image size and the targets; full screen with
 the button or `f`; a click on a screen shows it alone. Frames come from the driver's read-only `get_desktop_state`
 under the panel's own session, only while the tab is open, with no lock. The page shows everything on the screens,
@@ -191,8 +193,14 @@ so the panel listens only on this machine unless `--bind` says otherwise.
 (1920 px) and faster (4 frames per second by default, "Zoomed" in the toolbar). There the first click or key press
 takes the machine: clicks, right clicks, the wheel and the keyboard (accented text, Enter, Tab, arrows, Ctrl and Alt
 combinations) go to its screen at the point you see. While you have it, the machine's lock is held by `panel`, so an
-agent's command waits and stops as for any other holder; and you cannot take a machine an agent holds or another
-project has booked: the page says who has it. "Back", two minutes without input, or closing the page gives it back.
+agent's command waits and stops as for any other holder; and you cannot take a machine where an agent's command
+runs or another project has booked: the page says who has it. When an agent only keeps its lease (its last command
+ended less than 3 minutes ago), **Take over** in the bar above the screen takes it; when you give it back, the
+agent's lease and session state come back and its next command runs. A quick second click is a double click; press,
+move and release is a drag (select text, move a window, a slider). The bar's **Esc**, **Start** and **Alt+Tab**
+send what the browser keeps for itself; in full screen Chrome also passes Escape and its own shortcuts (hold Esc to
+leave). A yellow ring marks where your click went. "Back", two minutes without input, or closing the page gives it
+back.
 Control works only when the panel listens on 127.0.0.1, and only from the page it served (a per-start token).
 What the driver cannot reach, a person still does at the machine or over RDP: the Windows UAC prompt and lock
 screen, the macOS lock screen; and a Windows box whose desktop lives in an RDP session still needs that session.

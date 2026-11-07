@@ -28,7 +28,7 @@
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
   main { padding: 16px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 14px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
   .card h2 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--off); flex: none; }
@@ -36,8 +36,21 @@
   .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
            color: #fff; background: var(--off); white-space: nowrap; }
   .badge.free { background: var(--free); } .badge.busy { background: var(--busy); }
-  .badge.lease { background: var(--busy); opacity: .75; } .badge.booked { background: var(--booked); }
-  .badge.bad { background: var(--bad); } .badge.ctl { background: var(--ctl); }
+  .badge.lease { background: transparent; color: var(--busy); box-shadow: inset 0 0 0 1.5px var(--busy); }
+  .badge.booked { background: var(--booked); } .badge.bad { background: var(--bad); } .badge.ctl { background: var(--ctl); }
+  @media (prefers-color-scheme: dark) {
+    .badge.free, .badge.busy, .badge.booked, .badge.bad, .badge.ctl { color: #0d1117; }
+  }
+  .tile .badge.lease { background: #000a; }
+  .strip { position: relative; height: 22px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+           margin-top: 4px; overflow: hidden; }
+  .strip .blk { position: absolute; top: 0; bottom: 0; background: var(--booked); color: #fff; font-size: 11px;
+                line-height: 20px; padding: 0 4px; white-space: nowrap; overflow: hidden; border-radius: 3px; min-width: 2px; }
+  .strip .blk.hold { background: var(--busy); }
+  .strip .now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); }
+  .ticks { position: relative; height: 14px; font-size: 10px; color: var(--muted); }
+  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  @media (prefers-color-scheme: dark) { .strip .blk { color: #0d1117; } }
   .row { margin-top: 8px; }
   .label { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   ul.plain { list-style: none; padding: 0; margin: 4px 0 0; }
@@ -68,14 +81,21 @@
   .tile .top > * { flex: none; }
   .tile .top .cmd { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #fff; }
   .tile .bottom { bottom: 0; justify-content: flex-end; background: linear-gradient(#0000, #000a); font-size: 12px; }
+  .tile.bad { outline: 3px solid var(--bad); outline-offset: -3px; }
+  .tile .mark { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 2px solid #ffd60a;
+                border-radius: 50%; box-shadow: 0 0 0 2px #000a; pointer-events: none; display: none; z-index: 2; }
   .tile .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                color: #ddd; padding: 20px; text-align: center; font-size: 13px; pointer-events: none; }
   body.solo .tile { cursor: crosshair; }
-  body.solo .tile .top { opacity: .25; transition: opacity .2s; }
-  body.solo .tile:hover .top { opacity: 1; }
-  .back { position: absolute; top: 6px; right: 8px; z-index: 3; pointer-events: auto; font: 13px system-ui, sans-serif;
-          padding: 3px 10px; border-radius: 6px; border: 0; background: #000b; color: #fff; cursor: pointer; display: none; }
-  body.solo .back { display: block; }
+  body.solo .tile .ov { display: none; }
+  #solobar { display: none; height: 32px; align-items: center; gap: 8px; padding: 0 8px; background: #111; color: #eee;
+             font-size: 13px; white-space: nowrap; overflow: hidden; }
+  body.solo #solobar { display: flex; }
+  body.solo .tools { display: none; }
+  #solobar button { font: 13px system-ui, sans-serif; padding: 3px 10px; border-radius: 6px; border: 1px solid #444;
+                    background: #222; color: #fff; cursor: pointer; flex: none; }
+  #solobar button.take { background: var(--ctl); border-color: var(--ctl); }
+  #solobar .state { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tile.ctl { outline: 3px solid var(--ctl); outline-offset: -3px; }
   .toast { position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%); background: #000d; color: #fff;
            padding: 6px 12px; border-radius: 6px; font-size: 13px; pointer-events: none; display: none; max-width: 90%; }
@@ -113,6 +133,7 @@
       <span id="picks"></span>
       <button id="fsbtn" data-t="fullscreen">Teljes képernyő</button>
     </div>
+    <div id="solobar"></div>
     <div class="grid" id="grid"></div>
   </section>
 </main>
@@ -130,7 +151,11 @@ const HU = {
   book: "foglalás", unbook: "foglalás törölve", ctlstart: "kézi vezérlés", ctlend: "kézi vezérlés vége",
   back: "✕ Vissza", control: "Kézi vezérlés", ctlon: "Kézi vezérlés: a kattintás és a billentyűk a gépre mennek",
   ctloff: "Kattints a képre: az első kattintás átveszi a gépet", ctlrefused: "Nem vehető át",
-  release: "Elengedés", viewonly: "Csak nézet (a panel nem ezen a gépen figyel)"
+  release: "Elengedés", viewonly: "Csak nézet (a panel nem ezen a gépen figyel)",
+  takeover: "Átveszem", takeoverHint: "az „Átveszem” gomb fent átveszi a lease-t", tookover: "átvéve tőle",
+  ctltake: "lease átvétele", heldRun: "{label} parancsa fut ({command})", heldLease: "{label} lease-e {until}-ig",
+  bookedBy: "{label} foglalta {until}-ig", cmds: "parancs", kEsc: "Esc", kStart: "Start", kAltTab: "Alt+Tab",
+  hold: "használja", now: "most", badCount: "gépen gond van"
 };
 const EN = {
   status: "Status", cctv: "Live screens", cols: "Columns", fps: "Frames/s", solofps: "Zoomed", size: "Size",
@@ -144,7 +169,11 @@ const EN = {
   book: "booking", unbook: "booking removed", ctlstart: "manual control", ctlend: "manual control ended",
   back: "✕ Back", control: "Manual control", ctlon: "Manual control: clicks and keys go to the machine",
   ctloff: "Click the screen: the first click takes the machine", ctlrefused: "Cannot take it",
-  release: "Release", viewonly: "View only (the panel does not listen on this machine)"
+  release: "Release", viewonly: "View only (the panel does not listen on this machine)",
+  takeover: "Take over", takeoverHint: "the \u201cTake over\u201d button above takes the lease", tookover: "taken over from",
+  ctltake: "lease taken over", heldRun: "{label} is running a command ({command})", heldLease: "{label} keeps a lease until {until}",
+  bookedBy: "booked by {label} until {until}", cmds: "commands", kEsc: "Esc", kStart: "Start", kAltTab: "Alt+Tab",
+  hold: "holds it", now: "now", badCount: "machines need a look"
 };
 const params = new URLSearchParams(location.search);
 const lang = params.get("lang") || ((navigator.language || "hu").toLowerCase().startsWith("hu") ? "hu" : "en");
@@ -165,6 +194,7 @@ const ago = (t, now) => {
   const s = Math.max(0, Math.round(now - t));
   return s < 90 ? `${s} ${T.sec}` : s < 5400 ? `${Math.round(s / 60)} ${T.min}` : `${(s / 3600).toFixed(1)} ${T.h}`;
 };
+const fill = (tpl, o) => tpl.replace(/\{(\w+)\}/g, (_, k) => o[k] ?? "");
 const short = (s, n) => { s = String(s ?? "").replace(/\s+/g, " "); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const store = {
   get(k, d) { try { const v = localStorage.getItem("desktape-panel-" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -193,8 +223,48 @@ function actLine(a, now) {
     : a.event === "book" ? `${T.book} ${day(a.at)}–${hm(a.until)}${a.note ? " · " + esc(a.note) : ""}`
     : a.event === "unbook" ? `${T.unbook} (${esc(a.id)})`
     : a.event === "control-start" ? T.ctlstart
+    : a.event === "control-takeover" ? `${T.ctltake} (${T.tookover} ${esc(a.replaced)})`
     : a.event === "control-end" ? `${T.ctlend} (${esc(a.why)})` : esc(a.event);
   return `<li><span class="muted small">${ago(a.at, now)} ${T.ago}</span> · <b>${esc(a.label)}</b> · ${what}</li>`;
+}
+/* Consecutive commands of one project fold into one line (panel-polish D5); the list is newest first. */
+function foldedActs(list, now) {
+  const groups = [];
+  for (const a of list) {
+    const g = groups[groups.length - 1];
+    if (a.event === "end" && g && g.end && g.items[0].label === a.label) g.items.push(a);
+    else groups.push({end: a.event === "end", items: [a]});
+  }
+  return groups.slice(0, 8).map(g => {
+    if (g.items.length === 1) return actLine(g.items[0], now);
+    const newest = g.items[0], oldest = g.items[g.items.length - 1];
+    const err = newest.error ? ` · <span class="err">${esc(short(newest.error, 120))}</span>` : "";
+    return `<li><span class="muted small">${ago(newest.at, now)} ${T.ago}</span> · <b>${esc(newest.label)}</b> · ` +
+      `${g.items.length} ${T.cmds} · ${hm(oldest.at - (oldest.seconds || 0))}–${hm(newest.at)} · ` +
+      `<code title="${esc(newest.command)}">${esc(short(newest.command, 50))}</code>${err}</li>`;
+  }).join("");
+}
+/* A 24-hour strip from an hour ago: bookings, the current hold, now (panel-polish D5). */
+function strip(t, now) {
+  const t0 = now - 3600, span = 24 * 3600, pos = x => Math.max(0, Math.min(100, (x - t0) / span * 100));
+  const blk = (a, b, cls, text, tip) => b <= t0 || a >= t0 + span ? "" :
+    `<div class="blk ${cls}" style="left:${pos(a)}%;width:${Math.max(0.3, pos(b) - pos(a))}%" title="${esc(tip)}">${esc(text)}</div>`;
+  const L = t.lock;
+  let html = t.bookings.map(b => blk(b.from, b.until, "", b.label,
+    `${b.label} · ${day(b.from)}–${hm(b.until)}${b.note ? " · " + b.note : ""}`)).join("");
+  if (L && L.held) html += blk(L.since || now, L.running ? now + 60 : L.until, "hold", L.label, `${L.label} ${T.hold}`);
+  html += `<div class="now" style="left:${pos(now)}%" title="${T.now}"></div>`;
+  let ticks = "";
+  const first = Math.ceil(t0 / 10800) * 10800;
+  for (let x = first; x < t0 + span; x += 10800) ticks += `<span style="left:${pos(x)}%">${hm(x)}</span>`;
+  return `<div class="strip">${html}</div><div class="ticks">${ticks}</div>`;
+}
+/* A refusal from the server's fields, in the page's language (panel-polish D4). */
+function wordBlock(b) {
+  if (!b) return "";
+  if (b.kind === "booked") return fill(T.bookedBy, {label: b.label, until: hm(b.until)});
+  return b.running ? fill(T.heldRun, {label: b.label, command: short(b.command, 60)})
+                   : fill(T.heldLease, {label: b.label, until: hm(b.until)});
 }
 
 function renderStatus() {
@@ -206,15 +276,16 @@ function renderStatus() {
     const L = t.lock;
     let lockHtml = `<span class="muted">${T.nobody}</span>`;
     if (L && L.held) {
-      lockHtml = `<b>${esc(L.label)}</b> · <code>${esc(L.command)}</code> · ${T.since} ${hm(L.since)}` +
-        (L.running ? ` · pid ${esc(L.pid)}` : ` · ${T.until} ${hm(L.until)}`);
+      lockHtml = `<b>${esc(L.label)}</b> · <code title="${esc(L.command)}">${esc(short(L.command, 60))}</code> · ${T.since} ${hm(L.since)}` +
+        (L.running ? ` · pid ${esc(L.pid)}` : ` · ${T.until} ${hm(L.until)}`) +
+        (L.took_from ? ` · <span class="muted">${T.tookover} ${esc(L.took_from)}</span>` : "");
     }
     let sess = "";
     if (L && L.state) {
       const bad = ["failed", "stuck", "blocked"].includes(L.state);
       sess = `<div class="row"><span class="label">${T.session}</span>
         <span class="badge ${bad ? "bad" : "free"}">${esc(L.state)}</span>
-        ${L.step ? ` ${T.step}: <code>${esc(L.step)}</code>` : ""}
+        ${L.step ? ` ${T.step}: <code title="${esc(L.step)}">${esc(short(L.step, 60))}</code>` : ""}
         ${L.strikes ? ` · ${T.strikes}: ${esc(L.strikes)}` : ""}
         ${L.last_ok_at ? ` · ${T.lastok}: ${ago(L.last_ok_at, now)} ${T.ago}` : ""}
         ${L.error && bad ? `<div class="err small">${esc(L.error)}</div>` : ""}</div>`;
@@ -222,14 +293,14 @@ function renderStatus() {
     const books = t.bookings.length ? `<ul class="plain">${t.bookings.map(b =>
       `<li><b>${esc(b.label)}</b> · ${day(b.from)}–${hm(b.until)}${b.note ? " · " + esc(b.note) : ""} <span class="muted small">(${esc(b.id)})</span></li>`).join("")}</ul>`
       : `<span class="muted">${T.none}</span>`;
-    const acts = t.activity.length ? `<ul class="plain small">${t.activity.map(a => actLine(a, now)).join("")}</ul>`
+    const acts = t.activity.length ? `<ul class="plain small">${foldedActs(t.activity, now)}</ul>`
       : `<span class="muted">${T.none}</span>`;
     return `<div class="card">
       <h2>${reachDot(t)}${esc(t.name)} <span class="spacer"></span>${badge(t)}</h2>
       <div class="muted small">${esc(t.label || t.host)}${t.os ? " · " + esc(t.os) : ""}</div>
       <div class="row"><span class="label">${T.holder}</span>${lockHtml}</div>
       ${sess}
-      <div class="row"><span class="label">${T.bookings}</span>${books}</div>
+      <div class="row"><span class="label">${T.bookings}</span>${strip(t, now)}${books}</div>
       <div class="row"><span class="label">${T.activity}</span>${acts}</div>
       ${t.note ? `<details><summary>${T.note}</summary><div class="small">${esc(t.note)}</div></details>` : ""}
     </div>`;
@@ -281,7 +352,7 @@ function layout() {
     if (tiles[n].el.parentNode !== grid) grid.appendChild(tiles[n].el);
   }
   const gap = isFs() ? 2 : 6;
-  const top = isFs() ? 0 : grid.getBoundingClientRect().top;
+  const top = isFs() ? (solo ? 32 : 0) : grid.getBoundingClientRect().top;      // the zoomed view's bar (D1)
   const W = (isFs() ? window.innerWidth : grid.parentElement.clientWidth) - (isFs() ? 0 : 0);
   const H = window.innerHeight - top - (isFs() ? 0 : 8);
   const {c, w} = fit(names.length, W, H, gap, solo ? "1" : $("cols").value);
@@ -294,9 +365,10 @@ function makeTile(n) {
   const el = document.createElement("div");
   el.className = "tile";
   el.innerHTML = `<img alt="" draggable="false"><div class="msg">${T.noframe}</div><div class="ov top"></div>` +
-    `<div class="ov bottom"></div><button class="back">${T.back}</button><div class="toast"></div>`;
+    `<div class="ov bottom"></div><div class="mark"></div><div class="toast"></div>`;
   const tile = {el, img: el.querySelector("img"), url: null, at: 0, err: null, busy: false};
-  el.querySelector(".back").onclick = e => { e.stopPropagation(); leaveSolo(); };
+  el.addEventListener("mousedown", e => { if (solo && e.button === 0) { e.preventDefault(); control.down(n, e); } });
+  el.addEventListener("mouseup", e => { if (solo && e.button === 0) control.up(n, e); });
   el.addEventListener("click", e => {
     if (!solo) { enterSolo(n); return; }
     control.click(n, e, "left");
@@ -305,13 +377,22 @@ function makeTile(n) {
   el.addEventListener("wheel", e => { if (solo) { e.preventDefault(); control.wheel(n, e); } }, {passive: false});
   return tile;
 }
+const keyLock = on => {        // D1: in full screen Escape and browser shortcuts reach the page (Chromium)
+  try {
+    if (!navigator.keyboard) return;
+    if (on) navigator.keyboard.lock().catch(() => {}); else navigator.keyboard.unlock();
+  } catch (e) { /* not offered by this browser */ }
+};
 function enterSolo(n) {
   solo = n; layout(); cctvLoop();
   if (!document.fullscreenElement && document.documentElement.requestFullscreen)
-    document.documentElement.requestFullscreen().catch(() => { document.body.classList.add("fs"); layout(); });
+    document.documentElement.requestFullscreen().then(() => keyLock(true))
+      .catch(() => { document.body.classList.add("fs"); layout(); });
+  else keyLock(true);
 }
 function leaveSolo() {
   if (control.on) control.stop();
+  keyLock(false);
   solo = null;
   if (document.fullscreenElement && !store.get("fsgrid", false)) document.exitFullscreen();
   else { document.body.classList.remove("fs"); layout(); }
@@ -330,9 +411,11 @@ function overlays() {
     const t = data.targets.find(x => x.name === n);
     if (!t) continue;
     tile.el.classList.toggle("ctl", !!(control.on === n));
+    tile.el.classList.toggle("bad", isBad(t));
     tile.el.querySelector(".top").innerHTML = `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
-      (t.lock && t.lock.held && !t.control ? ` <code class="cmd" title="${esc(t.lock.command)}">${esc(short(t.lock.command, 80))}</code>` : "") +
-      (solo === n ? ` <span>${!data.control_enabled ? T.viewonly : control.on === n ? T.ctlon : T.ctloff}</span>` : "");
+      (isBad(t) ? ` <span class="badge bad">${esc(t.lock.state)}</span>` : "") +
+      (t.lock && t.lock.held && !t.control ? ` <code class="cmd" title="${esc(t.lock.command)}">${esc(short(t.lock.command, 80))}</code>` : "");
+    if (solo === n) soloBar(t);
     const old = tile.at && now - tile.at > Math.max(3 / fps, 4);
     tile.el.classList.toggle("stale", !!(tile.at && old));
     tile.el.querySelector(".bottom").innerHTML = tile.at
@@ -341,6 +424,49 @@ function overlays() {
     msg.style.display = !tile.at || tile.err ? "flex" : "none";
     msg.innerHTML = tile.err ? `<span class="err">${T.error}: ${esc(tile.err)}</span>` : T.noframe;
   }
+}
+const isBad = t => !!(t.lock && ["stuck", "blocked", "failed"].includes(t.lock.state));
+function canTakeOver(t) {
+  const L = t.lock;
+  return !!(L && L.held && !L.running && !t.control && L.label !== "panel" &&
+            !(t.booked_now && t.booked_now.label !== "panel"));
+}
+/* The zoomed view's bar (D1): Back, state, the keys a browser keeps, Take over. */
+function soloBar(t) {
+  const bar = $("solobar"), n = t.name;
+  const state = !data.control_enabled ? T.viewonly : control.on === n ? T.ctlon
+    : canTakeOver(t) ? wordBlock({kind: "held", label: t.lock.label, until: t.lock.until}) : T.ctloff;
+  const key = `${n}|${state}|${canTakeOver(t)}|${data.control_enabled}|${badge(t)}|${t.reach && t.reach.ok}`;
+  if (bar.dataset.key === key) return;
+  bar.dataset.key = key;
+  bar.innerHTML = `<button data-a="back">${T.back}</button>${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
+    `<span class="state">${esc(state)}</span><span class="spacer"></span>` +
+    (canTakeOver(t) && data.control_enabled ? `<button class="take" data-a="take">${T.takeover}</button>` : "") +
+    (data.control_enabled ? `<button data-a="esc">${T.kEsc}</button><button data-a="start">${T.kStart}</button>` +
+      `<button data-a="alttab">${T.kAltTab}</button>` : "");
+  bar.querySelectorAll("button").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const a = b.dataset.a;
+    if (a === "back") return leaveSolo();
+    if (a === "take") return control.send(n, {op: "start", takeover: true});
+    control.flush(n);
+    control.send(n, a === "esc" ? {op: "key", key: "escape"} : a === "start" ? {op: "hotkey", keys: ["ctrl", "escape"]}
+                                : {op: "hotkey", keys: ["alt", "tab"]});
+  });
+}
+function showMark(n, p) {       // D2: where the click went, until the next frame
+  const t = tiles[n]; if (!t) return;
+  t.markAt = Date.now(); t.markP = p; placeMark(n);
+  clearTimeout(t.markTimer); t.markTimer = setTimeout(() => { t.el.querySelector(".mark").style.display = "none"; }, 1500);
+}
+function placeMark(n) {
+  const t = tiles[n], m = t.el.querySelector(".mark");
+  if (!t.markP || !t.img.naturalWidth) return;
+  const r = t.img.getBoundingClientRect(), er = t.el.getBoundingClientRect();
+  const sc = Math.min(r.width / t.markP.w, r.height / t.markP.h);
+  m.style.left = `${r.left - er.left + (r.width - t.markP.w * sc) / 2 + t.markP.x * sc}px`;
+  m.style.top = `${r.top - er.top + (r.height - t.markP.h * sc) / 2 + t.markP.y * sc}px`;
+  m.style.display = "block";
 }
 async function pull(n) {
   const tile = tiles[n];
@@ -355,6 +481,7 @@ async function pull(n) {
       tile.img.onload = () => {
         if (tile.url) URL.revokeObjectURL(tile.url);
         tile.url = url;
+        if (tile.markAt && at * 1000 > tile.markAt + 300) tile.el.querySelector(".mark").style.display = "none";
         const a = tile.img.naturalWidth / tile.img.naturalHeight;
         if (a && Math.abs(a - aspect) > 0.01) { aspect = a; layout(); }
       };
@@ -392,7 +519,9 @@ const control = {
         if (r.ok) { this.on = out.on ? n : null; }
         else {
           if (r.status === 409) this.on = null;
-          toast(n, `${r.status === 409 ? T.ctlrefused : T.error}: ${out.error || r.status}`, 5000);
+          const why = wordBlock(out.block) || out.error || r.status;
+          toast(n, `${r.status === 409 ? T.ctlrefused : T.error}: ${why}` +
+                   (out.block && out.block.takeover ? ` — ${T.takeoverHint}` : ""), 6000);
         }
       } catch (e) { toast(n, T.noserver); }
       overlays();
@@ -410,10 +539,33 @@ const control = {
   },
   click(n, e, button) {
     if (!data || !data.control_enabled) { toast(n, T.viewonly); return; }
+    if (this.dragged) { this.dragged = false; return; }       // the release of a drag is not a click
     const p = this.point(n, e);
     if (!p) return;
+    this.flushText(n);
+    showMark(n, p);
+    if (button !== "left") { this.send(n, {op: "click", button, ...p}); return; }
+    // D2: a second click within 250 ms and 6 px is one double click, not two clicks
+    const pend = this.pend;
+    if (pend && pend.n === n && Math.hypot(pend.p.x - p.x, pend.p.y - p.y) <= 6 * p.w / (tiles[n].img.getBoundingClientRect().width || p.w)) {
+      clearTimeout(pend.timer); this.pend = null;
+      this.send(n, {op: "click", button, count: 2, ...pend.p});
+      return;
+    }
+    if (pend) { clearTimeout(pend.timer); this.pend = null; this.send(pend.n, {op: "click", button, ...pend.p}); }
+    this.pend = {n, p, timer: setTimeout(() => { this.pend = null; this.send(n, {op: "click", button, ...p}); }, 250)};
+  },
+  down(n, e) { this.press = {n, x: e.clientX, y: e.clientY, t: Date.now(), p: this.point(n, e)}; },
+  up(n, e) {
+    const pr = this.press; this.press = null;
+    if (!pr || pr.n !== n || !pr.p || Math.hypot(e.clientX - pr.x, e.clientY - pr.y) <= 6) return;
+    const q = this.point(n, e);
+    if (!q || !data || !data.control_enabled) return;
+    this.dragged = true;                       // the click event that follows is swallowed
     this.flush(n);
-    this.send(n, {op: "click", button, ...p});
+    showMark(n, q);
+    this.send(n, {op: "drag", from_x: pr.p.x, from_y: pr.p.y, to_x: q.x, to_y: q.y, w: q.w, h: q.h,
+                  duration_ms: Math.min(3000, Math.max(100, Date.now() - pr.t))});
   },
   wheel(n, e) {
     if (!data || !data.control_enabled || this.on !== n) return;
@@ -422,12 +574,20 @@ const control = {
     this.wheelAcc += e.deltaY;
     clearTimeout(this.wheelTimer);
     this.wheelTimer = setTimeout(() => {
+      this.flush(n);
       const amount = Math.min(10, Math.max(1, Math.round(Math.abs(this.wheelAcc) / 100)));
       this.send(n, {op: "scroll", direction: this.wheelAcc > 0 ? "down" : "up", amount, ...p});
       this.wheelAcc = 0;
     }, 120);
   },
   flush(n) {
+    if (this.pend && this.pend.n === n) {       // a waiting single click goes before the next input
+      const pend = this.pend; clearTimeout(pend.timer); this.pend = null;
+      this.send(n, {op: "click", button: "left", ...pend.p});
+    }
+    this.flushText(n);
+  },
+  flushText(n) {
     clearTimeout(this.textTimer);
     if (this.text) { const text = this.text; this.text = ""; this.send(n, {op: "type", text}); }
   },
@@ -501,6 +661,8 @@ async function poll() {
     const r = await fetch("api/status", {cache: "no-store"});
     data = await r.json(); serverDown = false;
     $("updated").textContent = `${T.updated} ${new Date().toLocaleTimeString(lang)}`;
+    const bad = data.targets.filter(isBad).length;              // D6
+    document.title = (bad ? `⚠ ${bad} · ` : "") + "desktape panel";
     if (control.on) {                         // the server let go (idle, or the lock was lost)
       const t = data.targets.find(x => x.name === control.on);
       if (t && !t.control) control.on = null;

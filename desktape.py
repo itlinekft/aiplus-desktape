@@ -43,7 +43,8 @@ ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_
            "set_window_frame",   # geometry only, for a tape's `window:` (runner-robustness D2)
            "set_value",          # a field's value, like typing, where a control hides its items (data-driven-import D1)
            "set_agent_cursor_enabled",   # only to hide the agent cursor for a `cursor: person` video (person-cursor D1)
-           "get_desktop_state"}   # read-only whole-screen PNG, for the panel's live screens (booking-and-panel D6)
+           "get_desktop_state",   # read-only whole-screen PNG, for the panel's live screens (booking-and-panel D6)
+           "drag"}                # only the panel's control sends it, for a person's drag (panel-polish D2)
 DEFAULT_HOST = None   # no built-in host: set DESKTAPE_HOST or pass --host
 
 
@@ -421,8 +422,11 @@ class Cua:
                  "summary": text[:160]}
         if isinstance(res.get("structuredContent"), dict) and "effect" in res["structuredContent"]:
             entry["effect"] = res["structuredContent"]["effect"]     # newer drivers judge the action themselves
-        self.audit.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        self.audit.flush()
+        if ok and tool in getattr(self, "summarize", ()):
+            self.count_call(tool, t0, entry["ms"])                   # panel-polish D7: one line a minute
+        else:
+            self.audit.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self.audit.flush()
         if not ok:
             raise RuntimeError(f"{tool} failed: {text[:300] or r.get('error')}")
         self.last = res                           # the whole result, for a screenshot (macos-target D4)
@@ -454,7 +458,26 @@ class Cua:
         self.call("set_agent_cursor_enabled", {"enabled": False})
         logger.info("agent cursor hidden for session %s on %s", self.session, self.host)
 
+    def count_call(self, tool, t0, ms):
+        """panel-polish D7: successful calls of a `summarize` tool are counted, and written once a minute."""
+        sums = self.__dict__.setdefault("sums", {})
+        s = sums.setdefault(tool, {"ts": t0, "calls": 0, "ms": 0, "ms_max": 0})
+        s["calls"] += 1; s["ms"] += ms; s["ms_max"] = max(s["ms_max"], ms)
+        if t0 - s["ts"] >= 60:
+            self.flush_counts(tool)
+
+    def flush_counts(self, only=None):
+        for tool, s in list(getattr(self, "sums", {}).items()):
+            if only and tool != only or not s["calls"]:
+                continue
+            self.audit.write(json.dumps({"ts": round(s["ts"], 3), "tool": tool, "ok": True, "calls": s["calls"],
+                                         "ms_avg": round(s["ms"] / s["calls"]), "ms_max": s["ms_max"],
+                                         "summary": f"summary of {s['calls']} calls"}) + "\n")
+            self.audit.flush()
+            del self.sums[tool]
+
     def close(self):
+        self.flush_counts()
         self.p.stdin.close(); self.p.terminate(); self.audit.close(); self.err.close()
 
 
@@ -642,10 +665,19 @@ class BoxLock:
             return cur
         return None
 
-    def try_acquire(self, command):
+    def lease_only(self, x):
+        """panel-polish D3: another session's lease with no live process and no booking: a person may take it."""
+        return bool(x) and not x.get("booking") and not self.alive(x.get("pid"))
+
+    def try_acquire(self, command, take_lease=False):
         def take():
             cur = self.read()
             other = self.blocker(cur, self.read_bookings())
+            took = None
+            if other and take_lease and self.lease_only(other):
+                took = {k: v for k, v in other.items() if k != "took_from"}     # given back on unlock (D3)
+                logger.info("%s: %s takes over the lease of %s", self.host, self.label, describe_lock(other))
+                other = None
             if other:
                 return other
             mine = cur and cur.get("holder") == self.holder
@@ -658,6 +690,8 @@ class BoxLock:
                    "since": cur["since"] if mine else t, "until": t + (LEASE if self.keeps else 0)}
             if mine:            # step-effect-check D5: the session's status outlives its commands
                 new.update({k: cur[k] for k in STATUS_FIELDS if k in cur})
+            if took or (mine and cur.get("took_from")):
+                new["took_from"] = took or cur["took_from"]
             self._write(new)
             return None
         return self._under_mutex(take)
@@ -816,6 +850,12 @@ class BoxLock:
                 return "not held"
             if cur.get("holder") != self.holder:
                 return f"held by another session, {describe_lock(cur)}; only the holder can unlock"
+            if cur.get("took_from"):        # panel-polish D3: the session whose lease was taken gets it back
+                back = {**cur["took_from"], "pid": None, "until": self.now() + LEASE}
+                self._write(back)
+                logger.info("lock on %s given back by %s to %s, lease renewed", self.host, self.label,
+                            describe_lock(back))
+                return None
             os.remove(self.path)
             logger.info("lock on %s given back by %s", self.host, self.label)
             return None
@@ -4621,6 +4661,7 @@ class FrameGrabber:
                     with self.io:
                         if self.cua is None:
                             self.cua, self.fresh = self.connect(), False
+                            self.cua.summarize = {"get_desktop_state"}       # panel-polish D7
                             # the driver ends a session with its connection and refuses its label after that
                             # (measured 2026-11-07: "session has ended … use a new session label"): one per connection
                             self.session = f"desktape-panel-{os.getpid()}-{int(time.time() * 1000)}"
@@ -4668,6 +4709,10 @@ def control_call(op, body):
             raise ValueError("scroll needs a direction: up, down, left or right")
         return "scroll", {"x": round(num("x")), "y": round(num("y")), "direction": body["direction"],
                           "amount": min(max(int(body.get("amount") or 1), 1), 10)}, False
+    if op == "drag":
+        return "drag", {"from_x": round(num("from_x")), "from_y": round(num("from_y")), "to_x": round(num("to_x")),
+                        "to_y": round(num("to_y")), "button": "left",
+                        "duration_ms": int(min(max(float(body.get("duration_ms") or 500), 100), 3000))}, False
     if op == "type":
         text = body.get("text")
         if not isinstance(text, str) or not text or len(text) > 500:
@@ -4694,10 +4739,11 @@ def grabber_act(g, op, body):
         if g.cua is None or not g.fresh:
             raise RuntimeError("no live screen on this connection yet; wait for the next frame")
         seen = body.get("w"), body.get("h")
-        if "x" in args and g.frame_wh and all(isinstance(v, (int, float)) and v > 0 for v in seen) \
-                and tuple(seen) != g.frame_wh:
+        if g.frame_wh and all(isinstance(v, (int, float)) and v > 0 for v in seen) and tuple(seen) != g.frame_wh:
             # the page clicked on a frame of another size than the driver's last capture (the size just changed)
-            args["x"], args["y"] = round(args["x"] * g.frame_wh[0] / seen[0]), round(args["y"] * g.frame_wh[1] / seen[1])
+            for kx, ky in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")):
+                if kx in args:
+                    args[kx], args[ky] = round(args[kx] * g.frame_wh[0] / seen[0]), round(args[ky] * g.frame_wh[1] / seen[1])
             logger.debug("panel: %s point rescaled from a %sx%s frame to %sx%s", op, *seen, *g.frame_wh)
         args = {**args, "scope": "desktop", "session": g.session}
         try:
@@ -4725,16 +4771,27 @@ def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, aliv
             lock = {k: cur.get(k) for k in ("label", "command", "since", "until", "state", "step", "strikes", "error",
                                              "last_ok_at", "updated", "stuck")}
             lock.update(running=running, held=running or (cur.get("until") or 0) > now,
-                        pid=cur.get("pid") if running else None)
+                        pid=cur.get("pid") if running else None,
+                        took_from=(cur.get("took_from") or {}).get("label"))
         bookings = [{k: b.get(k) for k in ("id", "label", "from", "until", "note")} for b in lk.read_bookings()]
         out.append({"name": name, "host": host, "label": t.get("label"), "note": t.get("note"),
                     "os": t.get("os") or TARGET_OS.get(host), "lock": lock, "bookings": bookings,
                     "booked_now": next((b for b in bookings if b["from"] <= now < b["until"]), None),
-                    "activity": [x for x in acts if x.get("target") == host][-10:][::-1],
+                    "activity": [x for x in acts if x.get("target") == host][-40:][::-1],   # the page folds runs
                     "reach": (reach or {}).get(host),
                     "frame": grabbers[name].info() if grabbers and name in grabbers else None,
                     "control": {"since": controls[name]["since"]} if controls and name in controls else None})
     return {"now": now, "targets": out, "control_enabled": bool(control_enabled)}
+
+
+def block_fields(lk, x):
+    """panel-polish D4: who keeps the panel out, as fields the page words in its own language."""
+    if x.get("booking"):
+        b = x["booking"]
+        return {"kind": "booked", "label": b.get("label"), "until": b.get("until"), "note": b.get("note"),
+                "takeover": False}
+    return {"kind": "held", "label": x.get("label"), "command": x.get("command"), "until": x.get("until"),
+            "running": bool(lk.alive(x.get("pid"))), "takeover": lk.lease_only(x)}
 
 
 def host_allowed(header, allowed):
@@ -4780,14 +4837,17 @@ class PanelState:
         if ctl is None:
             lk = BoxLock(g.host)
             lk.holder, lk.label, lk.keeps = f"panel-{os.getpid()}", "panel", True
-            other = lk.try_acquire("panel control")
+            other = lk.try_acquire("panel control", take_lease=bool(body.get("takeover")))
             if other:
-                return 409, {"error": f"{g.host} is {describe_block(other)}"}
+                return 409, {"error": f"{g.host} is {describe_block(other)}", "block": block_fields(lk, other)}
             ctl = {"lk": lk, "since": time.time(), "last": time.time()}
             with self.mu:
                 self.controls[name] = ctl
+            took = (lk.read() or {}).get("took_from")
+            if took:
+                lk.log("control-takeover", replaced=took.get("label"), replaced_holder=took.get("holder"))
             lk.log("control-start")
-            logger.info("panel: control of %s taken", g.host)
+            logger.info("panel: control of %s taken%s", g.host, f" over the lease of {took.get('label')}" if took else "")
             if op == "start":
                 return 200, {"on": True}
         elif op == "start":
@@ -4795,7 +4855,7 @@ class PanelState:
         other = ctl["lk"].try_acquire("panel control")     # renews the lock; ours unless the file was removed
         if other:
             self.control_stop(name, "lock lost")
-            return 409, {"error": f"{g.host} is {describe_block(other)}"}
+            return 409, {"error": f"{g.host} is {describe_block(other)}", "block": block_fields(ctl["lk"], other)}
         ctl["last"] = time.time()
         try:
             grabber_act(g, op, body)
@@ -5205,6 +5265,39 @@ def selftest_booking_panel():
             assert [a["event"] for a in read_activity() if a["event"].startswith("control")] == ["control-start", "control-end"]
             st.control("box", {"op": "start"}); st.control("box", {"op": "stop"})
             assert not st.controls and BoxLock("user@box").read() is None
+            # panel-polish D3/D4: a lease is taken over and given back; a running command and a booking are not
+            assert agent.try_acquire("act") is None
+            agent.status(state="ok", strikes=1, step="act x")
+            agent.release()                                                   # the agent's lease, no process
+            code, out = st.control("box", {"op": "start"})
+            assert code == 409 and out["block"]["kind"] == "held" and out["block"]["takeover"] is True, out
+            assert not out["block"]["running"] and out["block"]["label"] == "proj-a", out
+            code, out = st.control("box", {"op": "start", "takeover": True})
+            cur = BoxLock("user@box").read()
+            assert code == 200 and cur["label"] == "panel" and cur["took_from"]["holder"] == "AGENT", (out, cur)
+            assert st.control("box", {"op": "click", "x": 5, "y": 6})[0] == 200
+            assert BoxLock("user@box").read()["took_from"]["label"] == "proj-a", "a renewal keeps took_from"
+            st.control("box", {"op": "stop"})
+            back = BoxLock("user@box").read()
+            assert back["holder"] == "AGENT" and back["strikes"] == 1 and back["until"] > time.time() + LEASE - 5 \
+                and back["pid"] is None, back
+            assert "control-takeover" in [a["event"] for a in read_activity()]
+            assert agent.try_acquire("act y") is None                         # the agent's next command runs
+            code, out = st.control("box", {"op": "start", "takeover": True})   # its command is running
+            assert code == 409 and out["block"]["running"] and not out["block"]["takeover"], out
+            agent.release(); agent.unlock()
+            os.environ["DESKTAPE_LABEL"] = "proj-b"
+            assert BoxLock("user@box").book(time.time(), 600)[0]
+            code, out = st.control("box", {"op": "start", "takeover": True})
+            assert code == 409 and out["block"]["kind"] == "booked" and out["block"]["label"] == "proj-b", out
+            os.remove(BoxLock("user@box").bookings_path)
+            os.environ["DESKTAPE_LABEL"] = "proj-a"
+            # panel-polish D2: a drag, rescaled like a click
+            assert st.control("box", {"op": "drag", "from_x": 100, "from_y": 50, "to_x": 200, "to_y": 50,
+                                      "duration_ms": 9000, "w": 960, "h": 540})[0] == 200
+            dr = [c[1] for c in calls if c[0] == "drag"][-1]
+            assert dr["from_x"] == 200 and dr["to_x"] == 400 and dr["duration_ms"] == 3000 and dr["scope"] == "desktop", dr
+            st.control("box", {"op": "stop"})
             assert PanelState("0.0.0.0", probe=False).control("box", {"op": "start"})[0] == 403
             from http.server import ThreadingHTTPServer
             import urllib.request, urllib.error
@@ -5283,6 +5376,27 @@ def selftest_click_offscreen():
             assert "indices like [106]" in str(e), e
     finally:
         logger.setLevel(level)
+
+
+def selftest_panel_audit():
+    """panel-polish D7: frame calls are counted and written once a minute; failures and other tools as before."""
+    import io
+    c = Cua.__new__(Cua)
+    c.audit, c.summarize = io.StringIO(), {"get_desktop_state"}
+    t = 1000.0
+    for i in range(121):                      # 0 … 60 s at 2 a second: the 121st call closes the minute
+        c.count_call("get_desktop_state", t + i * 0.5, 100 + i)
+    lines = [json.loads(l) for l in c.audit.getvalue().splitlines()]
+    assert len(lines) == 1 and lines[0]["calls"] == 121 and lines[0]["ms_avg"] == 160, lines
+    assert lines[0]["ms_max"] >= 220 and lines[0]["summary"].startswith("summary of"), lines
+    c.flush_counts()
+    assert len(c.audit.getvalue().splitlines()) == 1, "nothing left to flush after a minute's line"
+    c.count_call("get_desktop_state", t + 200, 50); c.flush_counts()
+    assert json.loads(c.audit.getvalue().splitlines()[-1])["calls"] == 1
+    try:
+        Runner(c, "test").step({"drag": {"from_x": 1}}); raise AssertionError("a tape must not drag")
+    except ValueError as e:
+        assert "unknown step 'drag'" in str(e), e
 
 
 def selftest_knowledge():
@@ -6736,6 +6850,7 @@ def selftest():
     selftest_knowledge()
     selftest_booking_panel()
     selftest_click_offscreen()
+    selftest_panel_audit()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
                 "knowledge", "book", "unbook", "bookings", "panel"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)

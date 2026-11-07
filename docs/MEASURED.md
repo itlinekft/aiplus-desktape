@@ -178,6 +178,27 @@ python3 desktape.py run offscreen.yaml --target <pc>    # focus, click the top b
 | after: the same tape | 6/6; four scrolls (27, 18, 17, 9 lines) brought the button in, the click changed its label |
 | `look --window` with a title that does not exist | one line, "no window titled …", no traceback |
 
+## 2026-11-07: the panel's take over, drag and double click
+
+**Machine:** the Windows 11 test PC, an Edge test window; Cua Driver 0.34.1. Controller: Linux, the panel on
+127.0.0.1, the page in headless Chrome driven with real input events, 1600×1000. **Change:** `panel-polish`.
+
+| What | Result |
+|---|---|
+| the driver alone: `drag` with `scope: desktop` from a 960 px frame's point on the window's title bar, 100 px down-left | "Dragged from (1383, 64) to (1283, 164)": the point mapped to the full screen; the window moved 95 px each way; 0.68 s, no foreground needed |
+| the driver alone: `click` `count: 2`, `scope: desktop` on the title bar | "Sent double-click via SendInput": the window maximised; again: it was restored |
+| the page: two quick clicks on the title bar | one `click` with `count: 2` in the audit, no single clicks |
+| the page: press, move 100 px, release on the title bar | one `drag` (1500,13 → 1399,114, 344 ms); the window moved −85, +78 |
+| an agent's lease (its `look` ended), then the zoomed view | the bar offered "Átveszem"; after it the lock was `panel` with the agent in `took_from` |
+| Back | the agent's lock back, holder and session as before, lease 178 s; its next `look` ran at once (3.2 s) |
+| the zoomed view's bar | 32 px above the frame; the frame starts below it (top 66 px at 1600×1000), the remote window's buttons free |
+| the status page at 1600×1000 (light, dark) and 800×1000 (dark) | three and two columns filling the width; badges readable in dark mode; one project's 24 commands folded into one line ("24 parancs · 14:19–14:28"); the 24-hour strip |
+| the bar's Start, then Esc | `hotkey ctrl+escape` opened the Start menu (frame checked), `press_key escape` closed it; the first press took control |
+| the audit while three screens are live | one line a minute per target ("summary of 62 calls", average 270–304 ms) |
+
+Not measured: the keyboard lock in a real full-screen Chrome (headless has no full screen), the bar's Alt+Tab, a
+drag on the Mac.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

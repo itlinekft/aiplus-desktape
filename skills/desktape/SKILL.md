@@ -155,8 +155,11 @@ dt unbook ID                                           # when the job is done ea
 - **The panel:** `dt panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,
   and `#cctv` with every machine's screen live at about 1 frame per second. Watching takes no lock and acts on
   nothing. A person who clicks into a zoomed screen takes that machine (label `panel`): your commands then stop with
-  exit code 3 naming `panel`; wait, do not work around it. Close the live view before a video take on a Mac (the
-  screen-capture indicator may show).
+  exit code 3 naming `panel`; wait, do not work around it. A person may also take over your lease between two of
+  your commands; when they give it back your lease and session state return, so just carry on. Close the live view
+  before a video take on a Mac (the screen-capture indicator may show).
+- **A browser signed in to another Claude account** (Team vs personal) does not answer your session's Claude in
+  Chrome extension: drive that browser with `look`/`act`, or let that machine's own Claude do it.
 
 ## Rules
 

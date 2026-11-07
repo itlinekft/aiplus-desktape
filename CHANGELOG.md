@@ -24,6 +24,16 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   any tape on the app may meet, such as Claude Desktop's auto-sync card (closed with its X, never "Grant access");
   that card's answer goes into the Claude Desktop maps once its X is measured on each platform.
 
+- Panel, zoomed view: a bar above the screen (Back, state, Esc, Start, Alt+Tab, Take over) instead of a button over
+  the remote window's corner; the keyboard is locked in full screen where Chrome allows it; a double click arrives as
+  one, a drag as one drag (the driver's `drag` joins the allowlist, for the panel only); a ring marks the last click.
+- Panel: **Take over** a machine an agent only keeps its lease on; giving it back restores the agent's lease and
+  session state. A running command and another project's booking are never taken over.
+- Panel, status page: the cards fill the width, badges read in dark mode, long steps are shortened, a project's run
+  of commands folds into one line, a 24-hour strip shows bookings and the current hold; a refused control is worded
+  in the page's language; a stuck, blocked or failed session marks its screen red and counts in the tab's title.
+- The panel's audit counts frame calls and writes one line a minute per target instead of one per frame.
+
 ### Fixed
 - Web pages (Edge, Chrome): `click` on a button outside the visible part of the window scrolls it into view first;
   before, Chromium accepted the element click and nothing happened. A web element that a few scrolls do not bring in
