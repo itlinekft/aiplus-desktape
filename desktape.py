@@ -4457,6 +4457,10 @@ PANEL_HTML = os.path.join(HERE, "panel", "panel.html")
 FRAME_IDLE = 10.0             # D6: a grabber stops this long after the last frame request
 FRAME_RETRY = 5.0             # and waits this long after a failed frame
 FPS_RANGE, SIZE_RANGE = (0.2, 5.0), (320, 1920)
+CONTROL_IDLE = 120.0          # panel-control D2: control gives the lock back after this long without input
+CONTROL_KEYS = {"return", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "home", "end",
+                "pageup", "pagedown", "space", *(f"f{i}" for i in range(1, 13))}
+CONTROL_MODS = {"ctrl", "alt", "shift", "win", "cmd"}
 REACH_EVERY = 30.0            # D5: how often the SSH endpoints are probed
 PANEL_AUDIT_DAYS = 7
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -4536,8 +4540,10 @@ class FrameGrabber:
         self.connect = connect or (lambda: Cua(host, self.audit_path(), autostart=False))
         self.frame, self.at, self.error, self.ms = None, 0.0, None, None
         self.fps, self.size, self.wanted, self.thread = 1.0, 960, 0.0, None
-        self.session = None
+        self.session, self.cua, self.fresh, self.frame_wh = None, None, False, None
         self.mu = threading.Lock()
+        self.io = threading.Lock()          # panel-control D1: frames and input share one connection
+        self.kick = threading.Event()       # an input wants the next frame now
 
     def audit_path(self):
         os.makedirs(self.audit_dir, exist_ok=True)
@@ -4558,39 +4564,105 @@ class FrameGrabber:
                 "active": bool(self.thread and self.thread.is_alive())}
 
     def _run(self):
-        cua = None
         try:
             while time.time() - self.wanted < FRAME_IDLE:
                 t0 = time.time()
                 try:
-                    if cua is None:
-                        cua = self.connect()
-                        # the driver ends a session with its connection and refuses its label after that (measured
-                        # 2026-11-07: "session has ended … use a new session label"): one label per connection
-                        self.session = f"desktape-panel-{os.getpid()}-{int(time.time() * 1000)}"
-                    cua.call("get_desktop_state", {"max_image_dimension": self.size, "session": self.session},
-                             timeout=10)
-                    img = next((c for c in cua.last.get("content", []) if c.get("type") == "image"), None)
-                    if not img:
-                        raise RuntimeError("the driver returned no screen image")
-                    self.frame, self.at, self.error = base64.b64decode(img["data"]), time.time(), None
+                    with self.io:
+                        if self.cua is None:
+                            self.cua, self.fresh = self.connect(), False
+                            # the driver ends a session with its connection and refuses its label after that
+                            # (measured 2026-11-07: "session has ended … use a new session label"): one per connection
+                            self.session = f"desktape-panel-{os.getpid()}-{int(time.time() * 1000)}"
+                        self.cua.call("get_desktop_state", {"max_image_dimension": self.size, "session": self.session},
+                                      timeout=10)
+                        img = next((c for c in self.cua.last.get("content", []) if c.get("type") == "image"), None)
+                        if not img:
+                            raise RuntimeError("the driver returned no screen image")
+                        self.frame, self.at, self.error = base64.b64decode(img["data"]), time.time(), None
+                        if self.frame[:8] == b"\x89PNG\r\n\x1a\n":
+                            self.frame_wh = tuple(int.from_bytes(self.frame[i:i + 4], "big") for i in (16, 20))
+                        self.fresh = True            # input may now use this connection's coordinates
                     self.ms = int((time.time() - t0) * 1000)
                 except Exception as e:          # any failure shows on the tile; the grabber retries
                     self.error = str(e)[:300]
                     logger.warning("panel: no frame from %s: %s", self.host, self.error)
-                    if cua is not None:
-                        close_quietly(cua, self.host)
-                        cua = None
+                    with self.io:
+                        if self.cua is not None:
+                            close_quietly(self.cua, self.host)
+                            self.cua, self.fresh = None, False
                     time.sleep(FRAME_RETRY)
                     continue
-                time.sleep(max(0.0, 1.0 / self.fps - (time.time() - t0)))
+                self.kick.wait(max(0.0, 1.0 / self.fps - (time.time() - t0)))
+                self.kick.clear()
         finally:
-            if cua is not None:
-                close_quietly(cua, self.host)
+            with self.io:
+                if self.cua is not None:
+                    close_quietly(self.cua, self.host)
+                    self.cua, self.fresh = None, False
             logger.info("panel: live screen of %s stopped (nobody watching for %.0f s)", self.host, FRAME_IDLE)
 
 
-def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, alive=pid_alive):
+def control_call(op, body):
+    """panel-control D1: a page event as (tool, args, secret); ValueError for anything else."""
+    num = lambda k: float(body[k]) if isinstance(body.get(k), (int, float)) else (_ for _ in ()).throw(
+        ValueError(f"{op} needs a number {k}"))
+    if op == "click":
+        button = body.get("button", "left")
+        if button not in ("left", "right", "middle"):
+            raise ValueError(f"unknown button {button!r}")
+        return "click", {"x": round(num("x")), "y": round(num("y")), "button": button,
+                         "count": min(max(int(body.get("count") or 1), 1), 3)}, False
+    if op == "scroll":
+        if body.get("direction") not in ("up", "down", "left", "right"):
+            raise ValueError("scroll needs a direction: up, down, left or right")
+        return "scroll", {"x": round(num("x")), "y": round(num("y")), "direction": body["direction"],
+                          "amount": min(max(int(body.get("amount") or 1), 1), 10)}, False
+    if op == "type":
+        text = body.get("text")
+        if not isinstance(text, str) or not text or len(text) > 500:
+            raise ValueError("type needs a text of 1 to 500 characters")
+        return "type_text", {"text": text}, True
+    if op == "key":
+        key = str(body.get("key") or "").lower()
+        if key not in CONTROL_KEYS and not re.fullmatch(r"[a-z0-9]", key):
+            raise ValueError(f"unknown key {key!r}")
+        return "press_key", {"key": key}, False
+    if op == "hotkey":
+        keys = [str(k).lower() for k in body.get("keys") or []]
+        if not (2 <= len(keys) <= 4) or not set(keys[:-1]) <= CONTROL_MODS or \
+                (keys[-1] not in CONTROL_KEYS and not re.fullmatch(r"[a-z0-9]", keys[-1])):
+            raise ValueError(f"not a key combination: {keys}")
+        return "hotkey", {"keys": keys}, False
+    raise ValueError(f"unknown control operation {op!r}")
+
+
+def grabber_act(g, op, body):
+    """Send one input on the grabber's connection and session (panel-control D1), then ask for a frame."""
+    tool, args, secret = control_call(op, body)
+    with g.io:
+        if g.cua is None or not g.fresh:
+            raise RuntimeError("no live screen on this connection yet; wait for the next frame")
+        seen = body.get("w"), body.get("h")
+        if "x" in args and g.frame_wh and all(isinstance(v, (int, float)) and v > 0 for v in seen) \
+                and tuple(seen) != g.frame_wh:
+            # the page clicked on a frame of another size than the driver's last capture (the size just changed)
+            args["x"], args["y"] = round(args["x"] * g.frame_wh[0] / seen[0]), round(args["y"] * g.frame_wh[1] / seen[1])
+            logger.debug("panel: %s point rescaled from a %sx%s frame to %sx%s", op, *seen, *g.frame_wh)
+        args = {**args, "scope": "desktop", "session": g.session}
+        try:
+            g.cua.call(tool, args, secret=secret, timeout=10)
+        except RuntimeError as e:
+            if "background_unavailable" not in str(e):
+                raise
+            logger.info("panel: %s on %s needs foreground delivery; repeating it", tool, g.host)
+            g.cua.call(tool, {**args, "delivery_mode": "foreground"}, secret=secret, timeout=10)
+    g.wanted = time.time()
+    g.kick.set()
+
+
+def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, alive=pid_alive, controls=None,
+                 control_enabled=False):
     """/api/status (D5): every target's profile, lock, bookings, recent activity, SSH probe and frame state."""
     now = now or time.time()
     acts = read_activity(directory)
@@ -4610,8 +4682,9 @@ def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, aliv
                     "booked_now": next((b for b in bookings if b["from"] <= now < b["until"]), None),
                     "activity": [x for x in acts if x.get("target") == host][-10:][::-1],
                     "reach": (reach or {}).get(host),
-                    "frame": grabbers[name].info() if grabbers and name in grabbers else None})
-    return {"now": now, "targets": out}
+                    "frame": grabbers[name].info() if grabbers and name in grabbers else None,
+                    "control": {"since": controls[name]["since"]} if controls and name in controls else None})
+    return {"now": now, "targets": out, "control_enabled": bool(control_enabled)}
 
 
 def host_allowed(header, allowed):
@@ -4624,8 +4697,10 @@ def host_allowed(header, allowed):
 
 
 class PanelState:
-    def __init__(self, bind):
+    def __init__(self, bind, probe=True):
         self.allowed = LOOPBACK if bind in LOOPBACK else None
+        self.token = "%032x" % random.SystemRandom().getrandbits(128)    # panel-control D3
+        self.controls = {}          # name -> {"lk": BoxLock, "since": t, "last": t}
         self.audit_dir = os.path.join(os.path.dirname(lock_dir()), "panel")
         self.grabbers, self.reach, self._rows = {}, {}, []
         self.mu, self.stopping = threading.Lock(), threading.Event()
@@ -4633,7 +4708,72 @@ class PanelState:
         for f in glob.glob(os.path.join(self.audit_dir, "audit-*.jsonl")):
             if os.path.getmtime(f) < cutoff:
                 os.remove(f); logger.info("panel: removed the old frame audit %s", f)
-        threading.Thread(target=self._probe_loop, daemon=True, name="reach").start()
+        if probe:
+            threading.Thread(target=self._probe_loop, daemon=True, name="reach").start()
+            threading.Thread(target=self._control_watch, daemon=True, name="control-idle").start()
+
+    # ---- control (panel-control D2) ----
+
+    def control(self, name, body):
+        """(HTTP code, JSON) for one control request."""
+        if self.allowed is None:
+            return 403, {"error": "control works only when the panel listens on this machine (127.0.0.1)"}
+        g = self.grabber(name)
+        if not g:
+            return 404, {"error": f"no target {name!r}"}
+        op = body.get("op")
+        with self.mu:
+            ctl = self.controls.get(name)
+        if op == "stop":
+            self.control_stop(name, "switched off")
+            return 200, {"on": False}
+        if ctl is None:
+            lk = BoxLock(g.host)
+            lk.holder, lk.label, lk.keeps = f"panel-{os.getpid()}", "panel", True
+            other = lk.try_acquire("panel control")
+            if other:
+                return 409, {"error": f"{g.host} is {describe_block(other)}"}
+            ctl = {"lk": lk, "since": time.time(), "last": time.time()}
+            with self.mu:
+                self.controls[name] = ctl
+            lk.log("control-start")
+            logger.info("panel: control of %s taken", g.host)
+            if op == "start":
+                return 200, {"on": True}
+        elif op == "start":
+            return 200, {"on": True}
+        other = ctl["lk"].try_acquire("panel control")     # renews the lock; ours unless the file was removed
+        if other:
+            self.control_stop(name, "lock lost")
+            return 409, {"error": f"{g.host} is {describe_block(other)}"}
+        ctl["last"] = time.time()
+        try:
+            grabber_act(g, op, body)
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        except Exception as e:      # the driver's answer goes to the page
+            logger.warning("panel: %s on %s failed: %s", op, g.host, e)
+            return 502, {"error": str(e)[:300]}
+        return 200, {"on": True}
+
+    def control_stop(self, name, why):
+        with self.mu:
+            ctl = self.controls.pop(name, None)
+        if ctl:
+            why_not = ctl["lk"].unlock()
+            ctl["lk"].log("control-end", why=why, seconds=round(time.time() - ctl["since"], 1))
+            logger.info("panel: control of %s given back (%s)%s", ctl["lk"].host, why,
+                        f": {why_not}" if why_not else "")
+
+    def expire_controls(self, now=None):
+        now = now or time.time()
+        for name, ctl in list(self.controls.items()):
+            if now - ctl["last"] > CONTROL_IDLE:
+                self.control_stop(name, f"no input for {CONTROL_IDLE:.0f} s")
+
+    def _control_watch(self):
+        while not self.stopping.wait(5):
+            self.expire_controls()
 
     def rows(self):
         try:
@@ -4688,9 +4828,11 @@ def panel_handler(state):
                 return self.send(403, b"forbidden host\n", "text/plain")
             u, q = urlsplit(self.path), parse_qs(urlsplit(self.path).query)
             if u.path in ("/", "/index.html"):
-                return self.send(200, open(PANEL_HTML, "rb").read(), "text/html; charset=utf-8")
+                page = open(PANEL_HTML, "rb").read().replace(b"__PANEL_TOKEN__", getattr(state, "token", "").encode())
+                return self.send(200, page, "text/html; charset=utf-8")
             if u.path == "/api/status":
-                body = panel_status(state.rows(), state.grabbers, state.reach)
+                body = panel_status(state.rows(), state.grabbers, state.reach, controls=getattr(state, "controls", None),
+                                    control_enabled=state.allowed is not None and hasattr(state, "control"))
                 return self.send(200, json.dumps(body, ensure_ascii=False).encode("utf-8"), "application/json")
             m = re.fullmatch(r"/frame/([^/]+)", u.path)
             if m:
@@ -4706,6 +4848,32 @@ def panel_handler(state):
                     return self.send(503, (g.error or "no frame yet").encode("utf-8"), "text/plain; charset=utf-8", **info)
                 return self.send(200, g.frame, "image/png", **info)
             return self.send(404, b"not found\n", "text/plain")
+
+        def do_POST(self):
+            """panel-control D3: loopback only, the page's token, a loopback Origin."""
+            from urllib.parse import urlsplit, unquote
+            refuse = lambda why: (logger.warning("panel: control refused: %s", why),
+                                  self.send(403, json.dumps({"error": why}).encode(), "application/json"))[1]
+            if not host_allowed(self.headers.get("Host"), state.allowed) or state.allowed is None:
+                return refuse("not on this machine")
+            origin = self.headers.get("Origin")
+            if origin and (urlsplit(origin).hostname or "") not in LOOPBACK:
+                return refuse(f"foreign origin {origin}")
+            if not getattr(state, "token", None) or self.headers.get("X-Panel-Token") != state.token:
+                return refuse("missing or wrong page token")
+            m = re.fullmatch(r"/control/([^/]+)", urlsplit(self.path).path)
+            if not m:
+                return self.send(404, b"not found\n", "text/plain")
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 65536:
+                return self.send(413, b"too large\n", "text/plain")
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+                assert isinstance(body, dict)
+            except (ValueError, AssertionError):
+                return self.send(400, b'{"error": "a JSON object"}', "application/json")
+            code, out = state.control(unquote(m.group(1)), body)
+            return self.send(code, json.dumps(out, ensure_ascii=False).encode("utf-8"), "application/json")
 
     return Handler
 
@@ -4736,6 +4904,8 @@ def cmd_panel(a):
         logger.info("panel: stopping")
     finally:
         state.stopping.set()
+        for name in list(state.controls):
+            state.control_stop(name, "panel stopped")
         srv.server_close()
     return 0
 
@@ -4870,8 +5040,13 @@ def selftest_booking_panel():
                 self.last, self.labels = {}, set()
                 made.append(self)
 
-            def call(self, tool, args, timeout=None):
+            def call(self, tool, args, timeout=None, secret=False):
                 calls.append((tool, args))
+                if tool != "get_desktop_state":
+                    if args.get("x") == 99 and "delivery_mode" not in args:
+                        raise RuntimeError("click failed: background_unavailable")
+                    self.last = {}
+                    return {}, "ok"
                 if args["session"] in ended:
                     raise RuntimeError("get_desktop_state failed: session has ended")
                 self.labels.add(args["session"])
@@ -4933,6 +5108,76 @@ def selftest_booking_panel():
                         assert e.code == code, (path, e.code)
             finally:
                 srv.shutdown(); srv.server_close()
+        # panel-control: the input mapping, the lock, the idle release, the token and Origin checks
+        assert control_call("click", {"x": 10.4, "y": 20})[:2] == ("click", {"x": 10, "y": 20, "button": "left", "count": 1})
+        assert control_call("type", {"text": "árvíztűrő"})[2] is True
+        assert control_call("hotkey", {"keys": ["ctrl", "s"]})[1] == {"keys": ["ctrl", "s"]}
+        assert control_call("key", {"key": "Backspace"})[1] == {"key": "backspace"}
+        for op, body in (("click", {"x": "a", "y": 1}), ("key", {"key": "rm -rf"}), ("hotkey", {"keys": ["x", "y"]}),
+                         ("type", {"text": ""}), ("launch", {})):
+            try:
+                control_call(op, body); raise AssertionError(f"expected ValueError for {op} {body}")
+            except ValueError:
+                pass
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_STATE_HOME"] = d
+            os.environ["DESKTAPE_TARGETS"] = os.path.join(d, "targets.yaml")
+            open(os.environ["DESKTAPE_TARGETS"], "w").write("targets:\n  box:\n    host: user@box\n    os: windows\n")
+            st = PanelState("127.0.0.1", probe=False)
+            st._rows = [("box", "user@box", {})]
+            calls.clear(); ended.clear()
+            g = st.grabbers["box"] = FrameGrabber("user@box", d, connect=FakeCua)
+            os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = "AGENT", "proj-a"
+            agent = BoxLock("user@box")
+            assert agent.try_acquire("look") is None                       # an agent holds the box
+            g.want(fps=5)
+            end = time.time() + 3
+            while time.time() < end and not g.fresh:
+                time.sleep(0.02)
+            code, out = st.control("box", {"op": "click", "x": 5, "y": 6})
+            assert code == 409 and "held by proj-a" in out["error"] and not st.controls, out
+            agent.release(); agent.unlock()
+            code, out = st.control("box", {"op": "click", "x": 5, "y": 6})  # the first click takes control
+            assert code == 200 and out["on"] and BoxLock("user@box").read()["label"] == "panel", out
+            sent = [c for c in calls if c[0] == "click"]
+            assert sent[-1][1]["scope"] == "desktop" and sent[-1][1]["session"] == g.session and sent[-1][1]["x"] == 5
+            g.frame_wh = (1920, 1080)
+            assert st.control("box", {"op": "click", "x": 480, "y": 270, "w": 960, "h": 540})[0] == 200
+            assert [c[1] for c in calls if c[0] == "click"][-1]["x"] == 960, "a click on a smaller frame is rescaled"
+            assert st.control("box", {"op": "click", "x": 99, "y": 1})[0] == 200
+            assert [c[1].get("delivery_mode") for c in calls if c[0] == "click"][-2:] == [None, "foreground"]
+            assert st.control("box", {"op": "key", "key": "nope"})[0] == 400
+            other = agent.try_acquire("look")                                 # the agent is kept out now
+            assert other and other["label"] == "panel" and "running as pid" in describe_lock(other), other
+            st.controls["box"]["last"] -= CONTROL_IDLE + 1
+            st.expire_controls()
+            assert not st.controls and BoxLock("user@box").read() is None   # given back after the idle time
+            assert [a["event"] for a in read_activity() if a["event"].startswith("control")] == ["control-start", "control-end"]
+            st.control("box", {"op": "start"}); st.control("box", {"op": "stop"})
+            assert not st.controls and BoxLock("user@box").read() is None
+            assert PanelState("0.0.0.0", probe=False).control("box", {"op": "start"})[0] == 403
+            from http.server import ThreadingHTTPServer
+            import urllib.request, urllib.error
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), panel_handler(st))
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            url = f"http://127.0.0.1:{srv.server_address[1]}"
+            try:
+                page = urllib.request.urlopen(url + "/").read().decode()
+                assert st.token in page and "__PANEL_TOKEN__" not in page
+                post = lambda hdr: urllib.request.Request(url + "/control/box", data=b'{"op": "start"}', method="POST",
+                                                          headers={"Content-Type": "application/json", **hdr})
+                for hdr in ({}, {"X-Panel-Token": "wrong"}, {"X-Panel-Token": st.token, "Origin": "http://evil.example"}):
+                    try:
+                        urllib.request.urlopen(post(hdr)); raise AssertionError(f"expected 403 for {hdr}")
+                    except urllib.error.HTTPError as e:
+                        assert e.code == 403, (hdr, e.code)
+                assert not st.controls
+                r = urllib.request.urlopen(post({"X-Panel-Token": st.token, "Origin": url}))
+                assert r.status == 200 and json.loads(r.read())["on"] and "box" in st.controls
+                assert json.loads(urllib.request.urlopen(url + "/api/status").read())["targets"][0]["control"]
+            finally:
+                st.control_stop("box", "selftest"); srv.shutdown(); srv.server_close()
+            g.wanted = 0; g.kick.set(); g.thread.join(3)
     finally:
         FRAME_IDLE, FRAME_RETRY = idle0, retry0
         logger.setLevel(level)

@@ -3,18 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="panel-token" content="__PANEL_TOKEN__">
 <title>desktape panel</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #667085; --line: #e3e6eb;
-    --free: #1a7f37; --busy: #b54708; --booked: #6941c6; --bad: #c4320a; --off: #98a2b3;
+    --free: #1a7f37; --busy: #b54708; --booked: #6941c6; --bad: #c4320a; --off: #98a2b3; --ctl: #0b6bcb;
     --tile: #000;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #11141a; --card: #1a1f27; --ink: #e6e9ef; --muted: #98a2b3; --line: #2a313c;
-            --free: #3fb950; --busy: #f0883e; --booked: #a68cff; --bad: #ff7b72; --off: #667085; }
+            --free: #3fb950; --busy: #f0883e; --booked: #a68cff; --bad: #ff7b72; --off: #667085; --ctl: #4aa3ff; }
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line);
@@ -26,7 +28,7 @@
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
   main { padding: 16px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 14px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
   .card h2 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--off); flex: none; }
@@ -35,7 +37,7 @@
            color: #fff; background: var(--off); white-space: nowrap; }
   .badge.free { background: var(--free); } .badge.busy { background: var(--busy); }
   .badge.lease { background: var(--busy); opacity: .75; } .badge.booked { background: var(--booked); }
-  .badge.bad { background: var(--bad); }
+  .badge.bad { background: var(--bad); } .badge.ctl { background: var(--ctl); }
   .row { margin-top: 8px; }
   .label { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   ul.plain { list-style: none; padding: 0; margin: 4px 0 0; }
@@ -50,15 +52,15 @@
   body.cctv #status { display: none; }
   body.cctv #cctv { display: block; }
   body.cctv main { padding: 8px; }
+  body.cctv { overflow: hidden; }
   .tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
   .tools label { display: inline-flex; gap: 4px; align-items: center; }
   .tools select, .tools button { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
                                  background: var(--card); color: var(--ink); }
   .tools button { cursor: pointer; }
-  .grid { display: grid; gap: 6px; }
-  .tile { position: relative; background: var(--tile); aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden;
-          cursor: zoom-in; }
-  .tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .grid { display: grid; gap: 6px; justify-content: center; align-content: center; margin-top: 8px; }
+  .tile { position: relative; background: var(--tile); border-radius: 6px; overflow: hidden; cursor: zoom-in; }
+  .tile img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; }
   .tile.stale img { opacity: .35; filter: grayscale(1); }
   .tile .ov { position: absolute; left: 0; right: 0; padding: 4px 8px; color: #fff; font-size: 13px;
               display: flex; gap: 8px; align-items: center; text-shadow: 0 1px 2px #000; pointer-events: none; }
@@ -66,10 +68,18 @@
   .tile .bottom { bottom: 0; justify-content: flex-end; background: linear-gradient(#0000, #000a); font-size: 12px; }
   .tile .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                color: #ddd; padding: 20px; text-align: center; font-size: 13px; pointer-events: none; }
-  body.solo .tile { cursor: zoom-out; }
-  :fullscreen #cctv .grid, :fullscreen .grid { gap: 2px; }
+  body.solo .tile { cursor: crosshair; }
+  body.solo .tile .top { opacity: .25; transition: opacity .2s; }
+  body.solo .tile:hover .top { opacity: 1; }
+  .back { position: absolute; top: 6px; right: 8px; z-index: 3; pointer-events: auto; font: 13px system-ui, sans-serif;
+          padding: 3px 10px; border-radius: 6px; border: 0; background: #000b; color: #fff; cursor: pointer; display: none; }
+  body.solo .back { display: block; }
+  .tile.ctl { outline: 3px solid var(--ctl); outline-offset: -3px; }
+  .toast { position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%); background: #000d; color: #fff;
+           padding: 6px 12px; border-radius: 6px; font-size: 13px; pointer-events: none; display: none; max-width: 90%; }
   body.fs header { display: none; }
   body.fs main { padding: 0; }
+  body.fs .grid { margin-top: 0; gap: 2px; }
   body.fs .tile { border-radius: 0; }
   body.fs .tools { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 9;
                    background: var(--card); padding: 6px 10px; border-radius: 8px; opacity: 0; transition: opacity .2s; }
@@ -94,39 +104,50 @@
         <select id="cols"><option value="auto">auto</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
       <label><span data-t="fps">Kép/mp</span>
         <select id="fps"><option>0.5</option><option selected>1</option><option>2</option><option>5</option></select></label>
+      <label><span data-t="solofps">Nagyítva</span>
+        <select id="solofps"><option>2</option><option selected>4</option><option>5</option></select></label>
       <label><span data-t="size">Méret</span>
         <select id="size"><option>480</option><option selected>960</option><option>1280</option><option>1920</option></select></label>
       <span id="picks"></span>
       <button id="fsbtn" data-t="fullscreen">Teljes képernyő</button>
     </div>
-    <div class="grid" id="grid" style="margin-top:8px"></div>
+    <div class="grid" id="grid"></div>
   </section>
 </main>
 <script>
 "use strict";
 const HU = {
-  status: "Állapot", cctv: "Élő képek", cols: "Oszlopok", fps: "Kép/mp", size: "Méret", fullscreen: "Teljes képernyő",
+  status: "Állapot", cctv: "Élő képek", cols: "Oszlopok", fps: "Kép/mp", solofps: "Nagyítva", size: "Méret",
+  fullscreen: "Teljes képernyő",
   free: "Szabad", running: "Fut", lease: "Lease", booked: "Foglalva", unreachable: "Nem érhető el", reachable: "Elérhető",
   unknown: "Ismeretlen", holder: "Ki használja", since: "óta", until: "eddig", bookings: "Foglalások", none: "nincs",
   activity: "Legutóbb", session: "Session", step: "lépés", strikes: "hibák", lastok: "utolsó jó lépés",
   note: "Megjegyzés", noframe: "Még nincs kép", stale: "régi kép", ago: "ezelőtt", updated: "frissítve",
-  error: "Hiba", booknow: "Most foglalva", nobody: "senki", sec: "mp", min: "perc", h: "óra",
+  error: "Hiba", nobody: "senki", sec: "mp", min: "perc", h: "óra",
   noserver: "A panel szervere nem válaszol", noTargets: "Nincs gép a targets fájlban",
-  book: "foglalás", unbook: "foglalás törölve", end: "vége"
+  book: "foglalás", unbook: "foglalás törölve", ctlstart: "kézi vezérlés", ctlend: "kézi vezérlés vége",
+  back: "✕ Vissza", control: "Kézi vezérlés", ctlon: "Kézi vezérlés: a kattintás és a billentyűk a gépre mennek",
+  ctloff: "Kattints a képre: az első kattintás átveszi a gépet", ctlrefused: "Nem vehető át",
+  release: "Elengedés", viewonly: "Csak nézet (a panel nem ezen a gépen figyel)"
 };
 const EN = {
-  status: "Status", cctv: "Live screens", cols: "Columns", fps: "Frames/s", size: "Size", fullscreen: "Full screen",
+  status: "Status", cctv: "Live screens", cols: "Columns", fps: "Frames/s", solofps: "Zoomed", size: "Size",
+  fullscreen: "Full screen",
   free: "Free", running: "Running", lease: "Lease", booked: "Booked", unreachable: "Unreachable", reachable: "Reachable",
   unknown: "Unknown", holder: "Held by", since: "since", until: "until", bookings: "Bookings", none: "none",
   activity: "Recent", session: "Session", step: "step", strikes: "strikes", lastok: "last good step",
   note: "Note", noframe: "No frame yet", stale: "old frame", ago: "ago", updated: "updated",
-  error: "Error", booknow: "Booked now", nobody: "nobody", sec: "s", min: "min", h: "h",
+  error: "Error", nobody: "nobody", sec: "s", min: "min", h: "h",
   noserver: "The panel's server does not answer", noTargets: "No targets in the targets file",
-  book: "booking", unbook: "booking removed", end: "end"
+  book: "booking", unbook: "booking removed", ctlstart: "manual control", ctlend: "manual control ended",
+  back: "✕ Back", control: "Manual control", ctlon: "Manual control: clicks and keys go to the machine",
+  ctloff: "Click the screen: the first click takes the machine", ctlrefused: "Cannot take it",
+  release: "Release", viewonly: "View only (the panel does not listen on this machine)"
 };
 const params = new URLSearchParams(location.search);
 const lang = params.get("lang") || ((navigator.language || "hu").toLowerCase().startsWith("hu") ? "hu" : "en");
 const T = lang === "en" ? EN : HU;
+const TOKEN = (document.querySelector('meta[name="panel-token"]') || {}).content || "";
 document.documentElement.lang = lang;
 document.querySelectorAll("[data-t]").forEach(e => { e.textContent = T[e.dataset.t] || e.textContent; });
 
@@ -151,6 +172,7 @@ let data = null, serverDown = false;
 
 function badge(t) {
   const L = t.lock;
+  if (t.control) return `<span class="badge ctl">${T.control}</span>`;
   if (L && L.running) return `<span class="badge busy">${T.running}: ${esc(L.label)}</span>`;
   if (t.booked_now) return `<span class="badge booked">${T.booked}: ${esc(t.booked_now.label)}</span>`;
   if (L && L.held) return `<span class="badge lease">${T.lease}: ${esc(L.label)} → ${hm(L.until)}</span>`;
@@ -166,7 +188,9 @@ function actLine(a, now) {
   const what = a.event === "end" ? `<code>${esc(a.command)}</code> ${a.seconds ?? ""} ${T.sec}` +
     (a.state ? ` · ${esc(a.state)}` : "") + (a.error ? ` · <span class="err">${esc(a.error)}</span>` : "")
     : a.event === "book" ? `${T.book} ${day(a.at)}–${hm(a.until)}${a.note ? " · " + esc(a.note) : ""}`
-    : a.event === "unbook" ? `${T.unbook} (${esc(a.id)})` : esc(a.event);
+    : a.event === "unbook" ? `${T.unbook} (${esc(a.id)})`
+    : a.event === "control-start" ? T.ctlstart
+    : a.event === "control-end" ? `${T.ctlend} (${esc(a.why)})` : esc(a.event);
   return `<li><span class="muted small">${ago(a.at, now)} ${T.ago}</span> · <b>${esc(a.label)}</b> · ${what}</li>`;
 }
 
@@ -210,13 +234,17 @@ function renderStatus() {
 }
 
 /* ---- live screens ---- */
-const tiles = {};             // name -> {el, img, url, at, err, busy}
-let solo = null;
+const tiles = {};             // name -> {el, img, url, at, err, busy, toastTimer}
+let solo = null, aspect = 16 / 9;
+
+const isFs = () => document.body.classList.contains("fs") || !!document.fullscreenElement;
+const curFps = () => parseFloat(solo ? $("solofps").value : $("fps").value);
+const curSize = () => solo ? "1920" : $("size").value;     // zoomed: the full frame, sharp enough to click on
 
 function picked() {
   const all = (data ? data.targets : []).map(t => t.name);
   const off = store.get("off", []);
-  return all.filter(n => !off.includes(n) && (!solo || n === solo));
+  return all.filter(n => (solo ? n === solo : !off.includes(n)));
 }
 function renderPicks() {
   if (!data) return;
@@ -229,43 +257,79 @@ function renderPicks() {
     store.set("off", [...o]); layout();
   });
 }
+/* The tiles fill the free area at the frames' aspect ratio, with no scrolling (panel-control D4). */
+function fit(n, W, H, gap, colsSetting) {
+  const tryCols = c => {
+    const rows = Math.ceil(n / c);
+    const w = Math.min((W - gap * (c - 1)) / c, ((H - gap * (rows - 1)) / rows) * aspect);
+    return {c, w: Math.max(40, Math.floor(w))};
+  };
+  if (colsSetting !== "auto") return tryCols(Math.min(parseInt(colsSetting, 10), Math.max(n, 1)));
+  let best = tryCols(1);
+  for (let c = 2; c <= Math.max(n, 1); c++) { const r = tryCols(c); if (r.w > best.w) best = r; }
+  return best;
+}
 function layout() {
   const names = picked(), grid = $("grid");
-  let cols = $("cols").value;
-  if (solo) cols = 1;
-  else if (cols === "auto") cols = names.length <= 1 ? 1 : names.length <= 4 ? 2 : names.length <= 9 ? 3 : 4;
-  grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
   document.body.classList.toggle("solo", !!solo);
   for (const n of Object.keys(tiles)) if (!names.includes(n)) { tiles[n].el.remove(); delete tiles[n]; }
   for (const n of names) {
-    if (!tiles[n]) {
-      const el = document.createElement("div");
-      el.className = "tile";
-      el.innerHTML = `<img alt=""><div class="msg">${T.noframe}</div><div class="ov top"></div><div class="ov bottom"></div>`;
-      el.onclick = () => { solo = solo ? null : n; layout(); };
-      tiles[n] = {el, img: el.querySelector("img"), url: null, at: 0, err: null, busy: false};
-    }
-    grid.appendChild(tiles[n].el);
+    if (!tiles[n]) tiles[n] = makeTile(n);
+    if (tiles[n].el.parentNode !== grid) grid.appendChild(tiles[n].el);
   }
-  if (document.body.classList.contains("fs") || document.fullscreenElement) {
-    const rows = Math.ceil(names.length / cols) || 1;    // fill the screen: tiles as large as the rows allow
-    grid.style.height = "100vh";
-    grid.style.gridAutoRows = `calc((100vh - ${(rows - 1) * 2}px) / ${rows})`;
-    Object.values(tiles).forEach(t => t.el.style.aspectRatio = "auto");
-  } else {
-    grid.style.height = ""; grid.style.gridAutoRows = "";
-    Object.values(tiles).forEach(t => t.el.style.aspectRatio = "");
-  }
+  const gap = isFs() ? 2 : 6;
+  const top = isFs() ? 0 : grid.getBoundingClientRect().top;
+  const W = (isFs() ? window.innerWidth : grid.parentElement.clientWidth) - (isFs() ? 0 : 0);
+  const H = window.innerHeight - top - (isFs() ? 0 : 8);
+  const {c, w} = fit(names.length, W, H, gap, solo ? "1" : $("cols").value);
+  grid.style.gridTemplateColumns = `repeat(${c}, ${w}px)`;
+  grid.style.height = `${H}px`;
+  for (const n of names) { tiles[n].el.style.width = `${w}px`; tiles[n].el.style.height = `${Math.floor(w / aspect)}px`; }
   overlays();
+}
+function makeTile(n) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  el.innerHTML = `<img alt="" draggable="false"><div class="msg">${T.noframe}</div><div class="ov top"></div>` +
+    `<div class="ov bottom"></div><button class="back">${T.back}</button><div class="toast"></div>`;
+  const tile = {el, img: el.querySelector("img"), url: null, at: 0, err: null, busy: false};
+  el.querySelector(".back").onclick = e => { e.stopPropagation(); leaveSolo(); };
+  el.addEventListener("click", e => {
+    if (!solo) { enterSolo(n); return; }
+    control.click(n, e, "left");
+  });
+  el.addEventListener("contextmenu", e => { if (solo) { e.preventDefault(); control.click(n, e, "right"); } });
+  el.addEventListener("wheel", e => { if (solo) { e.preventDefault(); control.wheel(n, e); } }, {passive: false});
+  return tile;
+}
+function enterSolo(n) {
+  solo = n; layout(); cctvLoop();
+  if (!document.fullscreenElement && document.documentElement.requestFullscreen)
+    document.documentElement.requestFullscreen().catch(() => { document.body.classList.add("fs"); layout(); });
+}
+function leaveSolo() {
+  if (control.on) control.stop();
+  solo = null;
+  if (document.fullscreenElement && !store.get("fsgrid", false)) document.exitFullscreen();
+  else { document.body.classList.remove("fs"); layout(); }
+  cctvLoop();
+}
+function toast(n, text, ms = 2500) {
+  const t = tiles[n]; if (!t) return;
+  const el = t.el.querySelector(".toast");
+  el.textContent = text; el.style.display = "block";
+  clearTimeout(t.toastTimer); t.toastTimer = setTimeout(() => { el.style.display = "none"; }, ms);
 }
 function overlays() {
   if (!data) return;
-  const now = Date.now() / 1000, fps = parseFloat($("fps").value);
+  const now = Date.now() / 1000, fps = curFps();
   for (const [n, tile] of Object.entries(tiles)) {
     const t = data.targets.find(x => x.name === n);
     if (!t) continue;
+    tile.el.classList.toggle("ctl", !!(control.on === n));
     tile.el.querySelector(".top").innerHTML = `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
-      (t.lock && t.lock.held ? ` <code style="color:#fff">${esc(t.lock.command)}</code>` : "");
+      (t.lock && t.lock.held && !t.control ? ` <code style="color:#fff">${esc(t.lock.command)}</code>` : "") +
+      (solo === n ? ` <span>${!data.control_enabled ? T.viewonly : control.on === n ? T.ctlon : T.ctloff}</span>` : "");
     const old = tile.at && now - tile.at > Math.max(3 / fps, 4);
     tile.el.classList.toggle("stale", !!(tile.at && old));
     tile.el.querySelector(".bottom").innerHTML = tile.at
@@ -280,12 +344,17 @@ async function pull(n) {
   if (!tile || tile.busy) return;
   tile.busy = true;
   try {
-    const r = await fetch(`frame/${encodeURIComponent(n)}?fps=${$("fps").value}&size=${$("size").value}`, {cache: "no-store"});
+    const r = await fetch(`frame/${encodeURIComponent(n)}?fps=${curFps()}&size=${curSize()}`, {cache: "no-store"});
     const at = parseFloat(r.headers.get("X-Frame-At") || "0");
     tile.err = r.headers.get("X-Frame-Error") || (r.ok || r.status === 503 ? null : (await r.text()).slice(0, 200));
     if (r.ok && at && at !== tile.at) {
       const url = URL.createObjectURL(await r.blob());
-      tile.img.onload = () => { if (tile.url) URL.revokeObjectURL(tile.url); tile.url = url; };
+      tile.img.onload = () => {
+        if (tile.url) URL.revokeObjectURL(tile.url);
+        tile.url = url;
+        const a = tile.img.naturalWidth / tile.img.naturalHeight;
+        if (a && Math.abs(a - aspect) > 0.01) { aspect = a; layout(); }
+      };
       tile.img.src = url;
       tile.at = at;
     }
@@ -301,38 +370,138 @@ function cctvLoop() {
   if (!document.body.classList.contains("cctv") || document.hidden) { timer = setTimeout(cctvLoop, 1000); return; }
   Object.keys(tiles).forEach(pull);
   overlays();
-  timer = setTimeout(cctvLoop, 1000 / parseFloat($("fps").value));
+  timer = setTimeout(cctvLoop, 1000 / curFps());
 }
+
+/* ---- manual control (panel-control D1): input on the frame goes to the machine ---- */
+const KEYMAP = {Enter: "return", Tab: "tab", Escape: "escape", Backspace: "backspace", Delete: "delete",
+  ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Home: "home", End: "end",
+  PageUp: "pageup", PageDown: "pagedown"};
+for (let i = 1; i <= 12; i++) KEYMAP["F" + i] = "f" + i;
+const control = {
+  on: null, queue: Promise.resolve(), text: "", textTimer: null, wheelAcc: 0, wheelTimer: null,
+  send(n, body) {                       // one queue keeps the order of clicks and keys
+    this.queue = this.queue.then(async () => {
+      try {
+        const r = await fetch(`control/${encodeURIComponent(n)}`, {method: "POST",
+          headers: {"Content-Type": "application/json", "X-Panel-Token": TOKEN}, body: JSON.stringify(body)});
+        const out = await r.json().catch(() => ({}));
+        if (r.ok) { this.on = out.on ? n : null; }
+        else {
+          if (r.status === 409) this.on = null;
+          toast(n, `${r.status === 409 ? T.ctlrefused : T.error}: ${out.error || r.status}`, 5000);
+        }
+      } catch (e) { toast(n, T.noserver); }
+      overlays();
+      pull(n); setTimeout(() => pull(n), 350);
+    });
+    return this.queue;
+  },
+  point(n, e) {
+    const img = tiles[n].img, r = img.getBoundingClientRect();
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    if (!nw) return null;
+    const s = Math.min(r.width / nw, r.height / nh);
+    const x = (e.clientX - r.left - (r.width - nw * s) / 2) / s, y = (e.clientY - r.top - (r.height - nh * s) / 2) / s;
+    return x < 0 || y < 0 || x >= nw || y >= nh ? null : {x: Math.round(x), y: Math.round(y), w: nw, h: nh};
+  },
+  click(n, e, button) {
+    if (!data || !data.control_enabled) { toast(n, T.viewonly); return; }
+    const p = this.point(n, e);
+    if (!p) return;
+    this.flush(n);
+    this.send(n, {op: "click", button, ...p});
+  },
+  wheel(n, e) {
+    if (!data || !data.control_enabled || this.on !== n) return;
+    const p = this.point(n, e);
+    if (!p) return;
+    this.wheelAcc += e.deltaY;
+    clearTimeout(this.wheelTimer);
+    this.wheelTimer = setTimeout(() => {
+      const amount = Math.min(10, Math.max(1, Math.round(Math.abs(this.wheelAcc) / 100)));
+      this.send(n, {op: "scroll", direction: this.wheelAcc > 0 ? "down" : "up", amount, ...p});
+      this.wheelAcc = 0;
+    }, 120);
+  },
+  flush(n) {
+    clearTimeout(this.textTimer);
+    if (this.text) { const text = this.text; this.text = ""; this.send(n, {op: "type", text}); }
+  },
+  key(e) {
+    const n = this.on;
+    if (!n || solo !== n) return false;
+    const altGr = e.getModifierState && e.getModifierState("AltGraph");
+    if (["Control", "Alt", "Shift", "Meta", "AltGraph", "CapsLock"].includes(e.key)) return true;
+    if ((e.ctrlKey || e.altKey || e.metaKey) && !altGr) {
+      const k = e.key.length === 1 ? e.key.toLowerCase() : KEYMAP[e.key];
+      if (!k || !/^([a-z0-9]|return|tab|escape|backspace|delete|up|down|left|right|home|end|pageup|pagedown|f\d+)$/.test(k)) return true;
+      const mods = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.metaKey && "cmd"].filter(Boolean);
+      this.flush(n); this.send(n, {op: "hotkey", keys: [...mods, k]});
+      return true;
+    }
+    if (e.key.length === 1) {                  // text, accents and AltGr characters included
+      this.text += e.key;
+      clearTimeout(this.textTimer);
+      this.textTimer = setTimeout(() => this.flush(n), 120);
+      return true;
+    }
+    if (KEYMAP[e.key]) { this.flush(n); this.send(n, {op: "key", key: KEYMAP[e.key]}); return true; }
+    return true;
+  },
+  stop() {
+    const n = this.on;
+    if (n) { this.flush(n); this.send(n, {op: "stop"}); }
+    this.on = null;
+  }
+};
 
 /* ---- view, settings, polling ---- */
 function view() {
   const cctv = location.hash === "#cctv";
   document.body.classList.toggle("cctv", cctv);
   $("nav-cctv").classList.toggle("on", cctv); $("nav-status").classList.toggle("on", !cctv);
+  if (!cctv && solo) leaveSolo();
   if (cctv) { renderPicks(); layout(); }
 }
-for (const id of ["cols", "fps", "size"]) {
+for (const id of ["cols", "fps", "solofps", "size"]) {
   $(id).value = store.get(id, $(id).value);
   $(id).onchange = () => { store.set(id, $(id).value); layout(); cctvLoop(); };
 }
 $("fsbtn").onclick = () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else (document.documentElement.requestFullscreen ? document.documentElement.requestFullscreen() : Promise.reject()).catch(() => {
+  if (document.fullscreenElement) { store.set("fsgrid", false); document.exitFullscreen(); return; }
+  store.set("fsgrid", true);
+  (document.documentElement.requestFullscreen ? document.documentElement.requestFullscreen() : Promise.reject()).catch(() => {
     document.body.classList.toggle("fs"); layout();       // no Fullscreen API: fill the window instead
   });
 };
-document.addEventListener("fullscreenchange", () => { document.body.classList.toggle("fs", !!document.fullscreenElement); layout(); });
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && solo) { solo = null; layout(); }
-  if (e.key === "f" && document.body.classList.contains("cctv") && !e.target.closest("select,input")) $("fsbtn").click();
+document.addEventListener("fullscreenchange", () => {
+  document.body.classList.toggle("fs", !!document.fullscreenElement);
+  if (!document.fullscreenElement) store.set("fsgrid", false);
+  layout();
 });
+window.addEventListener("resize", () => { if (document.body.classList.contains("cctv")) layout(); });
+document.addEventListener("keydown", e => {
+  if (control.on && control.key(e)) { e.preventDefault(); e.stopPropagation(); return; }
+  if (e.target.closest && e.target.closest("select,input")) return;
+  if (e.key === "Escape" && solo) { leaveSolo(); return; }
+  if (e.key === "f" && document.body.classList.contains("cctv")) $("fsbtn").click();
+}, true);
 window.addEventListener("hashchange", view);
+window.addEventListener("pagehide", () => {
+  if (control.on) fetch(`control/${encodeURIComponent(control.on)}`, {method: "POST", keepalive: true,
+    headers: {"Content-Type": "application/json", "X-Panel-Token": TOKEN}, body: JSON.stringify({op: "stop"})});
+});
 
 async function poll() {
   try {
     const r = await fetch("api/status", {cache: "no-store"});
     data = await r.json(); serverDown = false;
     $("updated").textContent = `${T.updated} ${new Date().toLocaleTimeString(lang)}`;
+    if (control.on) {                         // the server let go (idle, or the lock was lost)
+      const t = data.targets.find(x => x.name === control.on);
+      if (t && !t.control) control.on = null;
+    }
   } catch (e) {
     serverDown = true;
     $("updated").textContent = T.noserver;

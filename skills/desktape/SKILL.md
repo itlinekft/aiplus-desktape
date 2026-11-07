@@ -153,8 +153,10 @@ dt unbook ID                                           # when the job is done ea
 - A command that is already running is never cut off when a booking starts; a command started 15 min before
   another project's booking gets a warning: finish before it.
 - **The panel:** `dt panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,
-  and `#cctv` with every machine's screen live at about 1 frame per second. It takes no lock and acts on nothing.
-  Close the live view before a video take on a Mac (the screen-capture indicator may show).
+  and `#cctv` with every machine's screen live at about 1 frame per second. Watching takes no lock and acts on
+  nothing. A person who clicks into a zoomed screen takes that machine (label `panel`): your commands then stop with
+  exit code 3 naming `panel`; wait, do not work around it. Close the live view before a video take on a Mac (the
+  screen-capture indicator may show).
 
 ## Rules
 

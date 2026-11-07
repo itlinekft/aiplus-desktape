@@ -140,6 +140,26 @@ The status page and the grid were checked in headless Chrome (1600×1000): the t
 bookings and recent commands, and the 2×2 grid with live frames and the holder on each tile. Not measured: the
 macOS screen-capture indicator while the grid is open.
 
+## 2026-11-07: control from the panel, instead of a remote desktop
+
+**Machine:** the Windows 11 test PC, Claude Desktop on its home screen; Cua Driver 0.34.1. Controller: Linux, the
+panel on 127.0.0.1; the page in headless Chrome driven with real input events (DevTools protocol), 1600×1000.
+**Change:** `panel-control`.
+
+| What | Result |
+|---|---|
+| the driver alone: `get_desktop_state` 960 px, then `click {scope: desktop, x: 700, y: 140}` | "Sent click via SendInput at screen (1400,280)": the point mapped back to the full screen; 0.16 s. `scroll`, `press_key` escape and backspace with `scope: desktop`: 0.02–0.04 s |
+| the panel's endpoint: a click into the prompt field, then `type` "desktape panel teszt árvíztűrő tükörfúrógép" | the text in the field, accents right (frame checked); 0.14 s and 0.04 s |
+| `hotkey` ctrl+a, `key` backspace, `scroll` | the field empty again; 0.02–0.17 s each |
+| an agent's `look` while the panel controls the PC | exit code 3 after 60 s: "box is held by panel (panel control, since …, running as pid …)" |
+| after `stop` | `lock`: free; activity: control-start, control-end with the reason |
+| the audit | `type_text` logged as `<redacted>`; the typed words appear nowhere in it |
+| the page: three targets at 1600×1000, 1280×720, 800×1000 | all tiles visible, the page does not scroll (`scrollHeight` = window height at 1600×1000) |
+| the page: a click on a tile, then on the frame, then typing and Ctrl+A, Backspace | the view went full screen with one 1920 px tile at 4 fps; the click, the text (with accents), the combination and the key reached the PC; "Back" returned to the grid and gave the lock back |
+
+Not measured: control of the Mac (another session was using it), a Windows UAC prompt (the driver cannot reach the
+secure desktop; not tried).
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

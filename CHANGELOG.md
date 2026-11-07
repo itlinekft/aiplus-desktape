@@ -15,6 +15,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   and a live grid of every target's screen at about 1 frame per second (columns, rate, size and full screen set in
   the page). It takes no lock; frames come from the driver's read-only `get_desktop_state`, the one tool added to the
   allowlist, only while the grid is open.
+- The panel's live grid fits the window (no scrolling). A click on a screen zooms it to full screen at 1920 px and
+  4 frames per second; there the first click or key takes the machine and sends clicks, the wheel and the keyboard
+  to it, holding the machine's lock as `panel` until Back, two idle minutes or the panel's stop. Localhost only, with
+  a per-start page token; typed text is redacted in the audit.
 - A map can carry `answers:`, like a tape: they apply to every tape on that map, and a tape answer with the same
   name replaces the map's. An unplanned dialog is offered to the answers before it fails a step. Meant for pop-ups
   any tape on the app may meet, such as Claude Desktop's auto-sync card (closed with its X, never "Grant access");

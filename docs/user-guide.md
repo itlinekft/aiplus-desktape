@@ -187,6 +187,16 @@ the button or `f`; a click on a screen shows it alone. Frames come from the driv
 under the panel's own session, only while the tab is open, with no lock. The page shows everything on the screens,
 so the panel listens only on this machine unless `--bind` says otherwise.
 
+**Control from the panel, instead of a remote desktop.** A click on a screen shows it alone, full screen, sharp
+(1920 px) and faster (4 frames per second by default, "Zoomed" in the toolbar). There the first click or key press
+takes the machine: clicks, right clicks, the wheel and the keyboard (accented text, Enter, Tab, arrows, Ctrl and Alt
+combinations) go to its screen at the point you see. While you have it, the machine's lock is held by `panel`, so an
+agent's command waits and stops as for any other holder; and you cannot take a machine an agent holds or another
+project has booked: the page says who has it. "Back", two minutes without input, or closing the page gives it back.
+Control works only when the panel listens on 127.0.0.1, and only from the page it served (a per-start token).
+What the driver cannot reach, a person still does at the machine or over RDP: the Windows UAC prompt and lock
+screen, the macOS lock screen; and a Windows box whose desktop lives in an RDP session still needs that session.
+
 **Several machines: name them.** Copy [`targets.example.yaml`](../targets.example.yaml) to
 `~/.config/desktape/targets.yaml` (on Windows `%APPDATA%\desktape\targets.yaml`) and give each machine a
 name, a host, the account, the SSH key, a label and a note for people. Then `--target NAME` (or
