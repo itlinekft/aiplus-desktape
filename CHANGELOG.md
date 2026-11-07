@@ -25,6 +25,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   that card's answer goes into the Claude Desktop maps once its X is measured on each platform.
 
 ### Fixed
+- Web pages (Edge, Chrome): `click` on a button outside the visible part of the window scrolls it into view first;
+  before, Chromium accepted the element click and nothing happened. A web element that a few scrolls do not bring in
+  fails naming where it is.
+- `click: 106` that matches nothing says that a number is read as a label and that `look --full` indices belong to
+  one snapshot; `look` on a missing window prints one line and exits 1 instead of a traceback.
 - Windows: the driver daemon starts, and OCR and keyboard input run, when the user's profile folder has a space in its
   name: every `%USERPROFILE%` path desktape sends is quoted.
 - Windows over SSH: an administrator's key login is elevated, and Cua Driver 0.34.1 refuses a pipe client whose

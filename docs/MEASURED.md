@@ -160,6 +160,24 @@ panel on 127.0.0.1; the page in headless Chrome driven with real input events (D
 Not measured: control of the Mac (another session was using it), a Windows UAC prompt (the driver cannot reach the
 secure desktop; not tried).
 
+## 2026-11-07: a click on a web button below the fold
+
+**Machine:** the Windows 11 test PC, Edge (the user's profile), Cua Driver 0.34.1. Controller: Linux, over SSH.
+**Change:** `click-offscreen`. A test page: a button at the top, 3000 px of filler, a button below it.
+
+```bash
+python3 desktape.py run offscreen.yaml --target <pc>    # focus, click the top button, click the low one, expect
+```
+
+| What | Result |
+|---|---|
+| the driver's element list | the low button at y 3245 of a window ending at 1033, `in_web_content: true` |
+| before: click on the low button | the click accepted, "no effect: nothing changed after 3.0 s" |
+| `scroll` in the background | refused: "Background delivery is not available for target window class 'Chrome_WidgetWin_1'" |
+| `scroll` in the foreground, 3 pages | "via SendInput wheel (9 ticks)": the button moved up 891 px |
+| after: the same tape | 6/6; four scrolls (27, 18, 17, 9 lines) brought the button in, the click changed its label |
+| `look --window` with a title that does not exist | one line, "no window titled …", no traceback |
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

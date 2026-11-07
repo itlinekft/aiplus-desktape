@@ -21,6 +21,18 @@ open.
 - `type` / `key` with `into: "<title>"` and `os: true` go through Windows' own input (SendKeys), from a
   one-off task in the user's desktop session. It reaches whatever has the keyboard focus in that window.
 
+## Web pages in Edge or Chrome
+
+- **A button below the fold.** Chromium lists web elements that are scrolled out of view with their real position
+  (thousands of pixels below the window) and accepts the element click, which then does nothing. desktape scrolls
+  such an element into view before the click (the wheel goes in the foreground: Chromium refuses it in the
+  background). Measured 2026-11-07 on the Windows 11 test PC, Edge: a button 3000 px down, 4 scrolls, then clicked.
+- **The "save password" bubble** ("Menti a jelszavát?"): a session reported on 2026-11-07 that clicks on "Not now"
+  and on its close button did nothing. Not reproduced yet; try `key: escape` with the browser in front.
+- **Claude in Chrome follows the Claude login, not the machine** (reported 2026-11-07 by a session testing with
+  Claude in a browser): a target's Chrome signed in to another Claude account (Team vs personal) does not answer
+  a remote session's extension. Drive that browser with desktape (`look`/`act`), or by that machine's own Claude.
+
 ## Over SSH, as a standard user
 
 - **Process details are denied.** `Get-CimInstance Win32_Process` (command lines, parent processes) answers

@@ -823,6 +823,7 @@ class BoxLock:
 
 
 STATUS_FIELDS = ("state", "step", "last_ok_at", "strikes", "error", "history", "stuck", "updated")
+OFFSCREEN_SCROLLS = 6   # click-offscreen D1: scrolls toward a web element outside the window before giving up
 STRIKES = 3             # step-effect-check D4: failed steps in a row before `act` stops
 
 
@@ -2079,6 +2080,7 @@ class Runner:
     def snapshot(self):
         sc, text = self.cua.call("get_window_state", dict(self.win))
         self.elements, self.tree = sc.get("elements", []), text
+        self.shot = (sc.get("screenshot_width"), sc.get("screenshot_height"))     # click-offscreen D1
         # the driver's walk ran out of time before the first node: the program is busy (measured: a list tab of an
         # accounting program loading, >8 s), not empty, so nothing may count as missing or gone (busy-window)
         self.busy = not self.elements and "PARTIAL TREE" in (text or "")
@@ -2270,6 +2272,44 @@ class Runner:
         sc, _ = self.cua.call("list_windows", {})
         return {(w.get("window_id"), w.get("title"), w.get("is_on_screen"), w.get("minimized"))
                 for w in sc.get("windows", []) if w.get("pid") == self.win["pid"]}
+
+    def into_view(self, e, a, what):
+        """click-offscreen D1, D2: a web element outside the window is scrolled to before the click (Chromium's
+        element click does nothing there, measured); returns the element as read again, inside the window."""
+        W, H = getattr(self, "shot", (None, None))
+        for attempt in range(OFFSCREEN_SCROLLS + 1):
+            f = e.get("screenshot_frame") or {}
+            if not (e.get("in_web_content") and f and W and H):
+                return e
+            cx, cy = f["x"] + f["w"] / 2, f["y"] + f["h"] / 2
+            dy = cy - H / 2 if not 0 <= cy < H else 0
+            dx = cx - W / 2 if not dy and not 0 <= cx < W else 0
+            if not (dx or dy):
+                if attempt:
+                    logger.info("%s: in view after %d scroll(s)", what, attempt)
+                return e
+            if attempt == OFFSCREEN_SCROLLS:
+                break
+            d = dy or dx
+            args = {**self.win, "direction": ("down" if d > 0 else "up") if dy else ("right" if d > 0 else "left"),
+                    "amount": min(50, max(1, round(abs(d) / 100))), "by": "line",
+                    "x": round(min(max(cx, 10), W - 10)), "y": round(H / 2)}
+            logger.info("%s is outside the window (centre %.0f,%.0f; the window shows %sx%s): scrolling %s %d",
+                        what, cx, cy, W, H, args["direction"], args["amount"])
+            try:
+                self.cua.call("scroll", args)
+            except RuntimeError as ex:
+                if "background_unavailable" not in str(ex) and "Background delivery is not available" not in str(ex):
+                    raise
+                self.cua.call("scroll", {**args, "delivery_mode": "foreground"})
+            time.sleep(0.3)
+            again = self.pick(a, 3.0, enabled_only=True)
+            if not again:
+                raise RuntimeError(f"click: {what} went away while scrolling to it")
+            e = again
+        raise RuntimeError(f"click: {what} is outside the window (at {cx:.0f},{cy:.0f}; the window shows 0-{W} x 0-{H}) "
+                           f"and {OFFSCREEN_SCROLLS} scrolls did not bring it in; scroll to it first, or Tab onto it "
+                           "and press Enter")
 
     def glide_to(self, e, what):
         """person-cursor D2: the real pointer to the element's centre first; the click does not depend on it."""
@@ -3009,13 +3049,16 @@ class Runner:
             a = arg if isinstance(arg, dict) else {"label": arg}
             e = self.pick(a, float(a.get("timeout", self.wait_default())), enabled_only=True)   # timeout: a slow window
             if not e:
-                raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled)")
+                hint = ("; a number is read as a label: `look --full` indices like [106] belong to one snapshot, "
+                        "so give the label and role") if re.fullmatch(r"\d+", str(a.get("label") or "")) else ""
+                raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled){hint}")
             label = e.get("label") or e.get("name") or ""
             d = denied(self.deny, label, e.get("role"), self.title)
             if d:
                 logger.warning("refused a click on %s %r in %r: denied by the map entry %s",
                                e.get("role"), label, self.title, d)
                 raise DeniedClick(f"click: {e.get('role')} {label!r} in {self.title!r} is denied by the map: {d}")
+            e = self.into_view(e, a, f'{e.get("role")} {label!r}')
             args = {**self.win, "element_token": e["element_token"]}
             if a.get("action"):
                 args["action"] = a["action"]
@@ -3665,7 +3708,14 @@ def look_lines(tree_text, ignore, full=False, texts=False, new=False, grep=None,
 
 def cmd_look(a):
     with box_lock(a.host, "look") as lk:
-        rc = look(a)
+        try:
+            rc = look(a)
+        except RuntimeError as e:
+            if not str(e).startswith("no window titled"):
+                raise
+            logger.error("look: %s", e)             # click-offscreen: one line, not a traceback
+            print(f"desktape: look: {e}", file=sys.stderr)
+            return 1
         lk.status(state="ok", step="look", strikes=0, error=None, history=[], stuck=None)   # D4: looking clears strikes
         return rc
 
@@ -5186,6 +5236,55 @@ def selftest_booking_panel():
             if v is not None:
                 os.environ[k] = v
 
+def selftest_click_offscreen():
+    """click-offscreen: a web element below the window is scrolled to, background refused then foreground, and
+    clicked; a native element is not scrolled; one that stays out fails with advice; a number gets a hint."""
+    class Web:
+        def __init__(self, y, web=True, moves=True):
+            self.y, self.web, self.moves, self.sent, self.clicked = y, web, moves, [], False
+        def call(self, tool, args, secret=False, timeout=None):
+            self.sent.append((tool, dict(args)))
+            if tool == "list_windows":
+                return {"windows": [{"title": "Page", "pid": 7, "window_id": 1, "bounds": {"width": 800, "height": 600}}]}, ""
+            if tool == "get_window_state":
+                label = "Done" if self.clicked else "Low"
+                return {"elements": [{"label": label, "role": "Button", "element_token": f"t{len(self.sent)}",
+                                      "element_index": 1, "enabled": True, "in_web_content": self.web,
+                                      "screenshot_frame": {"x": 10, "y": self.y, "w": 80, "h": 20}}],
+                        "screenshot_width": 800, "screenshot_height": 600}, f'- [1] Button "{label}"'
+            if tool == "scroll":
+                if args.get("delivery_mode") != "foreground":
+                    raise RuntimeError("scroll failed: background_unavailable")
+                if self.moves:
+                    self.y -= args["amount"] * 100 * (1 if args["direction"] == "down" else -1)
+            if tool == "click":
+                self.clicked = True
+            return {}, "ok"
+    level = logger.level
+    logger.setLevel(logging.CRITICAL)
+    try:
+        w = Web(2600); r = Runner(w, "test"); r.focus("Page")
+        r.step({"click": {"label": "Low", "role": "Button"}})
+        scrolls = [a for t, a in w.sent if t == "scroll"]
+        assert scrolls and scrolls[0].get("delivery_mode") is None and scrolls[1]["delivery_mode"] == "foreground", scrolls
+        assert scrolls[1]["direction"] == "down" and 0 <= w.y < 600 and w.clicked, (scrolls, w.y)
+        w = Web(2600, web=False); r = Runner(w, "test"); r.focus("Page")
+        r.step({"click": {"label": "Low", "role": "Button"}})
+        assert not [t for t, _ in w.sent if t == "scroll"] and w.clicked, w.sent
+        w = Web(2600, moves=False); r = Runner(w, "test"); r.focus("Page")
+        try:
+            r.step({"click": {"label": "Low", "role": "Button"}}); raise AssertionError("expected the offscreen failure")
+        except RuntimeError as e:
+            assert "outside the window" in str(e) and "Tab onto it" in str(e) and not w.clicked, e
+        w = Web(100); r = Runner(w, "test"); r.focus("Page")
+        try:
+            r.step(scalars("click", {"click": 106}, 106)[0]); raise AssertionError("expected not found")
+        except RuntimeError as e:
+            assert "indices like [106]" in str(e), e
+    finally:
+        logger.setLevel(level)
+
+
 def selftest_knowledge():
     """os-knowledge: the base page first, then the user's pages; --where names the page not written yet."""
     import io
@@ -6636,6 +6735,7 @@ def selftest():
     selftest_mac_file_dialog()
     selftest_knowledge()
     selftest_booking_panel()
+    selftest_click_offscreen()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
                 "knowledge", "book", "unbook", "bookings", "panel"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
