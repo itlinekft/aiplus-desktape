@@ -110,6 +110,25 @@ open.
 - **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
   minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
 
+## Claude Desktop
+
+- **„Add folder” leaves a native „Folder access request” window open.** In a new Cowork task, „Project or folder” ›
+  „Add folder” › the folder picker asks „Allow Claude to change files in …?” inside the app; after „Allow”, Claude
+  Desktop opens a second, native window titled „Folder access request” („Allow Claude to access this folder?”,
+  „Allow”, „Mégse”, a „Don't ask again for this folder on this device” box). It is a separate top-level window of
+  `claude.exe`, 542x275 at the screen's centre, above the app. A screenshot of the „Claude” window does not show it,
+  and the task can go on without it: Claude asked for the same folder again inside the task („Claude would like to
+  add this folder to the session”, „Add folder”), and publishing worked. So the window stayed open for the whole
+  run, unnoticed, which no real user would leave. A click on „Mégse” through the „Claude” window (the dialog is also
+  listed in its tree) reported no effect; a click targeted at the window „Folder access request” closed it. Check
+  the window list for extra `claude.exe` windows after every folder step and answer each one (Allow or Mégse)
+  before the next step. Measured on a Hungarian build 26300 VM, Claude Desktop Store build, 2026-11-07.
+- **Wait on the task's state, not on a button name.** Hidden dialogs keep their text and buttons in the UI
+  Automation tree, so a check for a „Allow” button matches long after the prompt is gone. What tracked the task
+  reliably: the text „Needs your input” (a prompt is waiting), the button „Allow once” (a tool approval card: its
+  label carries the shortcut number, „Allow once 2”, on some cards), and the absence of „Working” / „Stop” (the
+  task is idle). Same VM, same day.
+
 ## Still to write
 
 The session that drives the Windows test box fills this page from its measurements: permission prompts,
