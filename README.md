@@ -51,6 +51,23 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 Első lépés: kérdezd meg a Claude-ot, „hogyan kezdjem?”. Megnézi, mi hiányzik a gépről, megmondja, honnan jön
 minden letöltés, és csak a jóváhagyásod után telepít.
 
+### Új vezérelt gép bekötése
+
+Ha az új gépen van Claude (Claude Code, vagy a Claude Desktop Code füle), azt kérd meg, hogy állítsa be:
+
+1. A vezérlő gépen: `desktape.py pair <név> --os windows`. Ez a géphez külön kulcsot készít, és kiír egy kérést.
+2. Ezt a kérést másold be az új gép Claude-jának. Ő végigmegy a [beállítási útmutatón](docs/setup-target.md):
+   - SSH-szerver, csak a helyi hálózatról vagy VPN-ről;
+   - a vezérlő kulcsa;
+   - a rögzített verziójú Cua Driver, ellenőrzött hash-sel;
+   - ffmpeg.
+
+   Minden lépés előtt megmutatja, mit csinál, és rákérdez. A végén jelentést ad a gép címével.
+3. A vezérlőn: `desktape.py pair <név> --host <user>@<cím>`, utána `desktape.py pair <név> --check`.
+
+Windowsra és macOS-re szól. Linux vezérelt gépként még nem támogatott. Élesen még nem próbáltuk ki, a mérés
+folyamatban van ([amit mértünk](docs/MEASURED.md)).
+
 Részletesen: [használati útmutató](docs/user-guide.md) (angolul), [hibaelhárítás](TROUBLESHOOTING.md) (magyarul és
 angolul), [amit mértünk](docs/MEASURED.md).
 
@@ -130,6 +147,11 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
   Or macOS (tested on macOS 26.4, Apple Silicon) with Remote Login, Cua Driver 0.34.1 and its permissions
   granted once by a person, and `ffmpeg-full` (required): [`docs/macos-setup.md`](docs/macos-setup.md).
   Every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
+- **A new target with Claude on it** can set itself up: `desktape.py pair NAME --os windows` prints a request to
+  paste into that Claude, which follows [`docs/setup-target.md`](docs/setup-target.md) with the person (SSH server
+  limited to the local network or VPN, the controller's key, the pinned Cua Driver with its checksum, ffmpeg) and
+  reports the address for `pair NAME --host user@address`. Windows and macOS; Linux is not a target yet. Not yet
+  measured on a new machine.
 - An RDP client must stay connected and visible on a Windows target during a run, because Windows stops
   rendering a minimised or disconnected session. Holding the session headless from Linux is the next change
   (`openspec/changes/headless-session`).
@@ -166,6 +188,7 @@ python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml --mode 
 python3 desktape.py tidy --keep Claude --minimize Terminal   # only the scene's programs on screen
 python3 desktape.py record --until-file /tmp/take-done        # the target's whole screen, beside a run on another machine
 python3 desktape.py pair box1 --host box1.local --user demo   # this machine's own key for a target: docs/pairing.md
+python3 desktape.py pair box3 --os windows                    # a new target: a request for the Claude on it (docs/setup-target.md)
 ```
 
 Authoring a tape: `look`, then `act` one step at a time with `--append`; a step is appended only if it
