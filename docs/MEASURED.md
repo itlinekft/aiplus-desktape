@@ -269,6 +269,13 @@ the front (Windows' foreground lock), so the test text went into the window that
 same number of backspaces and the field read back as before. Not measured yet: typing through the panel page by a
 person, the Mac's keys through `serve`.
 
+## 2026-11-08: a page open across a panel restart
+
+**Controller:** Linux, the panel on 127.0.0.1, the page in headless Chrome. **Change:** `panel-live` D6. The page
+was loaded, the panel was restarted twice (the first restart came from a panel without `started`, so the page only
+learnt the start time then). After the second restart the page reloaded itself within one status poll (3 s) and
+carried the new panel's token (the same six first characters as the page the new panel served).
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

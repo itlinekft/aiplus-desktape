@@ -15,6 +15,8 @@
   helper's `key`/`text` lines; keys routed through it in `grabber_act` with the driver as fallback; the agent cursor
   off on the input connection; started with control, ended with it; selftest for the key lines (D5).
   [REQ: keys-reach-a-controlled-target-at-typing-speed]
+- [x] 1.7 `started` in `/api/status`; the page reloads when it changes; selftest (D6).
+  [REQ: a-page-follows-a-restarted-panel]
 - [ ] 2.1 Measure on the Windows PC and the Mac mini: key latency, a hover menu, the Dock, the stream's rate and
   delay, ffmpeg gone after the view; into `docs/MEASURED.md`; docs (user guide, skill, changelog).
   Done 2026-11-07: the stream's rate and delay, input on its own connection, moves, cleanup, the Dock through the

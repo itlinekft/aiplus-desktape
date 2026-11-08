@@ -67,3 +67,10 @@ foreground`; clicks take 400–950 ms with the agent cursor on, 130–210 ms off
   - macOS: the helper's `serve` (D2) also reads `key <combo>` and `text <base64>` lines.
 - The helper starts in the background when control starts and ends with control. Real input reaches the window in
   front, which is what a person at the page means; it is the same input the driver's `os: true` steps send.
+
+## D6. A page follows a restarted panel
+
+Each panel start makes a new control token (panel-control D3), and a page loaded from the previous start keeps the old
+one: its control is refused until the person reloads (reported 2026-11-08: a Mac looked disconnected until F5).
+`/api/status` carries the panel's start time; a page that sees it change reloads itself, keeping its address (the view
+and its settings are in the address and the browser's storage).

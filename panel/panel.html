@@ -691,10 +691,14 @@ window.addEventListener("pagehide", () => {
     headers: {"Content-Type": "application/json", "X-Panel-Token": TOKEN}, body: JSON.stringify({op: "stop"})});
 });
 
+let startedAt = null;
 async function poll() {
   try {
     const r = await fetch("api/status", {cache: "no-store"});
     data = await r.json(); serverDown = false;
+    // panel-live D6: a restarted panel has a new token this page does not know: load the page it serves now
+    if (data.started && startedAt && data.started !== startedAt) { location.reload(); return; }
+    startedAt = startedAt || data.started;
     $("updated").textContent = `${T.updated} ${new Date().toLocaleTimeString(lang)}`;
     const bad = data.targets.filter(isBad).length;              // D6
     document.title = (bad ? `⚠ ${bad} · ` : "") + "desktape panel";

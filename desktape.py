@@ -5215,8 +5215,9 @@ def grabber_act(g, op, body):
 
 
 def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, alive=pid_alive, controls=None,
-                 control_enabled=False):
-    """/api/status (D5): every target's profile, lock, bookings, recent activity, SSH probe and frame state."""
+                 control_enabled=False, started=None):
+    """/api/status (D5): every target's profile, lock, bookings, recent activity, SSH probe and frame state; `started`
+    tells a page that a new panel answers (panel-live D6), whose token its own page no longer has."""
     now = now or time.time()
     acts = read_activity(directory)
     out = []
@@ -5238,7 +5239,7 @@ def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, aliv
                     "reach": (reach or {}).get(host),
                     "frame": grabbers[name].info() if grabbers and name in grabbers else None,
                     "control": {"since": controls[name]["since"]} if controls and name in controls else None})
-    return {"now": now, "targets": out, "control_enabled": bool(control_enabled)}
+    return {"now": now, "targets": out, "control_enabled": bool(control_enabled), "started": started}
 
 
 def block_fields(lk, x):
@@ -5264,6 +5265,7 @@ class PanelState:
     def __init__(self, bind, probe=True):
         self.allowed = LOOPBACK if bind in LOOPBACK else None
         self.token = "%032x" % random.SystemRandom().getrandbits(128)    # panel-control D3
+        self.started = time.time()                                           # panel-live D6
         self.controls = {}          # name -> {"lk": BoxLock, "since": t, "last": t}
         self.audit_dir = os.path.join(os.path.dirname(lock_dir()), "panel")
         self.grabbers, self.reach, self._rows = {}, {}, []
@@ -5410,7 +5412,8 @@ def panel_handler(state):
                 return self.send(200, page, "text/html; charset=utf-8")
             if u.path == "/api/status":
                 body = panel_status(state.rows(), state.grabbers, state.reach, controls=getattr(state, "controls", None),
-                                    control_enabled=state.allowed is not None and hasattr(state, "control"))
+                                    control_enabled=state.allowed is not None and hasattr(state, "control"),
+                                    started=getattr(state, "started", None))
                 return self.send(200, json.dumps(body, ensure_ascii=False).encode("utf-8"), "application/json")
             m = re.fullmatch(r"/frame/([^/]+)", u.path)
             if m:
@@ -5820,7 +5823,8 @@ def selftest_booking_panel():
                 assert not st.controls
                 r = urllib.request.urlopen(post({"X-Panel-Token": st.token, "Origin": url}))
                 assert r.status == 200 and json.loads(r.read())["on"] and "box" in st.controls
-                assert json.loads(urllib.request.urlopen(url + "/api/status").read())["targets"][0]["control"]
+                got = json.loads(urllib.request.urlopen(url + "/api/status").read())
+                assert got["targets"][0]["control"] and got["started"], "the start time tells a page of a restarted panel"
             finally:
                 st.control_stop("box", "selftest"); srv.shutdown(); srv.server_close()
             g.wanted = 0; g.kick.set(); g.thread.join(3)

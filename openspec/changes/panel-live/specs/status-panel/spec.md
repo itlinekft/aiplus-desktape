@@ -26,6 +26,16 @@ loopback and accept only the connection that presents the token the panel left f
 - **WHEN** the helper cannot be compiled or started on the target
 - **THEN** keys go through the driver as before and the panel logs why
 
+### Requirement: A page follows a restarted panel
+
+The status SHALL carry the panel's start time, and a page SHALL reload itself when that time changes, so a restarted
+panel's new token reaches it without the person reloading.
+
+#### Scenario: the panel restarts under an open page
+
+- **WHEN** the panel is restarted while a page from its previous start is open
+- **THEN** the page reloads itself within one status poll and its control works again
+
 ### Requirement: The pointer can follow the mouse
 
 The zoomed view SHALL offer a switch, off by default, that sends the mouse's moves over the frame to the target's
