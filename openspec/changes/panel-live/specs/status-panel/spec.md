@@ -36,6 +36,21 @@ panel's new token reaches it without the person reloading.
 - **WHEN** the panel is restarted while a page from its previous start is open
 - **THEN** the page reloads itself within one status poll and its control works again
 
+### Requirement: The panel reconnects a target whose driver went away
+
+While a target is watched and its driver daemon is gone (after a logout or a reboot), the panel SHALL start the
+daemon again once at once and then at most once every three minutes, and SHALL NOT call a model for it.
+
+#### Scenario: the person logged out and in again
+
+- **WHEN** a watched target answers that no driver daemon is listening
+- **THEN** the panel starts the daemon in the desktop session and the frames come back without an agent's command
+
+#### Scenario: nobody is logged in yet
+
+- **WHEN** the daemon cannot be started
+- **THEN** the panel shows the error and tries again no sooner than three minutes later
+
 ### Requirement: The pointer can follow the mouse
 
 The zoomed view SHALL offer a switch, off by default, that sends the mouse's moves over the frame to the target's

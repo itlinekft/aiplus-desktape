@@ -4599,6 +4599,7 @@ PANEL_PORT = 8645
 PANEL_HTML = os.path.join(HERE, "panel", "panel.html")
 FRAME_IDLE = 10.0             # D6: a grabber stops this long after the last frame request
 FRAME_RETRY = 5.0             # and waits this long after a failed frame
+REVIVE_EVERY = 180.0          # panel-live D7: a vanished driver daemon is started again at most this often
 FPS_RANGE, SIZE_RANGE = (0.2, 15.0), (320, 1920)
 DRIVER_FPS_MAX = 5.0           # panel-live D4: a driver frame costs 150 ms to 1 s; more than this is the stream's job
 ASK_WINDOW = 3.0               # seconds a viewer's ask for a rate and size counts (see FrameGrabber.want)
@@ -4904,11 +4905,13 @@ class MacPointer:
 
 class FrameGrabber:
     """One target's live screen (D6): the newest frame in memory, pulled with `get_desktop_state` under the
-    panel's own session label, only while someone asks for frames; no lock, no daemon start."""
+    panel's own session label, only while someone asks for frames; no lock. A driver daemon gone after a logout or
+    reboot is started again, at most once every REVIVE_EVERY (panel-live D7)."""
 
     def __init__(self, host, audit_dir, connect=None):
         self.host, self.audit_dir = host, audit_dir
-        self.connect = connect or (lambda: Cua(host, self.audit_path(), autostart=False))
+        self.revived = 0.0                  # panel-live D7: when the panel last started the target's driver daemon
+        self.connect = connect or (lambda: self.open_driver(lambda autostart: Cua(host, self.audit_path(), autostart=autostart)))
         self.frame, self.at, self.error, self.ms = None, 0.0, None, None
         self.fps, self.size, self.wanted, self.thread = 1.0, 960, 0.0, None
         self.session, self.cua, self.fresh, self.frame_wh = None, None, False, None
@@ -4921,6 +4924,21 @@ class FrameGrabber:
         self.pointer, self.pointer_busy = None, False                            # panel-live D2, macOS
         self.keyboard, self.keyboard_busy, self.keyboard_off_until = None, False, 0.0   # panel-live D5, Windows
         self.helpers = connect is None      # a test's fake driver gets no helpers on a real machine
+
+    def open_driver(self, make, now=None):
+        """panel-live D7 (owner, 2026-11-08: "pár percenként figyelni ha lecsatlakozott"): a connection without a
+        daemon start; when the daemon is gone, one start now and then at most once every REVIVE_EVERY."""
+        try:
+            return make(False)
+        except RuntimeError as e:
+            if not any(w in str(e) for w in (NO_DAEMON, MAC_NO_DAEMON, PIPE_REFUSED)):
+                raise
+            now = now or time.time()
+            if now - self.revived < REVIVE_EVERY:
+                raise
+            self.revived = now
+            logger.warning("panel: the driver daemon on %s is gone (a logout or reboot?); starting it again", self.host)
+            return make(True)
 
     def audit_path(self):
         os.makedirs(self.audit_dir, exist_ok=True)
@@ -5930,6 +5948,24 @@ def selftest_panel_audit():
     s.frames, s.last = 3, s.t0 + 20
     assert s.alive(s.t0 + 22) and not s.alive(s.t0 + 20 + STREAM_STALL + 1), "a silent stream is dead"
     s.stop(); assert not s.alive()
+    g, calls = FrameGrabber("user@box", tempfile.gettempdir(), connect=lambda: None), []
+    def make(autostart):
+        calls.append(autostart)
+        if not autostart:
+            raise RuntimeError("cua-driver connection closed: " + NO_DAEMON + " on the pipe")
+        return "driver"
+    assert g.open_driver(make, now=1000.0) == "driver" and calls == [False, True], "a gone daemon is started at once"
+    for t in (1000.0 + 60, 1000.0 + REVIVE_EVERY - 1):
+        try:
+            g.open_driver(make, now=t); raise AssertionError("started again too soon")
+        except RuntimeError as e:
+            assert NO_DAEMON in str(e)
+    assert g.open_driver(make, now=1000.0 + REVIVE_EVERY) == "driver", "and again after REVIVE_EVERY"
+    try:
+        g.open_driver(lambda a: (_ for _ in ()).throw(RuntimeError("ssh: connect timed out")), now=9e9)
+        raise AssertionError("other errors are not a daemon start")
+    except RuntimeError as e:
+        assert "timed out" in str(e)
     s = LiveStream("user@box", 10, 1280, lambda f: None, start=False); s.failed = True
     assert not s.alive(s.t0 + 1), "a capture task that failed is dead at once"
 

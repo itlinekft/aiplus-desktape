@@ -283,6 +283,15 @@ was loaded, the panel was restarted twice (the first restart came from a panel w
 learnt the start time then). After the second restart the page reloaded itself within one status poll (3 s) and
 carried the new panel's token (the same six first characters as the page the new panel served).
 
+## 2026-11-08: the panel starts a vanished driver daemon again
+
+**Machine:** the Windows 11 test PC (a standard user logged in at the console); Cua Driver 0.34.1. Controller: Linux,
+the panel on 127.0.0.1. **Change:** `panel-live` D7. With frames asked once a second, the driver daemon was ended
+(`taskkill /f /im cua-driver.exe`, as a logout does) at 12:32:00. The panel logged the broken connection at 12:32:00,
+started the daemon in the desktop session at 12:32:06 and had frames again at 12:32:14 (the frame 1 s old, no error),
+with no agent command. Before this change the same state (after a logout and login at 12:24) only logged "no Cua
+Driver daemon listening" every 5 s until a `look` started the daemon.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

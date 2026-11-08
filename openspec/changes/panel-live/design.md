@@ -74,3 +74,13 @@ Each panel start makes a new control token (panel-control D3), and a page loaded
 one: its control is refused until the person reloads (reported 2026-11-08: a Mac looked disconnected until F5).
 `/api/status` carries the panel's start time; a page that sees it change reloads itself, keeping its address (the view
 and its settings are in the address and the browser's storage).
+
+## D7. The panel starts a vanished driver daemon again
+
+After a logout or a reboot the target's driver daemon is gone, and the panel only showed "no Cua Driver daemon
+listening" every 5 s until an agent's next command started it (booking-and-panel D6: a watcher never changed the
+target). The owner asked on 2026-11-08 that the panel check every few minutes and reconnect. So while someone watches
+a target, the grabber connects without a daemon start, and when the daemon is gone it starts it once at once, then at
+most once every 3 minutes (`REVIVE_EVERY`), with a warning in the log. Plain Python in the panel: no model is called.
+Starting the daemon is what any `look` does; nothing on the screen changes. A target with nobody logged in fails the
+start and is tried again 3 minutes later.
