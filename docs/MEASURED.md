@@ -267,7 +267,14 @@ target. **Change:** `panel-live` D5.
 The helper's text goes to whatever has the keyboard focus. A Notepad started from a one-off `/it` task did not come to
 the front (Windows' foreground lock), so the test text went into the window that was in front; it was removed with the
 same number of backspaces and the field read back as before. Not measured yet: typing through the panel page by a
-person, the Mac's keys through `serve`.
+person.
+
+**The Mac (2026-11-08, 05:34, Mac mini, macOS 26.4, arm64, under desktape's lock, no booking):** the helper's `serve`
+compiled from the new source and took 10 shift presses, then, with an empty file of its own open in TextEdit and
+TextEdit checked in front (`desktape-input front`), a text with accents, a backspace, `cmd+a` and the text „kész”: the
+window showed „kész” and the file TextEdit saved held exactly those 5 bytes. The Mac helper sends no answers, so
+there is no time per key. `osascript` over SSH asked for an Automation permission for TextEdit (the owner allowed it)
+and twice hung while reading TextEdit's text; read the result from the screen or the file instead.
 
 ## 2026-11-08: a page open across a panel restart
 

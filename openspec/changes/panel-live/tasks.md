@@ -21,6 +21,7 @@
   delay, ffmpeg gone after the view; into `docs/MEASURED.md`; docs (user guide, skill, changelog).
   Done 2026-11-07: the stream's rate and delay, input on its own connection, moves, cleanup, the Dock through the
   helper's `serve`, the docs. Done 2026-11-08: keys through the Windows helper (14–29 ms a key; the driver's 2 s
-  stalls gone). Open: a hover menu on Windows; the Dock and keys through the page itself on the Mac (it was booked).
+  stalls gone); the Mac helper's keys and text into a TextEdit file of its own. Open: a hover menu on Windows; the
+  Dock and keys through the page itself on the Mac.
   [REQ: input-to-a-controlled-target-does-not-wait-for-frames] [REQ: the-pointer-can-follow-the-mouse]
   [REQ: a-windows-target-s-zoomed-view-is-a-live-stream] [REQ: keys-reach-a-controlled-target-at-typing-speed]
