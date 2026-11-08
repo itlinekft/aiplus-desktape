@@ -176,7 +176,7 @@ def target_os(host, opts=None):
     if name == "Linux":
         raise SystemExit(f"desktape: {host} is a Linux machine; Linux targets are not supported yet")
     TARGET_OS[host] = "macos" if name == "Darwin" else "windows"
-    logger.info("target %s runs %s (uname: %r)", host, TARGET_OS[host], name or "none")
+    logger.debug("target %s runs %s (uname: %r)", host, TARGET_OS[host], name or "none")   # lean-look D2
     return TARGET_OS[host]
 
 
@@ -3763,7 +3763,19 @@ def look_lines(tree_text, ignore, full=False, texts=False, new=False, grep=None,
     if grep:
         rx = re.compile(grep, re.IGNORECASE)
         lines = [l for l in lines if rx.search(l)]
-    return lines, hidden, unchanged
+    return fold_repeats(lines), hidden, unchanged
+
+
+def fold_repeats(lines):
+    """lean-look D1: a line printed several times costs the reading agent tokens each time; print it once, where the
+    first one was, with its count."""
+    from collections import Counter
+    n, seen, out = Counter(lines), set(), []
+    for l in lines:
+        if l not in seen:
+            seen.add(l)
+            out.append(f"{l} ×{n[l]}" if n[l] > 1 else l)
+    return out
 
 
 def cmd_look(a):
@@ -6596,6 +6608,15 @@ def selftest():
           '  - [3] Button "Send" [actions=[invoke]]')
     k4, h4 = apply_ignore(t4.splitlines(), [{"from": {"role": "Text", "label": "Recent artifacts"}}])
     assert compact(k4) == ['Button "Send" (invoke)'] and h4 == 4, (compact(k4), h4)
+    # lean-look D1: repeats print once with their count, where the first was; --new compares the unfolded lines
+    assert fold_repeats(["a", "b", "a", "c", "a", "b"]) == ["a ×3", "b ×2", "c"]
+    assert fold_repeats([]) == [] and fold_repeats(["x"]) == ["x"]
+    t5 = "- Window \"App\"\n" + "".join(f'  - [{i}] Image "Done" [actions=[invoke]]\n' for i in range(1, 4))
+    with tempfile.TemporaryDirectory() as d:
+        st = os.path.join(d, "look", "App.txt")
+        assert look_lines(t5, None, state=st)[0] == ['Image "Done" (invoke) ×3'], look_lines(t5, None)[0]
+        assert look_lines(t5 + '  - [9] Image "Done" [actions=[invoke]]\n', None, new=True, state=st)[0] == [], \
+            "one more of a repeated line is not new"
     with tempfile.TemporaryDirectory() as d:
         st = os.path.join(d, "look", "App.txt")
         look_lines(t2, ign, state=st)

@@ -292,6 +292,23 @@ started the daemon in the desktop session at 12:32:06 and had frames again at 12
 with no agent command. Before this change the same state (after a logout and login at 12:24) only logged "no Cua
 Driver daemon listening" every 5 s until a `look` started the daemon.
 
+## 2026-11-08: the size of a `look` (what an agent pays in tokens)
+
+**Machines:** the Windows 11 test PC and the Windows 10 PC, each with Claude Desktop in front; Cua Driver 0.34.1.
+Controller: Linux. **Change:** `lean-look`. Bytes of `desktape.py look` output (standard output and error together,
+as an agent's shell reads them), the same windows a few minutes apart:
+
+| What | Before | After |
+|---|---|---|
+| `look`, Windows 11 test PC | 5443 | 3826 (repeats folded: 10× „Mark as unread”, 10× „Done”, 7× „Idle”) |
+| `look --text`, Windows 11 test PC | 5961 | 4267 |
+| `look`, Windows 10 PC | 4426 | 3757 |
+| `look --text`, Windows 10 PC | 8388 | 7453 |
+| `look --new` with little changed | 78–148 | (unchanged) |
+| `act` | one `ok: <step>` line | (unchanged) |
+
+Part of each saving is the "target … runs windows" line, now at DEBUG (about 70 bytes a command).
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

@@ -5,6 +5,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Changed
+- `look` prints a repeated line once with its count (`Image "Done" (invoke) ×10`), 15–30% fewer bytes on a Claude
+  Desktop window; the "target … runs windows" line is DEBUG now; the skill points agents at `look --grep` and
+  `look --new` (`lean-look`).
+
 ### Added
 - The panel as a remote desktop (`panel-live`): a Windows machine's zoomed screen is a live stream (ffmpeg in its
   desktop session, on its loopback only, relayed over SSH; up to 15 frames a second, about 0.3 s behind), with the

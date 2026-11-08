@@ -81,6 +81,10 @@ data again. If the person keeps a backup step, it belongs before the run.
 does one step and checks its outcome. Use them to **build or repair a tape** with the person, not to do a
 business task step by step on your own: a tape is reviewed once and then replayed the same way every time.
 
+Every line you read costs tokens: a full `look` at a busy window is about 5 KB. Take the full list once, then
+`look --grep '<label>'` for the control you need and `look --new` after an `act` (only what changed, often under
+150 bytes). Repeated lines come folded (`Image "Done" (invoke) ×12`).
+
 ## Know the operating system
 
 Each operating system has its own traps for a program that drives its screen. Examples: a macOS file dialog
