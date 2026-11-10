@@ -5,6 +5,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
 ### Changed
 - `look` prints a repeated line once with its count (`Image "Done" (invoke) ×10`), 15–30% fewer bytes on a Claude
   Desktop window; the "target … runs windows" line is DEBUG now; the skill points agents at `look --grep` and
