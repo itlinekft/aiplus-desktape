@@ -5397,8 +5397,14 @@ class PanelState:
 
     def grabber(self, name):
         with self.mu:
+            host = next((h for n, h, _ in self._rows or self.rows() if n == name), None)
+            old = self.grabbers.get(name)
+            if old is not None and host and old.host != host:
+                # a target moved (a DHCP address, a new ssh alias): the old grabber would keep the old host forever
+                logger.info("panel: %s moved from %s to %s; its live screen follows", name, old.host, host)
+                old.wanted = 0.0; old.kick.set()          # its loop ends at the next check
+                del self.grabbers[name]
             if name not in self.grabbers:
-                host = next((h for n, h, _ in self._rows or self.rows() if n == name), None)
                 if not host:
                     return None
                 self.grabbers[name] = FrameGrabber(host, self.audit_dir)
@@ -5978,6 +5984,12 @@ def selftest_panel_audit():
         raise AssertionError("other errors are not a daemon start")
     except RuntimeError as e:
         assert "timed out" in str(e)
+    ps = PanelState("127.0.0.1", probe=False)
+    ps._rows = [("box", "user@old", {})]
+    g1 = ps.grabber("box"); ps._rows = [("box", "user@new", {})]
+    g2 = ps.grabber("box")
+    assert g1.host == "user@old" and g2.host == "user@new" and g1 is not g2 and g1.wanted == 0.0, "a moved target follows"
+    assert ps.grabber("box") is g2 and ps.grabber("nope") is None
     s = LiveStream("user@box", 10, 1280, lambda f: None, start=False); s.failed = True
     assert not s.alive(s.t0 + 1), "a capture task that failed is dead at once"
 

@@ -5,6 +5,16 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-10
+
+### Fixed
+- The panel's grid no longer flickers when screens of two shapes are shown (a 16:9 PC next to a MacBook): every
+  frame set one shared shape to its own, so the grid switched layouts several times a second (measured: 200 size
+  changes in 20 s, now none). The cells take the tallest shown screen's shape; a wider screen is letterboxed.
+  Captions are rewritten only when they change.
+- A target whose address changed in the targets file (a DHCP move, a new ssh alias) is followed by the panel; its
+  live screen kept the old address until the panel was restarted.
+
 ## [0.6.0] - 2026-11-10
 
 ### Changed

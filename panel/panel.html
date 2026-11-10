@@ -348,8 +348,16 @@ function fit(n, W, H, gap, colsSetting) {
 let laidOut = "";
 const layoutKey = () => [isFs(), solo, innerWidth, innerHeight, Math.round($("grid").getBoundingClientRect().top),
   picked().join()].join("|");
+/* One shape for the grid's cells: the zoomed screen's own, else the tallest of the shown screens, so every screen
+   fits and a wider one is letterboxed. One global shape that each frame set to its own made the grid jump between
+   two layouts several times a second once screens of two shapes (16:9 and a MacBook's 16:10) were shown. */
+const wantAspect = () => {
+  const as = (solo ? [solo] : picked()).map(n => tiles[n] && tiles[n].aspect).filter(Boolean);
+  return as.length ? Math.min(...as) : 16 / 9;
+};
 function layout() {
   const names = picked(), grid = $("grid");
+  aspect = wantAspect();
   document.body.classList.toggle("solo", !!solo);
   for (const n of Object.keys(tiles)) if (!names.includes(n)) { tiles[n].el.remove(); delete tiles[n]; }
   for (const n of names) {
@@ -415,6 +423,7 @@ function toast(n, text, ms = 2500) {
   el.textContent = text; el.style.display = "block";
   clearTimeout(t.toastTimer); t.toastTimer = setTimeout(() => { el.style.display = "none"; }, ms);
 }
+const setHTML = (el, h) => { if (el.innerHTML !== h) el.innerHTML = h; };   // untouched captions are not redrawn
 function overlays() {
   if (!data) return;
   const now = Date.now() / 1000, fps = curFps();
@@ -423,17 +432,16 @@ function overlays() {
     if (!t) continue;
     tile.el.classList.toggle("ctl", !!(control.on === n));
     tile.el.classList.toggle("bad", isBad(t));
-    tile.el.querySelector(".top").innerHTML = `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
+    setHTML(tile.el.querySelector(".top"), `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
       (isBad(t) ? ` <span class="badge bad">${esc(t.lock.state)}</span>` : "") +
-      (t.lock && t.lock.held && !t.control ? ` <code class="cmd" title="${esc(t.lock.command)}">${esc(short(t.lock.command, 80))}</code>` : "");
+      (t.lock && t.lock.held && !t.control ? ` <code class="cmd" title="${esc(t.lock.command)}">${esc(short(t.lock.command, 80))}</code>` : ""));
     if (solo === n) soloBar(t);
     const old = tile.at && now - tile.at > Math.max(3 / fps, 4);
     tile.el.classList.toggle("stale", !!(tile.at && old));
-    tile.el.querySelector(".bottom").innerHTML = tile.at
-      ? `${old ? T.stale + " · " : ""}${ago(tile.at, now)} ${T.ago}` : "";
+    setHTML(tile.el.querySelector(".bottom"), tile.at ? `${old ? T.stale + " · " : ""}${ago(tile.at, now)} ${T.ago}` : "");
     const msg = tile.el.querySelector(".msg");
     msg.style.display = !tile.at || tile.err ? "flex" : "none";
-    msg.innerHTML = tile.err ? `<span class="err">${T.error}: ${esc(tile.err)}</span>` : T.noframe;
+    setHTML(msg, tile.err ? `<span class="err">${T.error}: ${esc(tile.err)}</span>` : T.noframe);
   }
 }
 const isBad = t => !!(t.lock && ["stuck", "blocked", "failed"].includes(t.lock.state));
@@ -495,8 +503,8 @@ async function pull(n) {
         if (tile.url) URL.revokeObjectURL(tile.url);
         tile.url = url;
         if (tile.markAt && at * 1000 > tile.markAt + 300) tile.el.querySelector(".mark").style.display = "none";
-        const a = tile.img.naturalWidth / tile.img.naturalHeight;
-        if (a && Math.abs(a - aspect) > 0.01) { aspect = a; layout(); }
+        const a = tile.img.naturalWidth / tile.img.naturalHeight;     // each screen keeps its own shape
+        if (a && Math.abs(a - (tile.aspect || 0)) > 0.01) { tile.aspect = a; if (Math.abs(wantAspect() - aspect) > 0.01) layout(); }
       };
       tile.img.src = url;
       tile.at = at;
