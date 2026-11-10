@@ -19,6 +19,9 @@
   [REQ: a-page-follows-a-restarted-panel]
 - [x] 1.8 `FrameGrabber.open_driver`: a gone daemon started at once, then at most every `REVIVE_EVERY`; selftest (D7).
   [REQ: the-panel-reconnects-a-target-whose-driver-went-away]
+- [x] 1.9 The pointer follows always while control is on (no switch); a blue arrow over the zoomed screen; Shift with
+  a named key as a combination (D1, D2). [REQ: the-pointer-can-follow-the-mouse]
+  [REQ: keys-reach-a-controlled-target-at-typing-speed]
 - [ ] 2.1 Measure on the Windows PC and the Mac mini: key latency, a hover menu, the Dock, the stream's rate and
   delay, ffmpeg gone after the view; into `docs/MEASURED.md`; docs (user guide, skill, changelog).
   Done 2026-11-07: the stream's rate and delay, input on its own connection, moves, cleanup, the Dock through the

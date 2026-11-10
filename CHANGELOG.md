@@ -5,6 +5,17 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-10
+
+### Changed
+- The panel: while you control a machine, its pointer always follows your mouse (the "Follow the pointer" switch is
+  gone), and your pointer over the zoomed screen is a blue arrow instead of a crosshair, next to the machine's own
+  white one.
+
+### Fixed
+- Shift with an arrow key, Tab, Home, End and the like reaches the machine as a combination, so selecting with the
+  keyboard works; the panel sent the key without Shift.
+
 ## [0.6.1] - 2026-11-10
 
 ### Fixed

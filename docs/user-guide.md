@@ -202,9 +202,11 @@ ended less than 3 minutes ago), **Take over** in the bar above the screen takes 
 agent's lease and session state come back and its next command runs. A quick second click is a double click; press,
 move and release is a drag (select text, move a window, a slider). The bar's **Esc**, **Start** and **Alt+Tab**
 send what the browser keeps for itself; in full screen Chrome also passes Escape and its own shortcuts (hold Esc to
-leave). A yellow ring marks where your click went. **Follow the pointer** in the bar sends the mouse's moves too, not only
-clicks, so menus that open on hover and the Mac's hidden Dock show (off by default; on a Mac through desktape's input
-helper, which is compiled there on first use). Clicks and keys travel on a driver connection of their own, so they
+leave). A yellow ring marks where your click went. While you control a machine, its pointer follows your mouse, not only
+your clicks, so menus that open on hover and the Mac's hidden Dock show (on a Mac through desktape's input
+helper, which is compiled there on first use). Your own pointer over the screen is a blue arrow: blue is where you
+point, the machine's own white pointer in the picture is where it is. Shift with an arrow key selects, as at the
+machine. Clicks and keys travel on a driver connection of their own, so they
 never wait for a frame; keys and text go through desktape's own input helper on the target (compiled there on first
 use: on Windows with the system's .NET Framework compiler), which types like a keyboard, into the window in front. "Back", two minutes without input, or closing the page gives it
 back.

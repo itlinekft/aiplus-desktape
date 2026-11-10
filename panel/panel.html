@@ -86,7 +86,8 @@
                 border-radius: 50%; box-shadow: 0 0 0 2px #000a; pointer-events: none; display: none; z-index: 2; }
   .tile .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                color: #ddd; padding: 20px; text-align: center; font-size: 13px; pointer-events: none; }
-  body.solo .tile { cursor: crosshair; }
+  /* panel-live D2: a blue arrow is where you point; the target's own (white) pointer in the frames is where it is */
+  body.solo .tile { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><path d='M2 2 L2 19 L7 14.5 L10.5 22 L13.5 20.6 L10 13.2 L16.5 13.2 Z' fill='%232f7bff' stroke='white' stroke-width='1.5' stroke-linejoin='round'/></svg>") 2 2, default; }
   body.solo .tile .ov { display: none; }
   #solobar { display: none; height: 32px; align-items: center; gap: 8px; padding: 0 8px; background: #111; color: #eee;
              font-size: 13px; white-space: nowrap; overflow: hidden; }
@@ -154,7 +155,7 @@ const HU = {
   release: "Elengedés", viewonly: "Csak nézet (a panel nem ezen a gépen figyel)",
   takeover: "Átveszem", takeoverHint: "az „Átveszem” gomb fent átveszi a lease-t", tookover: "átvéve tőle",
   ctltake: "lease átvétele", heldRun: "{label} parancsa fut ({command})", heldLease: "{label} lease-e {until}-ig",
-  bookedBy: "{label} foglalta {until}-ig", cmds: "parancs", kEsc: "Esc", kStart: "Start", kAltTab: "Alt+Tab", follow: "Follow the pointer", followHint: "The mouse moves go to the machine too, not only clicks (menus, Dock)", follow: "Egér követése", followHint: "Az egér mozgása is a gépre megy, nem csak a kattintás (menük, Dock)",
+  bookedBy: "{label} foglalta {until}-ig", cmds: "parancs", kEsc: "Esc", kStart: "Start", kAltTab: "Alt+Tab",
   hold: "használja", now: "most", badCount: "gépen gond van"
 };
 const EN = {
@@ -461,7 +462,7 @@ function soloBar(t) {
   bar.innerHTML = `<button data-a="back">${T.back}</button>${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
     `<span class="state">${esc(state)}</span><span class="spacer"></span>` +
     (canTakeOver(t) && data.control_enabled ? `<button class="take" data-a="take">${T.takeover}</button>` : "") +
-    (data.control_enabled ? `<button data-a="follow" class="${control.follow ? "take" : ""}" title="${esc(T.followHint)}">${T.follow}</button>` : "") +
+
     (data.control_enabled ? `<button data-a="esc">${T.kEsc}</button><button data-a="start">${T.kStart}</button>` +
       `<button data-a="alttab">${T.kAltTab}</button>` : "");
   bar.querySelectorAll("button").forEach(b => b.onclick = e => {
@@ -469,7 +470,6 @@ function soloBar(t) {
     const a = b.dataset.a;
     if (a === "back") return leaveSolo();
     if (a === "take") return control.send(n, {op: "start", takeover: true});
-    if (a === "follow") { control.follow = !control.follow; store.set("follow", control.follow); bar.dataset.key = ""; soloBar(t); return; }
     control.flush(n);
     control.send(n, a === "esc" ? {op: "key", key: "escape"} : a === "start" ? {op: "hotkey", keys: ["ctrl", "escape"]}
                                 : {op: "hotkey", keys: ["alt", "tab"]});
@@ -577,11 +577,12 @@ const control = {
     if (pend) { clearTimeout(pend.timer); this.pend = null; this.send(pend.n, {op: "click", button, ...pend.p}); }
     this.pend = {n, p, timer: setTimeout(() => { this.pend = null; this.send(n, {op: "click", button, ...p}); }, 250)};
   },
-  /* panel-live D2: the pointer follows the mouse while the switch is on: the newest point only, one in flight,
-     outside the ordered queue (a click carries its own point), never during a press (the drag has its path). */
-  follow: store.get("follow", false), moveNext: null, moveBusy: false,
+  /* panel-live D2: while control is on, the target's pointer follows the mouse (owner, 2026-11-10: always, no
+     switch): the newest point only, one in flight, outside the ordered queue (a click carries its own point), never
+     during a press (the drag has its path). */
+  moveNext: null, moveBusy: false,
   move(n, e) {
-    if (!this.follow || this.on !== n || this.press || !data || !data.control_enabled) return;
+    if (this.on !== n || this.press || !data || !data.control_enabled) return;
     const p = this.point(n, e);
     if (!p) return;
     this.moveNext = {n, p};
@@ -651,7 +652,11 @@ const control = {
       this.textTimer = setTimeout(() => this.flush(n), 40);   // panel-live D1
       return true;
     }
-    if (KEYMAP[e.key]) { this.flush(n); this.send(n, {op: "key", key: KEYMAP[e.key]}); return true; }
+    if (KEYMAP[e.key]) {                       // Shift with a named key (select with the arrows, Shift+Tab) keeps Shift
+      this.flush(n);
+      this.send(n, e.shiftKey ? {op: "hotkey", keys: ["shift", KEYMAP[e.key]]} : {op: "key", key: KEYMAP[e.key]});
+      return true;
+    }
     return true;
   },
   stop() {

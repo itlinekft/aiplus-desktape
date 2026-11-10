@@ -7,13 +7,17 @@ maps a downsized frame's points back to the screen, but a session lives only wit
 session never captures and works in the screen's native pixels: the page sends the point and the frame's size, and
 the grabber scales it to `screenshot_original_width/height` from the last driver frame (or the stream's own size,
 which keeps the screen's aspect). Measured: 46 ms per call on Windows while frames run on the other connection,
-14 ms on the Mac. The page's text debounce drops from 120 ms to 40 ms.
+14 ms on the Mac. The page's text debounce drops from 120 ms to 40 ms. Shift held with a named key (an arrow, Tab,
+Home) goes as a key combination (`shift+left`), so selecting with the arrows works; it went without Shift before
+(reported 2026-11-10).
 
 ## D2. Following the pointer
 
-A switch in the zoomed view's bar (off by default; a remote desktop that moves the pointer by itself would
-surprise a person at the target). On, the page sends `{op: "move", x, y, w, h}` on mouse moves, at most one in
-flight and only the newest point kept, and never while a drag is pressed (the drag carries its own path).
+While control is on, the page sends `{op: "move", x, y, w, h}` on mouse moves over the zoomed screen, at most one in
+flight and only the newest point kept, and never while a drag is pressed (the drag carries its own path). It began as
+a switch, off by default; the owner made it always on (2026-11-10: „egér követése alap kellene legyen … nem kell a
+kurzor toggle”). Over the zoomed screen the page's own pointer is a blue arrow in place of the crosshair: blue is where
+the person points, the target's own (white) pointer in the frames is where the target's is.
 
 - Windows: the driver's `move_cursor` with `scope: desktop` on the input connection (6 ms measured). `move_cursor`
   joins `ALLOWED` on the owner's yes of 2026-11-07; like `drag`, only the panel's control sends it, tapes cannot.

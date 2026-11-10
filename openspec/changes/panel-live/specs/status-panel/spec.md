@@ -21,6 +21,11 @@ loopback and accept only the connection that presents the token the panel left f
 - **WHEN** control is on for a Windows target and the person types
 - **THEN** each key reaches the target in well under a second, with no stall of seconds between keys
 
+#### Scenario: selecting with Shift and the arrows
+
+- **WHEN** control is on and the person holds Shift and presses an arrow key
+- **THEN** the target gets Shift with the arrow, and the selection grows
+
 #### Scenario: the helper cannot start
 
 - **WHEN** the helper cannot be compiled or started on the target
@@ -53,13 +58,13 @@ daemon again once at once and then at most once every three minutes, and SHALL N
 
 ### Requirement: The pointer can follow the mouse
 
-The zoomed view SHALL offer a switch, off by default, that sends the mouse's moves over the frame to the target's
-pointer while control is on, the newest point only, so hover effects show. On macOS the moves SHALL be real
+While control is on, the zoomed view SHALL send the mouse's moves over the frame to the target's pointer, the newest
+point only, so hover effects show, and SHALL show the page's own pointer there as a blue arrow. On macOS the moves SHALL be real
 mouse-moved events. `move_cursor` SHALL be on the allowlist for the panel's control only.
 
 #### Scenario: the hidden Dock
 
-- **WHEN** the switch is on for a Mac whose Dock hides itself and the person moves the mouse to the frame's bottom edge
+- **WHEN** control is on for a Mac whose Dock hides itself and the person moves the mouse to the frame's bottom edge
 - **THEN** the Dock appears on the target, and on the next frames
 
 #### Scenario: a tape cannot move the pointer
