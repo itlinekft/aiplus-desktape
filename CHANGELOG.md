@@ -5,6 +5,15 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-11
+
+### Fixed
+- The panel's live stream of a Windows machine on a slow network (a VM behind a port forward, about 1 MB/s) no longer
+  falls seconds behind: the machine sends H.264 instead of whole JPEG frames, and the panel decodes it with its own
+  ffmpeg (measured on a VM: 63 KB/s instead of 1.1 MB/s, 10 frames a second instead of 7, the pointer seen 0.4–0.9 s
+  after it moved instead of 2–9 s). Without ffmpeg on the controller, or when the machine's ffmpeg cannot encode
+  H.264, the stream stays MJPEG.
+
 ## [0.6.2] - 2026-11-10
 
 ### Changed

@@ -309,6 +309,25 @@ as an agent's shell reads them), the same windows a few minutes apart:
 
 Part of each saving is the "target … runs windows" line, now at DEBUG (about 70 bytes a command).
 
+## 2026-11-11: the live stream as H.264 on a slow network
+
+A Windows 11 VM (user-mode network on a Linux host, reached through a port forward), Cua Driver 0.34.1, ffmpeg
+9.0.2 there, 8.0.1 on the Linux controller. The owner saw the zoomed screen about 6 s behind.
+
+- SSH throughput: a 3.4 MB file (`ssh <target> 'type C:\Windows\explorer.exe' | wc -c`) took 3.6 s to the VM
+  (0.4 s of it is the connection), 0.7 s to the LAN PC; 21 s to the VM while its MJPEG stream ran.
+- The panel's input connection, the same minute: `move_cursor` 114–120 ms on average (max 326) on the VM, 6 ms on
+  the LAN PC (the panel audit's per-minute summaries).
+- Stream at 10 fps, 1920 px, 20 s (a probe script around `LiveStream`, counting the relay's bytes and the decoded
+  frames): MJPEG 7.4 fps, 1115 KB/s on the wire (about 150 KB a frame); H.264 (`ultrafast`, `zerolatency`,
+  `-maxrate 4M`) 10.1 fps, 63 KB/s.
+- Delay: the driver moved the pointer between two points six times; the first decoded frame whose crop around the new
+  point changed counted. The `move_cursor` call itself took 0.83–1.09 s (the agent cursor's glide, on in this probe).
+  After the call returned: H.264 0.4–0.9 s (1.25–1.76 s from the call's start); MJPEG 8.7 s, 1.8 s, 2.8 s, and twice
+  not within 15 s.
+- ffmpeg's `-fflags nobuffer` drops the packets it probed: with H.264 that is the first keyframe, and nothing decoded
+  (0 bytes out of 5 frames, measured locally). The H.264 relay and decoder run without it.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

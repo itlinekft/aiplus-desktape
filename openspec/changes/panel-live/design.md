@@ -88,3 +88,21 @@ a target, the grabber connects without a daemon start, and when the daemon is go
 most once every 3 minutes (`REVIVE_EVERY`), with a warning in the log. Plain Python in the panel: no model is called.
 Starting the daemon is what any `look` does; nothing on the screen changes. A target with nobody logged in fails the
 start and is tried again 3 minutes later.
+
+## D8. The stream is H.264 on the wire
+
+Measured on 2026-11-11 on the Windows VM (its network is a user-mode forward on a Linux host): SSH carried about
+1 MB/s (a 3.4 MB file in 3.6 s; the LAN PC: 0.7 s), while the MJPEG stream at 1920 px sent about 200 KB a frame. It
+reached 4–5 frames a second instead of 10, the backlog sat in the SSH and socket buffers, and the owner saw the
+screen about 6 s behind; a move over the input connection took 120 ms on average instead of 6 ms, behind the same
+backlog. MJPEG sends every frame whole, while a desktop changes little from frame to frame.
+
+So the target encodes H.264 (libx264, `ultrafast`, `zerolatency`: no B-frames and no look-ahead, so a frame leaves
+when it is captured), with a ceiling on the rate (`-maxrate 4M`) so that a screen full of motion cannot build a
+backlog again. The relay copies the H.264 stream to its standard output as before, and a local ffmpeg on the
+controller decodes it into JPEG frames for the grabber: the page and the grabber's frames stay JPEG. The decode is on
+the controller's own loopback, so its size costs nothing.
+
+- MJPEG stays as the fallback: when the controller has no ffmpeg, and when an H.264 stream ends without a single
+  frame (an ffmpeg on the target without libx264), the next stream of that target is MJPEG.
+- The recording path already encodes libx264 into a file; this is the same encoder, tuned for delay instead of size.

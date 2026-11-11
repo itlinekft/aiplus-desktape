@@ -83,6 +83,12 @@ the stream cannot start or stops. Leaving the view SHALL end the capture on the 
 - **WHEN** the person zooms a Windows target's screen at 10 frames a second
 - **THEN** the frames arrive at about that rate and ffmpeg runs on the target only while the view is open
 
+#### Scenario: a slow network
+
+- **WHEN** the target's network carries about 1 MB a second and the person moves the pointer over the zoomed view
+- **THEN** the view stays about as close behind the screen as on a fast network, because the stream is sent as
+  H.264 and decoded on the controller
+
 #### Scenario: no stream possible
 
 - **WHEN** the stream cannot start (no ffmpeg, the task refused, no frame in 10 s)

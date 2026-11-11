@@ -4629,6 +4629,9 @@ WIN_VK = {"return": 0x0D, "tab": 0x09, "escape": 0x1B, "backspace": 0x08, "delet
 STREAM_RETRY = 60.0            # after a failed stream, driver frames for this long
 STREAM_PORTS = (48650, 48999)  # the target's loopback port is drawn from these, per stream
 LIVE_PS1 = os.path.join(HERE, "windows", "live-stream.ps1")
+STREAM_DECODE = ("-hide_banner -loglevel error -flags low_delay -probesize 32 -analyzeduration 0 "
+                 "-threads 1 -f h264 -i pipe:0 -fps_mode passthrough -pix_fmt yuvj420p -c:v mjpeg -q:v 4 -flush_packets 1 -f mjpeg "
+                 "pipe:1")
 CONTROL_IDLE = 120.0          # panel-control D2: control gives the lock back after this long without input
 CONTROL_KEYS = {"return", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "home", "end",
                 "pageup", "pagedown", "space", *(f"f{i}" for i in range(1, 13))}
@@ -4721,8 +4724,10 @@ class LiveStream:
     """panel-live D3: a Windows target's screen as MJPEG. ffmpeg runs in the person's desktop session (an SSH session
     cannot capture), serves one viewer on the loopback, and ends with it; an SSH relay brings the frames here."""
 
-    def __init__(self, host, fps, width, on_frame, start=True):
+    def __init__(self, host, fps, width, on_frame, start=True, codec="mjpeg"):
         self.host, self.fps, self.width, self.on_frame = host, int(fps), int(width), on_frame
+        self.codec = codec          # D8: "h264" on the wire, decoded here into JPEG frames; "mjpeg" as before
+        self.dec = None
         self.t0, self.last, self.frames, self.p, self.why, self.failed = time.time(), 0.0, 0, None, None, False
         self.port, self.started, self.stopped = None, False, threading.Event()
         if start:            # the task and the relay start off the grabber's thread: driver frames go on meanwhile
@@ -4749,16 +4754,18 @@ class LiveStream:
             STREAM_SCRIPT_PUT.add(self.host)
         tn = f"desktape-live-{self.port}"
         tr = (HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "
-              f"\\\"%USERPROFILE%\\desktape\\live-stream.ps1\\\" -Port {self.port} -Fps {self.fps} -Width {self.width}")
+              f"\\\"%USERPROFILE%\\desktape\\live-stream.ps1\\\" -Port {self.port} -Fps {self.fps} -Width {self.width}"
+              f" -Codec {self.codec}")
         r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{RL_SSH} /f >nul '
                  f'&& schtasks /run /tn {tn} >nul & schtasks /delete /tn {tn} /f >nul')
         if r.returncode:
             raise RuntimeError(f"the stream task did not start on {self.host}: {(r.stderr or r.stdout).strip()[-200:]}")
+        nobuf = "" if self.codec == "h264" else "-fflags nobuffer "   # it drops the probed packets: H.264's first keyframe (measured)
         self.relay = [*("ssh -o BatchMode=yes".split()), *t.opts, self.host,
-                      f'"{ff}" -hide_banner -loglevel error -fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0 '
-                      f'-f mjpeg -i tcp://127.0.0.1:{self.port} -c copy -flush_packets 1 -f mjpeg -']
-        logger.info("panel: live stream of %s starting (port %d on its loopback, %d fps, %d px)",
-                    self.host, self.port, self.fps, self.width)
+                      f'"{ff}" -hide_banner -loglevel error {nobuf}-flags low_delay -probesize 32 -analyzeduration 0 '
+                      f'-f {self.codec} -i tcp://127.0.0.1:{self.port} -c copy -flush_packets 1 -f {self.codec} -']
+        logger.info("panel: live stream of %s starting (port %d on its loopback, %d fps, %d px, %s)",
+                    self.host, self.port, self.fps, self.width, self.codec)
 
     def _read(self):
         for attempt in range(5):            # the listener may not be up yet: the relay is refused and ends at once
@@ -4767,15 +4774,23 @@ class LiveStream:
             time.sleep(0.8)
             err = tempfile.TemporaryFile()
             self.p = subprocess.Popen(self.relay, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
+            out = self.p.stdout
+            if self.codec == "h264":          # D8: decoded on this side into the JPEG frames the grabber keeps
+                self.dec = subprocess.Popen([shutil.which("ffmpeg"), *STREAM_DECODE.split()], stdin=self.p.stdout,
+                                            stdout=subprocess.PIPE, stderr=err)
+                self.p.stdout.close()          # the decoder owns the pipe now: the relay sees it close with it
+                out = self.dec.stdout
             buf = b""
             while True:
-                chunk = self.p.stdout.read1(1 << 16)
+                chunk = out.read1(1 << 16)
                 if not chunk:
                     break
                 frames, buf = split_jpegs(buf + chunk)
                 if frames:
                     self.frames += len(frames); self.last = time.time()
                     self.on_frame(frames[-1])
+            if self.dec is not None:
+                self.dec.wait()
             self.p.wait()
             err.seek(0); self.why = err.read().decode("utf-8", "replace").strip()[-200:] or f"relay ended ({self.p.returncode})"
             if self.frames:
@@ -4795,12 +4810,13 @@ class LiveStream:
 
     def stop(self):
         self.stopped.set()
-        if self.p is not None and self.p.poll() is None:
-            self.p.terminate()
-            try:
-                self.p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.p.kill()
+        for p in (self.p, self.dec):
+            if p is not None and p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
         logger.info("panel: live stream of %s stopped after %d frames", self.host, self.frames)
         if self.port:          # a relay cut off while it starts never notices and keeps the capture: end both (measured)
             threading.Thread(target=self._cleanup, daemon=True, name=f"stream-end-{self.host}").start()
@@ -4933,6 +4949,7 @@ class FrameGrabber:
         self.mime, self.native, self.scale = "image/png", None, 1.0     # native: the screen in pixels (panel-live D1)
         self.inp, self.inp_session, self.inp_mu = None, None, threading.Lock()   # panel-live D1: input's own connection
         self.stream, self.stream_off_until, self.windows = None, 0.0, None       # panel-live D3
+        self.codec = "h264" if shutil.which("ffmpeg") else "mjpeg"              # panel-live D8
         self.pointer, self.pointer_busy = None, False                            # panel-live D2, macOS
         self.keyboard, self.keyboard_busy, self.keyboard_off_until = None, False, 0.0   # panel-live D5, Windows
         self.helpers = connect is None      # a test's fake driver gets no helpers on a real machine
@@ -5003,6 +5020,10 @@ class FrameGrabber:
         if s is not None and not s.alive(now):
             why, ran = s.why or "no frame", s.frames
             self._stop_stream()
+            if not ran and s.codec == "h264":    # D8: an ffmpeg there without libx264, or none here: MJPEG next
+                self.codec = "mjpeg"
+                logger.warning("panel: no H.264 stream from %s (%s); MJPEG from now on", self.host, why)
+                return False
             if ran >= 50:                    # it ran, then ended (the capture's time limit, a hiccup): again at once
                 logger.info("panel: live stream of %s ended after %d frames (%s); starting it again", self.host, ran, why)
                 return False
@@ -5011,7 +5032,8 @@ class FrameGrabber:
             return False
         if s is None:
             try:
-                self.stream = s = LiveStream(self.host, min(self.fps, 15), self.size, self._stream_frame)
+                self.stream = s = LiveStream(self.host, min(self.fps, 15), self.size, self._stream_frame,
+                                                 codec=self.codec)
             except Exception as e:
                 self.stream_off_until = now + STREAM_RETRY
                 logger.warning("panel: no live stream from %s (%s); driver frames for %.0f s", self.host, e, STREAM_RETRY)
@@ -5966,6 +5988,20 @@ def selftest_panel_audit():
     s.frames, s.last = 3, s.t0 + 20
     assert s.alive(s.t0 + 22) and not s.alive(s.t0 + 20 + STREAM_STALL + 1), "a silent stream is dead"
     s.stop(); assert not s.alive()
+    # panel-live D8: H.264 on the wire, decoded here; an H.264 stream with no frame makes the next one MJPEG
+    ps1 = open(LIVE_PS1, encoding="utf-8").read()
+    assert ps1.isascii() and "libx264" in ps1 and "zerolatency" in ps1 and "-maxrate" in ps1 and "$Codec" in ps1
+    g = FrameGrabber("user@box", tempfile.gettempdir(), connect=lambda: None)
+    g.fps, g.size, g.windows, g.native, g.codec = 10.0, 1920, True, (1920, 1080), "h264"
+    g.stream = LiveStream("user@box", 10, 1920, lambda f: None, start=False, codec="h264"); g.stream.failed = True
+    assert g._stream_step() is False and g.codec == "mjpeg" and g.stream_off_until == 0.0, "MJPEG next, at once"
+    if shutil.which("ffmpeg"):          # the decoder's own flags, on a few frames made here
+        src = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10",
+                              "-frames:v", "5", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+                              "-f", "h264", "-"], capture_output=True)
+        if src.returncode == 0 and src.stdout:
+            dec = subprocess.run(["ffmpeg", *STREAM_DECODE.split()], input=src.stdout, capture_output=True)
+            assert len(split_jpegs(dec.stdout)[0]) == 5, (dec.returncode, dec.stderr[-300:])
     g, calls = FrameGrabber("user@box", tempfile.gettempdir(), connect=lambda: None), []
     def make(autostart):
         calls.append(autostart)
