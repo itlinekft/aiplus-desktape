@@ -10,6 +10,11 @@ waits for a frame being captured, at the point of the target's screen that match
 - **WHEN** control is on for a target whose frames take about a second and the person presses a key
 - **THEN** the key reaches the target without waiting for the frame being captured
 
+#### Scenario: control taken again after an idle release
+
+- **WHEN** control was given back after two idle minutes and the person clicks the screen again
+- **THEN** the click reaches the target, in a new driver session, even if the driver ended the previous one
+
 ### Requirement: Keys reach a controlled target at typing speed
 
 While control is on, key presses and text SHALL go through desktape's own input helper in the person's desktop

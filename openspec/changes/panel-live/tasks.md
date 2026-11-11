@@ -25,6 +25,8 @@
 - [x] 1.10 The stream as H.264 (libx264 `ultrafast`/`zerolatency`, `-maxrate 4M`) decoded by a local ffmpeg into
   JPEG frames; MJPEG when the controller has no ffmpeg or an H.264 stream gave no frame; selftest; measured on the
   Windows VM (D8). [REQ: a-windows-target-s-zoomed-view-is-a-live-stream]
+- [x] 1.11 The input connection closed with control; an input that meets an ended driver session sent again once in
+  a new one; selftest (D1). [REQ: input-to-a-controlled-target-does-not-wait-for-frames]
 - [ ] 2.1 Measure on the Windows PC and the Mac mini: key latency, a hover menu, the Dock, the stream's rate and
   delay, ffmpeg gone after the view; into `docs/MEASURED.md`; docs (user guide, skill, changelog).
   Done 2026-11-07: the stream's rate and delay, input on its own connection, moves, cleanup, the Dock through the

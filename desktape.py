@@ -5239,28 +5239,33 @@ def grabber_act(g, op, body):
                     g.pointer = None
                 else:
                     g.keyboard = None
-    with g.inp_mu:
-        if g.inp is None:
-            g.inp = g.connect()
-            g.inp.summarize = {"move_cursor", "helper press_key", "helper hotkey", "helper type_text"}   # not steps (D2, D5)
-            g.inp_session = f"desktape-panel-input-{os.getpid()}-{int(time.time() * 1000)}"
-            try:      # D5: the agent cursor's glide made each click 0.4-0.9 s and keys after it stall (measured)
-                g.inp.call("set_agent_cursor_enabled", {"enabled": False, "session": g.inp_session}, timeout=10)
-            except Exception as e:
-                logger.warning("panel: agent cursor of the input session on %s left on: %s", g.host, e)
-        args = {**args, "scope": "desktop", "session": g.inp_session}
-        try:
+    for attempt in (1, 2):
+        with g.inp_mu:
+            if g.inp is None:
+                g.inp = g.connect()
+                g.inp.summarize = {"move_cursor", "helper press_key", "helper hotkey", "helper type_text"}   # not steps (D2, D5)
+                g.inp_session = f"desktape-panel-input-{os.getpid()}-{int(time.time() * 1000)}"
+                try:      # D5: the agent cursor's glide made each click 0.4-0.9 s and keys after it stall (measured)
+                    g.inp.call("set_agent_cursor_enabled", {"enabled": False, "session": g.inp_session}, timeout=10)
+                except Exception as e:
+                    logger.warning("panel: agent cursor of the input session on %s left on: %s", g.host, e)
+            sent = {**args, "scope": "desktop", "session": g.inp_session}
             try:
-                g.inp.call(tool, args, secret=secret, timeout=10)
-            except RuntimeError as e:
-                if "background_unavailable" not in str(e):
+                try:
+                    g.inp.call(tool, sent, secret=secret, timeout=10)
+                except RuntimeError as e:
+                    if "background_unavailable" not in str(e):
+                        raise
+                    logger.info("panel: %s on %s needs foreground delivery; repeating it", tool, g.host)
+                    g.inp.call(tool, {**sent, "delivery_mode": "foreground"}, secret=secret, timeout=10)
+                break
+            except Exception as e:
+                ended = "session has ended" in str(e)      # the driver ended the session (measured 2026-11-11)
+                if ended or "connection closed" in str(e) or isinstance(e, (CallBlocked, OSError)):
+                    close_quietly(g.inp, g.host); g.inp = None           # the next input opens a new one
+                if not (ended and attempt == 1):
                     raise
-                logger.info("panel: %s on %s needs foreground delivery; repeating it", tool, g.host)
-                g.inp.call(tool, {**args, "delivery_mode": "foreground"}, secret=secret, timeout=10)
-        except Exception as e:
-            if "connection closed" in str(e) or isinstance(e, (CallBlocked, OSError)):
-                close_quietly(g.inp, g.host); g.inp = None           # the next input opens a new one
-            raise
+                logger.info("panel: the input session on %s had ended; %s again in a new one", g.host, tool)
     if op != "move":
         g.wanted = time.time()
         g.kick.set()
@@ -5388,10 +5393,8 @@ class PanelState:
             ctl = self.controls.pop(name, None)
         if ctl:
             g = self.grabbers.get(name)
-            if g is not None and g.pointer is not None:      # panel-live D2: the Mac's pointer helper goes with control
-                g.pointer.close(); g.pointer = None
-            if g is not None and getattr(g, "keyboard", None) is not None:      # D5: and the keyboard helper
-                g.keyboard.close(); g.keyboard = None
+            if g is not None:                     # the helpers and the input connection go with control (D2, D5):
+                g.close_input()                   # its driver session does not outlive it (measured 2026-11-11)
             why_not = ctl["lk"].unlock()
             ctl["lk"].log("control-end", why=why, seconds=round(time.time() - ctl["since"], 1))
             logger.info("panel: control of %s given back (%s)%s", ctl["lk"].host, why,
@@ -5684,6 +5687,8 @@ def selftest_booking_panel():
             def call(self, tool, args, timeout=None, secret=False):
                 calls.append((tool, args))
                 if tool != "get_desktop_state":
+                    if args.get("session") in ended:
+                        raise RuntimeError(f"{tool} failed: session has ended; tool call '{tool}' was rejected")
                     if args.get("x") == 99 and "delivery_mode" not in args:
                         raise RuntimeError("click failed: background_unavailable")
                     self.last = {}
@@ -5809,12 +5814,16 @@ def selftest_booking_panel():
             assert [c[1] for c in calls if c[0] == "click"][-1]["x"] == 960, "a click on a smaller frame is rescaled"
             assert st.control("box", {"op": "click", "x": 99, "y": 1})[0] == 200
             assert [c[1].get("delivery_mode") for c in calls if c[0] == "click"][-2:] == [None, "foreground"]
+            ended.add(g.inp_session); old_session = g.inp_session          # the driver ended the input session
+            assert st.control("box", {"op": "click", "x": 7, "y": 1})[0] == 200, "a new session, the click again"
+            assert g.inp_session != old_session and [c[1]["session"] for c in calls if c[0] == "click"][-1] == g.inp_session
             assert st.control("box", {"op": "key", "key": "nope"})[0] == 400
             other = agent.try_acquire("look")                                 # the agent is kept out now
             assert other and other["label"] == "panel" and "running as pid" in describe_lock(other), other
             st.controls["box"]["last"] -= CONTROL_IDLE + 1
             st.expire_controls()
             assert not st.controls and BoxLock("user@box").read() is None   # given back after the idle time
+            assert g.inp is None, "the input connection and its driver session go with control"
             assert [a["event"] for a in read_activity() if a["event"].startswith("control")] == ["control-start", "control-end"]
             st.control("box", {"op": "start"}); st.control("box", {"op": "stop"})
             assert not st.controls and BoxLock("user@box").read() is None

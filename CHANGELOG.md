@@ -5,6 +5,13 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-11
+
+### Fixed
+- The panel: after control was given back by itself (two idle minutes), taking a machine again failed every click with
+  "session has ended" until the panel restarted. Control now closes its driver connection when it ends, and a click
+  that meets an ended session is sent again in a new one.
+
 ## [0.6.3] - 2026-11-11
 
 ### Fixed

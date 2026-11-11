@@ -11,6 +11,11 @@ which keeps the screen's aspect). Measured: 46 ms per call on Windows while fram
 Home) goes as a key combination (`shift+left`), so selecting with the arrows works; it went without Shift before
 (reported 2026-11-10).
 
+The input connection and its session go with control: giving control back (the button, two idle minutes) closes them,
+and the next control opens new ones. On 2026-11-11 the driver had ended the input session while the connection stayed
+open, and after an idle release every click came back "session has ended" until the panel restarted. A click that
+still meets an ended session is sent again once, in a new session.
+
 ## D2. Following the pointer
 
 While control is on, the page sends `{op: "move", x, y, w, h}` on mouse moves over the zoomed screen, at most one in
