@@ -341,6 +341,26 @@ greeting for hours (`nc` printed nothing in 10 s); the panel's TCP probe had cou
   MacBook reached over Tailscale (offline): 5 addresses with port 22 open on the LAN, none with its key, nothing saved.
 - `probe` with the SSH greeting: the four reachable targets answered in 54–87 ms, as before.
 
+## 2026-11-12: an `act` reads the screen once before its action
+
+desktape 0.6.6 against 0.6.5, on the Windows VM (Hungarian Windows, build 26300, Cua Driver 0.34.1, reached over the LAN),
+from the Linux controller: `desktape act '{"click": {"label": "Új lap", "role": "TabItem"}}' --target <vm> --window
+"Új lap - Google Chrome"` five times each (the tab that is already selected: nothing changes). Wall time with
+`/usr/bin/time`; the calls and their `ms` from each run folder's `audit.jsonl`.
+
+| | driver calls before the click | their time | whole `act` |
+|---|---|---|---|
+| 0.6.5 | 7: windows, front, windows, windows, tree, tree, windows | 1531–2253 ms | 3.25–4.51 s (median 4.11) |
+| 0.6.6 | 4: windows, front, windows, tree | 737–1225 ms | 2.39–3.64 s (median 2.57) |
+
+- The same act with the label `Új lapok`: `click: 'Új lapok' not found (enabled); nearest: TabItem "Új lap", Document
+  "Új lap", Button "Új lap"`, and that text in the activity log's line (it said `error: null` before).
+- `desktape look …` through `bin/desktape` from another folder, with no `DESKTAPE_RUNS`: the run folder and the look
+  state were written under that folder's `desktape-runs/`.
+- What this was measured against: four days of the activity log (2268 command ends, 2026-11-08 … 11-12) gave a look
+  a median of 1.9 s and an act 3.6 s with 10 calls; of 158 failure notes, 76 were a `click` whose label was not
+  found, mostly a guessed one.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

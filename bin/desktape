@@ -1,0 +1,16 @@
+#!/bin/sh
+# desktape's command for agents (agent-efficiency D2): a plugin's bin/ is on the Bash tool's PATH while the plugin
+# is enabled, so a call is `desktape look ...`. It runs desktape.py from the plugin's own folder; run folders go to
+# ./desktape-runs unless DESKTAPE_RUNS says otherwise.
+root=$(cd "$(dirname "$0")/.." && pwd)
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --quiet "$root/desktape.py" "$@"
+elif [ -x "$HOME/.local/bin/uv" ]; then
+  exec "$HOME/.local/bin/uv" run --quiet "$root/desktape.py" "$@"
+fi
+if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
+  exec python3 "$root/desktape.py" "$@"
+fi
+echo "desktape: uv is not installed (it brings Python and PyYAML): winget install --id astral-sh.uv -e," \
+  "or brew install uv, or see https://docs.astral.sh/uv/" >&2
+exit 127

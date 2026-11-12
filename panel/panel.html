@@ -220,7 +220,7 @@ function reachDot(t) {
 }
 function actLine(a, now) {
   const what = a.event === "end" ? `<code>${esc(a.command)}</code> ${a.seconds ?? ""} ${T.sec}` +
-    (a.state ? ` · ${esc(a.state)}` : "") + (a.error ? ` · <span class="err">${esc(a.error)}</span>` : "")
+    (a.state ? ` · ${esc(a.state)}` : "") + (a.error ? ` · <span class="err" title="${esc(a.error)}">${esc(short(a.error, 160))}</span>` : "")
     : a.event === "book" ? `${T.book} ${day(a.at)}–${hm(a.until)}${a.note ? " · " + esc(a.note) : ""}`
     : a.event === "unbook" ? `${T.unbook} (${esc(a.id)})`
     : a.event === "control-start" ? T.ctlstart

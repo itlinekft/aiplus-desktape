@@ -14,20 +14,20 @@ measured, not to click around yourself.
 ## The command
 
 ```bash
-dt() { uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" "$@"; }      # PowerShell: uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py" …
-export DESKTAPE_RUNS="$PWD/desktape-runs"                       # run folders go to the work folder, not the plugin
+desktape doctor --local          # the plugin puts `desktape` on the PATH; run folders go to ./desktape-runs
 ```
 
-Shell state does not survive between tool calls: repeat both lines in each call. `uv` brings Python and
-PyYAML itself; nothing else is installed by hand. If `uv` is not found, look in `~/.local/bin` (Windows:
-`%USERPROFILE%\.local\bin\uv.exe`) before installing it: uv's installers put it there, and a running shell
-may not have that folder on its PATH yet. Call it by its full path then.
+Nothing to set up per call. If `desktape` is not found (a shell without the plugin's `bin/` on its PATH), call it
+by its path: `uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" …` (PowerShell: `uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py"
+…`). `uv` brings Python and PyYAML itself; nothing else is installed by hand. If `uv` is not found, look in
+`~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) before installing it: uv's installers put it there, and a
+running shell may not have that folder on its PATH yet. Call it by its full path then.
 
 ## 1. Check first, every time on a new machine
 
 ```bash
-dt doctor --local            # the program runs on THIS Windows computer
-dt doctor --target NAME      # the program runs on another machine: also checks that machine over SSH
+desktape doctor --local            # the program runs on THIS Windows computer
+desktape doctor --target NAME      # the program runs on another machine: also checks that machine over SSH
 ```
 
 `doctor` installs nothing. ffmpeg is required on the driven machine (the driver records video through it). For each `MISSING` line it prints the one command that installs that piece on this
@@ -47,10 +47,10 @@ Stop and ask the person instead when:
 ## 2. Run a tape
 
 ```bash
-dt run path/to/tape.yaml --host local                          # this computer
-dt run path/to/tape.yaml --target NAME                         # a named machine (~/.config/desktape/targets.yaml)
-dt run tape.yaml --host local --var import_file=@prices.xlsx   # a file input: uploaded, then ${import_file}
-dt run tape.yaml --host local --mode video                     # recorded, with the tape's captions burned in
+desktape run path/to/tape.yaml --host local                          # this computer
+desktape run path/to/tape.yaml --target NAME                         # a named machine (~/.config/desktape/targets.yaml)
+desktape run tape.yaml --host local --var import_file=@prices.xlsx   # a file input: uploaded, then ${import_file}
+desktape run tape.yaml --host local --mode video                     # recorded, with the tape's captions burned in
 ```
 
 - Before it starts, tell the person: **do not touch the mouse or the keyboard until it finishes**: the tape
@@ -77,9 +77,12 @@ data again. If the person keeps a backup step, it belongs before the run.
 
 ## 4. Looking without a tape
 
-`dt look --window "<title>" --host local` lists a window's controls, cheapest form first; `dt act '<step>'`
+`desktape look --window "<title>" --host local` lists a window's controls, cheapest form first; `desktape act '<step>'`
 does one step and checks its outcome. Use them to **build or repair a tape** with the person, not to do a
 business task step by step on your own: a tape is reviewed once and then replayed the same way every time.
+
+A `click` or `set` whose label is not there names the window's nearest labels (`…not found (enabled); nearest:
+Button "Allow", …`): take the right one from there instead of looking again.
 
 Every line you read costs tokens: a full `look` at a busy window is about 5 KB. Take the full list once, then
 `look --grep '<label>'` for the control you need and `look --new` after an `act` (only what changed, often under
@@ -92,8 +95,8 @@ the driver cannot type into, or a Windows process query that SSH may not read. d
 measured about them in two layers:
 
 ```bash
-dt knowledge                 # the target's OS: the published base first, then the person's own notes
-dt knowledge --where         # the paths, and where the person's own page goes
+desktape knowledge                 # the target's OS: the published base first, then the person's own notes
+desktape knowledge --where         # the paths, and where the person's own page goes
 ```
 
 - Read it before you drive an operating system's own windows (file dialogs, permission prompts, the lock
@@ -142,21 +145,21 @@ A recorded take must run on its own, with no person stepping in, and show only w
 Several projects drive the same machines. Before a long job, look and book:
 
 ```bash
-dt bookings                                            # every machine's bookings, with project, time and note
-dt targets                                             # who holds each machine now, and its session state
-dt book --target NAME --for 45m --note "what it is for"     # from now; --at 14:00 or --at +30m for later
-dt unbook ID                                           # when the job is done early
+desktape bookings                                            # every machine's bookings, with project, time and note
+desktape targets                                             # who holds each machine now, and its session state
+desktape book --target NAME --for 45m --note "what it is for"     # from now; --at 14:00 or --at +30m for later
+desktape unbook ID                                           # when the job is done early
 ```
 
 - **Book** a video take, an end-to-end suite, or any flow with pauses longer than a few minutes. A booking is the
   project's (the work folder's name, or `DESKTAPE_LABEL`), at most 4 h, at most 7 days ahead. Booking again right
   after your own booking extends it.
 - During another project's booking, `run`, `look`, `act` and `tidy` stop with exit code 3 naming the booking: pick
-  another machine (`dt bookings`) or wait. Do not `unbook --force` another project's booking; that is the person's
+  another machine (`desktape bookings`) or wait. Do not `unbook --force` another project's booking; that is the person's
   call.
 - A command that is already running is never cut off when a booking starts; a command started 15 min before
   another project's booking gets a warning: finish before it.
-- **The panel:** `dt panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,
+- **The panel:** `desktape panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,
   and `#cctv` with every machine's screen live at about 1 frame per second. Watching takes no lock and acts on
   nothing. A person who clicks into a zoomed screen takes that machine (label `panel`): your commands then stop with
   exit code 3 naming `panel`; wait, do not work around it. A person may also take over your lease between two of
@@ -168,7 +171,7 @@ dt unbook ID                                           # when the job is done ea
 
 ## Rules
 
-- One driver session per machine: a run waits for, or stops on, another session's lock (`dt lock`) and another
-  project's booking (`dt bookings`).
+- One driver session per machine: a run waits for, or stops on, another session's lock (`desktape lock`) and another
+  project's booking (`desktape bookings`).
 - Everything sent to the driver is logged in the run folder's `audit.jsonl`, secrets redacted.
 - Only the controls a person could use are touched; a map can deny controls (`Delete`, `Log out`) outright.

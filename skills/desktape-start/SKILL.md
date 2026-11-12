@@ -18,18 +18,20 @@ Ask once, if it is not clear: is the program on **this** computer, or on another
 `--local`. ffmpeg is required on the driven machine either way: `doctor` checks it, and over SSH it checks the
 named target's.
 
-**A new machine to drive, not set up yet?** `dt pair NAME` (no address needed yet) makes its key and prints a request
+**A new machine to drive, not set up yet?** `desktape pair NAME` (no address needed yet) makes its key and prints a request
 for the person to paste into the Claude on that machine; that Claude follows `docs/setup-target.md` from the public
-repository with them and reports back the address; then `dt pair NAME --host user@address --os windows` and
-`dt pair NAME --check`. Local network and VPN both work; a public address is never paired.
+repository with them and reports back the address; then `desktape pair NAME --host user@address --os windows` and
+`desktape pair NAME --check`. Local network and VPN both work; a public address is never paired.
 
 ## 2. Check: `doctor` installs nothing
 
 ```bash
-dt() { uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" "$@"; }      # PowerShell: uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py" …
-dt doctor --local            # the program runs on THIS computer
-dt doctor --target NAME      # the program runs on another machine: this computer, then that machine over SSH
+desktape doctor --local            # the program runs on THIS computer
+desktape doctor --target NAME      # the program runs on another machine: this computer, then that machine over SSH
 ```
+
+The plugin puts `desktape` on the PATH. Where it is not found, call `uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" …`
+(PowerShell: `uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py" …`).
 
 If `uv` itself is missing, look in `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) first; otherwise it
 is the first thing to install (`winget install --id astral-sh.uv -e` or `brew install uv`), with the person's yes.

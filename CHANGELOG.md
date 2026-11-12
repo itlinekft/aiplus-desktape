@@ -5,6 +5,23 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-12
+
+### Added
+- The plugin gives the agent a `desktape` command (its `bin/` is on the agent's PATH): a call is `desktape look …`,
+  with nothing to set up first. Without `DESKTAPE_RUNS`, a command started outside desktape's own folder writes its
+  run folders to `./desktape-runs`, not into the plugin's copy (`agent-efficiency`).
+- A `click` or `set` whose label is not found names the window's nearest labels: `…not found (enabled); nearest:
+  Button "Allow", …`.
+
+### Changed
+- An `act` reads the window list and the window once before its action, not three and two times: 4 driver calls
+  before a click instead of 7; on the Windows VM a whole `act` went from a median 4.1 s to 2.6 s.
+
+### Fixed
+- A failed command's line in the activity log (the panel's recent commands) carries the failure's text; it said
+  only "failed".
+
 ## [0.6.5] - 2026-11-12
 
 ### Added

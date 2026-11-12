@@ -29,15 +29,31 @@ row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a b
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, base64, contextlib, glob, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, base64, contextlib, difflib, glob, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
 
 import yaml
 
 logger = logging.getLogger("desktape")
 HERE = os.path.dirname(os.path.abspath(__file__))
-# claude-plugin: a plugin's copy of the repository is not written to; DESKTAPE_RUNS names the run folder
-RUNS = os.path.expandvars(os.path.expanduser(os.environ.get("DESKTAPE_RUNS") or os.path.join(HERE, "runs")))
+
+
+def default_runs(env=os.environ, cwd=None):
+    """Where run folders go (claude-plugin): DESKTAPE_RUNS when set; else `runs/` inside desktape's own folder, and
+    `desktape-runs/` in the working directory anywhere else, so a plugin's copy is never written to
+    (agent-efficiency D2)."""
+    if env.get("DESKTAPE_RUNS"):
+        return os.path.expandvars(os.path.expanduser(env["DESKTAPE_RUNS"]))
+    cwd = os.path.abspath(cwd or os.getcwd())
+    if cwd == HERE or cwd.startswith(HERE + os.sep):
+        return os.path.join(HERE, "runs")
+    return os.path.join(cwd, "desktape-runs")
+
+
+RUNS = default_runs()
 EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
+# agent-efficiency D3: the driver tools that only read; any other call may change the screen
+READ_TOOLS = {"list_windows", "get_window_state", "get_recording_state", "get_desktop_state", "get_screen_size",
+              "screenshot"}
 ALLOWED = {"list_windows", "bring_to_front", "get_window_state", "click", "type_text", "press_key",
            "hotkey", "scroll", "start_recording", "stop_recording", "get_recording_state",
            "set_window_frame",   # geometry only, for a tape's `window:` (runner-robustness D2)
@@ -326,6 +342,7 @@ class Cua:
     def __init__(self, host, audit_path, autostart=True):
         self.audit = open(audit_path, "a", encoding="utf-8")
         self.host, self.on_blocked = host, None     # on_blocked(tool, args, waited): the status hook (D5)
+        self.acts = 0          # agent-efficiency D3: calls that may change the screen, so a kept read is stale
         t = Target(host)
         self.mac, self.last = t.mac, {}
         try:
@@ -397,6 +414,8 @@ class Cua:
     def call(self, tool, args, secret=False, timeout=None):
         if tool not in ALLOWED:
             raise PermissionError(f"tool {tool!r} is not on the allowlist")
+        if tool not in READ_TOOLS:
+            self.acts = getattr(self, "acts", 0) + 1      # agent-efficiency D3: counted before it may act
         t0 = time.time()
         mac = getattr(self, "mac", False)     # a test may build the object without __init__
         if mac and tool == "get_window_state" and args.get("include_accessibility_tree") is not False:
@@ -929,10 +948,13 @@ def box_lock(host, command):
     try:
         yield lk
     except BaseException as e:
-        err = type(e).__name__
+        err = f"{type(e).__name__}: {e}"[:300] if str(e) else type(e).__name__
         raise
     finally:
-        state = (lk.read() or {}).get("state")
+        cur = lk.read() or {}
+        state = cur.get("state")
+        if err is None and state in ("failed", "blocked", "stuck") and (cur.get("updated") or 0) >= t0:
+            err = cur.get("error")      # agent-efficiency D4: a step that failed by its exit code, written this time
         lk.release()
         lk.log("end", command=command, start=round(t0, 3), seconds=round(time.time() - t0, 1), state=state,
                error=err)          # booking-and-panel D4
@@ -1368,6 +1390,30 @@ def sel_name(a):
     """How a step's selector is named in a message."""
     return a.get("label") or (a.get("id") and f"id={a['id']}") or (a.get("field") and f"field {a['field']}") \
         or a.get("role") or "?"
+
+
+def nearest_labels(tree, label, role=None, n=3):
+    """agent-efficiency D1: up to `n` `Role "Label"` lines of the tree whose labels are closest to `label`, best
+    first: difflib's ratio on the caption text, more when one contains the other (nothing under NEAREST_FLOOR), then
+    a little for the same role and for an element that has actions."""
+    want = caption_text(label).lower()
+    if not want:
+        return []
+    best = {}
+    for node in map(parse, tree.splitlines()):
+        if not node or not node[2].strip():
+            continue
+        _, r, lab, acts = node
+        text = caption_text(lab).lower()
+        if not text:
+            continue
+        like = difflib.SequenceMatcher(None, want, text).ratio() + (0.3 if want in text or text in want else 0)
+        if like < NEAREST_FLOOR:
+            continue                    # the role and actions only order; they never make a label "near"
+        score = like + (0.1 if role and r == role else 0) + (0.05 if acts else 0)
+        key = f'{r} "{lab}"'
+        best[key] = max(best.get(key, 0), score)
+    return [k for k, v in sorted(best.items(), key=lambda kv: -kv[1])][:n]
 
 
 def caption_text(label):
@@ -1922,6 +1968,8 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
 BUSY_WAIT = 30.0            # busy-window: extra seconds for a program whose tree walk returns nothing yet
 SETTLE_MAX = 5.0            # tolerant-replay D2: the longest settle-wait after an action
 FOCUS_WAIT = 8.0        # focus: how long a window may take to appear or take its title
+KEEP_FOR = 2.0          # agent-efficiency D3: how long a window list or tree read before an action is used again
+NEAREST_FLOOR = 0.45    # agent-efficiency D1: below this similarity a label is not suggested
 EFFECT_WAIT = 3.0       # step-effect-check D2: how long a click or typed text has to show an effect
 CLOSE_LABELS = {"OK", "Cancel", "Close", "Save", "Yes", "No", "Igen", "Nem", "Mégse", "Bezárás", "Mentés"}
 INDEX = re.compile(r"\[\d+\] ")      # element indices change between snapshots; they are not an effect
@@ -2147,7 +2195,29 @@ class Runner:
         self.busy = not self.elements and "PARTIAL TREE" in (text or "")
         self.snapshots += 1
         self.dirty = False
+        self.read_mark = (getattr(self.cua, "acts", None), time.time())    # agent-efficiency D3
         return self.elements
+
+    def kept(self, mark):
+        """agent-efficiency D3: a read is still the screen as it is when no call that may act went to the driver
+        since, it is under KEEP_FOR old, and the driver counts its calls (a test's fake does not: never kept)."""
+        if not mark or mark[0] is None or mark[0] != getattr(self.cua, "acts", None):
+            return False
+        return time.time() - mark[1] <= KEEP_FOR
+
+    def window_list(self, keep=False):
+        """The windows now. With `keep`, the list read since the last action when it is kept (agent-efficiency
+        D3): only the reads before an action ask for it; a poll after one always reads again."""
+        k = getattr(self, "kept_windows", None)
+        if keep and k and self.kept(k[1]):
+            return k[0]
+        wins = self.cua.call("list_windows", {})[0].get("windows", [])
+        self.kept_windows = (wins, (getattr(self.cua, "acts", None), time.time()))
+        return wins
+
+    def drop_kept(self):
+        """Something may have acted outside the driver's calls (an OS-level key, a file opened over SSH)."""
+        self.kept_windows, self.read_mark = None, None
 
     def check_dialogs(self, retried=False):
         """Stop on a dialog the tape did not plan (replay-guards D2): a Window inside the tape's window, or a
@@ -2158,8 +2228,8 @@ class Runner:
             self.snapshot()
         found = [(n[2], "dialog") for n in map(parse, self.tree.splitlines())
                  if n and n[1] == "Window" and n[0] > 0 and n[2]]
-        sc, _ = self.cua.call("list_windows", {})
-        found += [(w.get("title"), "window") for w in sc.get("windows", [])
+        wins = self.window_list(keep=True)
+        found += [(w.get("title"), "window") for w in wins
                   if w.get("pid") == self.win["pid"] and w.get("window_id") != self.win["window_id"]
                   and w.get("window_id") not in self.baseline and w.get("title")]
         toasts = [t for t, kind in found if kind == "dialog" and not self.expected(t) and is_toast(self.tree, t)]
@@ -2168,7 +2238,7 @@ class Runner:
                 logger.info("toast in %r: %s (no choices; not a failure)", self.title, t)
                 self.toasts_seen = getattr(self, "toasts_seen", set()) | {t}
         bad = [f'{kind} "{title}"' for title, kind in found if not self.expected(title) and title not in toasts]
-        self.check_covered(sc.get("windows", []))
+        self.check_covered(wins)
         if bad and not retried and self.answer_prompts():
             logger.info("unexpected %s in %r answered; checking again", ", ".join(bad), self.title)
             return self.check_dialogs(retried=True)   # map-answers: a dialog an answer closed is no failure
@@ -2329,10 +2399,9 @@ class Runner:
             raise AssertionError(f"window {self.title!r} is covered by another program's window: {', '.join(cover)}; "
                                  "close it, then run again")
 
-    def process_windows(self):
-        sc, _ = self.cua.call("list_windows", {})
+    def process_windows(self, keep=False):
         return {(w.get("window_id"), w.get("title"), w.get("is_on_screen"), w.get("minimized"))
-                for w in sc.get("windows", []) if w.get("pid") == self.win["pid"]}
+                for w in self.window_list(keep) if w.get("pid") == self.win["pid"]}
 
     def into_view(self, e, a, what):
         """click-offscreen D1, D2: a web element outside the window is scrolled to before the click (Chromium's
@@ -2398,10 +2467,10 @@ class Runner:
             if ahead > 0:
                 time.sleep(ahead * random.uniform(0.8, 1.2))
 
-    def signature(self):
+    def signature(self, keep=False):
         """What an action may change (D2): the window's tree without element indices, and its process's
         windows. Takes the windows now and the tree from the last snapshot."""
-        return shape(self.tree), frozenset(self.process_windows())
+        return shape(self.tree), frozenset(self.process_windows(keep))
 
     def in_dialog(self, e):
         """The title of the dialog the element sits in (D2): a nested Window node of the tree, or the focused
@@ -2506,10 +2575,15 @@ class Runner:
             self.snapshot()
         return ran
 
-    def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False, id=None, field=None):
+    def wait_for(self, label, role=None, timeout=8.0, prefix=False, nth=1, enabled_only=False, id=None, field=None,
+                 reuse=False):
+        """The element, read until it is there or the timeout; with `reuse`, the first round looks in the tree read
+        since the last action when it is kept (agent-efficiency D3)."""
         end = time.time() + timeout
         while True:
-            self.snapshot()
+            if not (reuse and self.kept(getattr(self, "read_mark", None))):
+                self.snapshot()
+            reuse = False
             self.answer_prompts()
             e = self.find(label, role, prefix, nth, enabled_only, id, field)
             if e or not self.busy_wait(end):
@@ -2528,10 +2602,15 @@ class Runner:
                 return gone
             time.sleep(0.4)
 
-    def pick(self, a, timeout=8.0, enabled_only=False):
+    def pick(self, a, timeout=8.0, enabled_only=False, reuse=False):
         """wait_for with a step's selector dict."""
         return self.wait_for(a.get("label"), a.get("role"), timeout, a.get("prefix", False), a.get("nth", 1),
-                             enabled_only, a.get("id"), a.get("field"))
+                             enabled_only, a.get("id"), a.get("field"), reuse)
+
+    def nearest_hint(self, a):
+        """agent-efficiency D1: the end of a not-found error, naming the window's closest labels."""
+        near = nearest_labels(getattr(self, "tree", "") or "", a.get("label"), a.get("role"))
+        return f"; nearest: {', '.join(near)}" if near else ""
 
     def focus(self, title):
         # a window that is still opening, or whose title changes a moment after typing (a form named after the
@@ -2586,7 +2665,8 @@ class Runner:
                                title, w["pid"])
             else:
                 raise
-        self.check_covered(self.cua.call("list_windows", {})[0].get("windows", []))   # after bring_to_front
+        self.drop_kept()
+        self.check_covered(self.window_list())   # after bring_to_front; kept for the step that follows (D3)
         if w.get("minimized"):
             # runner-robustness D1: bring_to_front restores it at its previous frame
             logger.warning("window %r (pid %s) was minimised; restored it", title, w["pid"])
@@ -2862,8 +2942,10 @@ class Runner:
         try:
             self._step(s)
         except CallBlocked as cb:
+            self.drop_kept()
             raise OutcomeFailed(f"{what} could not be delivered: {self.describe_front(before)} "
                                 f"({cb.tool} waited {cb.waited:.1f} s)") from None
+        self.drop_kept()          # D3: an action outside the driver's calls (an OS key, a file) is not counted
         self.after_action(what, exp, before)
         self.settle()
 
@@ -2902,8 +2984,7 @@ class Runner:
 
     def before_action(self, arg):
         """What the outcome is measured against: the windows, and the focused window's lines (D2)."""
-        sc, _ = self.cua.call("list_windows", {})
-        wins = sc.get("windows", [])
+        wins = self.window_list(keep=True)
         pid = self.win["pid"] if self.win else None
         named = arg.get("into") or arg.get("dialog") if isinstance(arg, dict) else None
         if pid is None and named:
@@ -3108,11 +3189,12 @@ class Runner:
             self.focus(arg)
         elif kind == "click":
             a = arg if isinstance(arg, dict) else {"label": arg}
-            e = self.pick(a, float(a.get("timeout", self.wait_default())), enabled_only=True)   # timeout: a slow window
+            e = self.pick(a, float(a.get("timeout", self.wait_default())), enabled_only=True,   # timeout: a slow window
+                          reuse=True)
             if not e:
                 hint = ("; a number is read as a label: `look --full` indices like [106] belong to one snapshot, "
                         "so give the label and role") if re.fullmatch(r"\d+", str(a.get("label") or "")) else ""
-                raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled){hint}")
+                raise RuntimeError(f"click: {sel_name(a)!r} not found (enabled){hint}{self.nearest_hint(a)}")
             label = e.get("label") or e.get("name") or ""
             d = denied(self.deny, label, e.get("role"), self.title)
             if d:
@@ -3128,7 +3210,7 @@ class Runner:
             what = f'click on {e.get("role")} "{label}"'
             if self.cursor == "person" and self.mode == "video":
                 self.glide_to(e, what)
-            before = self.signature()
+            before = self.signature(keep=True)      # agent-efficiency D3: read before the action
             try:
                 self.cua.call("click", args)
             except CallBlocked as cb:
@@ -3239,7 +3321,7 @@ class Runner:
             check = a.get("effect") != "none" and not a.get("secret") and not a.get("expect") and a["text"].strip()
             if check:
                 self.snapshot()
-                before = self.signature()
+                before = self.signature(keep=True)      # agent-efficiency D3: read before the action
             if mode == "paste":
                 os_clipboard(self.cua.host, a["text"], self.cua.audit)
                 self.cua.call("hotkey", {**self.win, "keys": ["cmd" if self.mac else "ctrl", "v"],
@@ -3272,9 +3354,9 @@ class Runner:
         elif kind == "set":
             # a control's value through UI Automation (data-driven-import D1): a DevExpress combo whose items only
             # exist while its drop-down is open, and the drop-down ignores background clicks (measured)
-            e = self.pick(arg, enabled_only=True)
+            e = self.pick(arg, enabled_only=True, reuse=True)
             if not e:
-                raise RuntimeError(f"set: {sel_name(arg)!r} not found (enabled)")
+                raise RuntimeError(f"set: {sel_name(arg)!r} not found (enabled){self.nearest_hint(arg)}")
             self.cua.call("set_value", {**self.win, "element_token": e["element_token"], "value": str(arg["value"])},
                           secret=arg.get("secret", False))
         elif kind == "open_file" and self.mac:
@@ -5835,7 +5917,14 @@ def selftest_booking_panel():
             except RuntimeError:
                 pass
             ends = [a for a in read_activity() if a["event"] == "end"]
-            assert [e["command"] for e in ends] == ["look", "act y"] and ends[1]["error"] == "RuntimeError", ends
+            assert [e["command"] for e in ends] == ["look", "act y"] and ends[1]["error"] == "RuntimeError: boom", ends
+            # agent-efficiency D4: a step that failed by its exit code leaves its error in the state, not an exception
+            with box_lock("user@box", "act z") as lk:
+                lk.status(state="failed", error="click: 'Allow once' not found (enabled)")
+            with box_lock("user@box", "look"):
+                pass              # the state is still "failed" from before: not this command's error
+            ends = [a for a in read_activity() if a["event"] == "end"]
+            assert ends[2]["error"] == "click: 'Allow once' not found (enabled)" and ends[3]["error"] is None, ends
             assert ends[0]["label"] == "proj-a" and ends[0]["seconds"] >= 0
             # trimming
             lk = BoxLock("user@box")
@@ -7694,7 +7783,10 @@ def selftest():
         body = open(repair_bundle(os.path.join(d, "r.md"), "t", 0, {"type": {"text": "${pw}", "secret": True}},
                                   {"type": {"text": "hunter2", "secret": True}}, None, "x", ""), encoding="utf-8").read()
         assert "hunter2" not in body and "<redacted>" in body, body
-    assert RUNS == os.path.expandvars(os.path.expanduser(os.environ.get("DESKTAPE_RUNS") or os.path.join(HERE, "runs")))
+    assert RUNS == default_runs()
+    assert default_runs({"DESKTAPE_RUNS": "/x/r"}, "/y") == "/x/r"          # agent-efficiency D2
+    assert default_runs({}, HERE) == os.path.join(HERE, "runs") == default_runs({}, os.path.join(HERE, "tapes"))
+    assert default_runs({}, "/work/proj") == os.path.join(os.path.abspath("/work/proj"), "desktape-runs")
     # claude-plugin: doctor names what is missing with the command for this OS, and installs nothing
     rows = doctor_report(local=True, video=True, which=lambda x: None, exists=lambda p: False, platform="win32")
     bad = {p: d for ok, p, d in rows if not ok}
@@ -7723,7 +7815,61 @@ def selftest():
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     selftest_find()
+    selftest_agent_efficiency()
     print("selftest ok")
+
+
+def selftest_agent_efficiency():
+    """agent-efficiency: the nearest labels in a not-found error (D1); one read of the screen before an action (D3)."""
+    tree = ('- Window "Allow access?"\n  - [1] Button "Allow" [actions=[invoke]]\n'
+            '  - [2] Button "Deny" [actions=[invoke]]\n  - [3] Text "Claude wants to use your files"\n'
+            '  - [4] Button "Always allow" [actions=[invoke]]')
+    near = nearest_labels(tree, "Allow once", "Button")
+    assert near[0] == 'Button "Allow"' and 'Button "Always allow"' in near and len(near) <= 3, near
+    assert nearest_labels(tree, "Mentés", "Button") == [] and nearest_labels(tree, None) == []
+
+    class Fake:                      # counts the calls that may act, like Cua
+        def __init__(self):
+            self.sent, self.acts, self.tree = [], 0, tree
+        def call(self, tool, args, secret=False, timeout=None):
+            self.sent.append(tool)
+            if tool not in READ_TOOLS:
+                self.acts += 1
+            if tool == "list_windows":
+                return {"windows": [{"title": "Allow access?", "pid": 7, "window_id": 1}]}, ""
+            if tool == "get_window_state":
+                return {"elements": [{"label": "Allow", "role": "Button", "element_token": "t"},
+                                     {"label": "Deny", "role": "Button", "element_token": "u"}]}, self.tree
+            return {}, "ok"
+    level = logger.level; logger.setLevel(logging.ERROR)
+    try:
+        f = Fake(); r = Runner(f, "test"); r.focus("Allow access?")
+        r.step({"click": {"label": "Allow", "role": "Button", "effect": "none"}})
+        assert f.sent[:f.sent.index("click")] == ["list_windows", "bring_to_front", "list_windows",
+                                                   "get_window_state"], f.sent
+        n = len(f.sent); r.window_list(keep=True)
+        assert f.sent[n:] == ["list_windows"], f.sent          # read before the click: not used after it
+        n = len(f.sent); r.window_list(keep=True); r.process_windows()
+        assert f.sent[n:] == ["list_windows"], f.sent          # a poll (no keep) always reads again
+        r.kept_windows = (r.kept_windows[0], (f.acts, time.time() - KEEP_FOR - 1))
+        n = len(f.sent); r.window_list(keep=True)
+        assert f.sent[n:] == ["list_windows"], f.sent          # too old
+        try:
+            r.step({"click": {"label": "Allow once", "role": "Button", "timeout": 0}})
+            raise AssertionError("expected not found")
+        except RuntimeError as e:
+            assert "not found (enabled)" in str(e) and 'nearest: Button "Allow"' in str(e), e
+        class NoCount(Fake):         # a test's fake without the counter: nothing is kept
+            def __init__(self):
+                super().__init__(); del self.acts
+            def call(self, tool, args, secret=False, timeout=None):
+                self.sent.append(tool)
+                return Fake.call(type("X", (), {"acts": 0, "tree": tree, "sent": []})(), tool, args)
+        f = NoCount(); r = Runner(f, "test"); r.focus("Allow access?")
+        r.step({"click": {"label": "Allow", "role": "Button", "effect": "none"}})
+        assert f.sent[:f.sent.index("click")].count("list_windows") == 4, f.sent
+    finally:
+        logger.setLevel(level)
 
 
 def selftest_find():
