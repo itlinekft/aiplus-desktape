@@ -5,6 +5,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Fixed
+- A driver that never answers its handshake (a machine whose SSH accepts the connection and then hangs) is reported as
+  "no answer to initialize within 60 s: the machine, its SSH or the driver does not respond"; the panel showed only
+  "initialize".
+
 ## [0.6.4] - 2026-11-11
 
 ### Fixed

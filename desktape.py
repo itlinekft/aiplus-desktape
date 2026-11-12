@@ -379,7 +379,8 @@ class Cua:
             try:
                 line = self.lines.get(timeout=max(0.0, end - time.time()))
             except queue.Empty:
-                raise TimeoutError(method) from None
+                raise TimeoutError(f"no answer to {method} within {timeout:.0f} s: the machine, its SSH or the driver "
+                                   "does not respond") from None
             if line is None:
                 break
             if line.startswith("{"):
