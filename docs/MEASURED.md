@@ -361,6 +361,17 @@ from the Linux controller: `desktape act '{"click": {"label": "Új lap", "role":
   a median of 1.9 s and an act 3.6 s with 10 calls; of 158 failure notes, 76 were a `click` whose label was not
   found, mostly a guessed one.
 
+## 2026-11-12: several steps in one `act`
+
+desktape 0.6.7 on the same Windows VM and controller as above; the step is the same harmless tab click. Three runs
+each, wall time with `/usr/bin/time`:
+
+- three `desktape act '<step>'` calls one after another: 15.97 s (the first, cold), 8.78 s, 9.32 s;
+- one `desktape act '<step>' '<step>' '<step>'`: 5.85 s, 5.21 s, 5.31 s.
+
+`act --new` after it, with no earlier `look` of that window in this run folder: all 41 lines of the window printed as
+new; a `look --new` right after: "0 elements and dialogs, 41 unchanged since the last look left out".
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

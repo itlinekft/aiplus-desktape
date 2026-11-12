@@ -5,6 +5,15 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-12
+
+### Added
+- `act` takes several steps (`desktape act 'click: Next' 'type: …' …`, or one YAML list): one connection, one focus,
+  stopped at the first step that fails, the rest named as `not run:`. Three steps took 5.2–5.9 s against 8.8–9.3 s
+  for three calls on the Windows VM. `--append` appends the steps that passed (`act-several-steps`).
+- `act --new` ends with the window's lines that changed since the last `look`, from the tree the act already read,
+  and leaves that state for the next `look --new`.
+
 ## [0.6.6] - 2026-11-12
 
 ### Added

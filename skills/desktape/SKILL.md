@@ -81,6 +81,10 @@ data again. If the person keeps a backup step, it belongs before the run.
 does one step and checks its outcome. Use them to **build or repair a tape** with the person, not to do a
 business task step by step on your own: a tape is reviewed once and then replayed the same way every time.
 
+Several steps go in one call: `desktape act 'click: Next' 'type: {text: "x", into: "Name"}' --new` runs them on one
+connection, stops at the first that fails (the rest print as `not run:`), and with `--new` ends with what changed in
+the window since your last `look`, so no `look` is needed after it. `--append` appends the steps that passed.
+
 A `click` or `set` whose label is not there names the window's nearest labels (`…not found (enabled); nearest:
 Button "Allow", …`): take the right one from there instead of looking again.
 

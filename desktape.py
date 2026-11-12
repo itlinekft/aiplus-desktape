@@ -7,7 +7,7 @@
 
   desktape.py run TAPE [--mode test|video]       a tape, as a test or as a captioned video
   desktape.py look [--window T] [--ocr] [--full]  what the window shows, cheapest form first
-  desktape.py act 'STEP' [--map M] [--append TAPE] one step; appended to the tape only if it passed
+  desktape.py act 'STEP' ['STEP' …] [--new] [--append TAPE]  steps on one connection; the passed ones appended
   desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py targets                             the named targets, with lock and status
@@ -29,7 +29,7 @@ row stop `act` until a `look` (stuck.md), and DESKTAPE_ALERT_CMD hears about a b
 The runner never calls a model (design D1): a failed run writes runs/<stamp>/repair.md for the agent
 that drives it, which patches the tape or the map.
 """
-import argparse, base64, contextlib, difflib, glob, hashlib, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, base64, contextlib, difflib, glob, hashlib, io, ipaddress, csv, json, logging, os, queue, random, re, shutil, subprocess, sys, tempfile, threading, time
 
 import yaml
 
@@ -3920,77 +3920,143 @@ def append_step(tape_path, step):
         raise RuntimeError(f"{tape_path}: the appended step did not read back equal")
 
 
+def act_steps_given(args):
+    """act-several-steps D1: each argument one YAML step; an argument that is a list adds its steps."""
+    steps = []
+    for arg in args:
+        v = yaml.safe_load(arg)
+        for st in (v if isinstance(v, list) else [v]):
+            if not isinstance(st, dict) or len(st) != 1:
+                raise SystemExit(f"act: give steps of one key each, e.g. 'click: \"@plugins.add_plugin\"' (got {arg!r})")
+            steps.append(st)
+    if not steps:
+        raise SystemExit("act: give at least one step")
+    return steps
+
+
 def cmd_act(a):
-    step = yaml.safe_load(a.step)
-    if not isinstance(step, dict) or len(step) != 1:
-        raise SystemExit("act: give one step, e.g. 'click: \"@plugins.add_plugin\"'")
+    steps = act_steps_given(a.step if isinstance(a.step, list) else [a.step])
     tape = yaml.safe_load(open(a.append, encoding="utf-8")) if a.append else {}
     map_name = a.map or tape.get("map")
     amap = load_map(map_name)
     values, uploads = parse_vars(a.var)
     values = tape_values(tape.get("vars"), values, uploads)
-    s, entry = resolve(step, amap)                          # the tape keeps ${name}; the step acts with the value
-    s = substitute(s, values)
+    items = []
+    for step in steps:                                  # every step resolved before the first runs (D1)
+        s, entry = resolve(step, amap)                  # the tape keeps ${name}; the step acts with the value
+        items.append((step, substitute(s, values), entry))
     deny = deny_entries(amap)
-    with box_lock(a.host, f"act {a.step}") as lk:
+    label = " ".join(a.step if isinstance(a.step, list) else [a.step])
+    with box_lock(a.host, f"act {label}") as lk:
         if uploads:
-            s = substitute(resolve(step, amap)[0], upload_vars(a.host, uploads, values))
-        return act_step(a, step, amap, s, entry, deny, lk, tape)
+            up = upload_vars(a.host, uploads, values)
+            items = [(step, substitute(resolve(step, amap)[0], up), entry) for step, _, entry in items]
+        return act_steps(a, items, amap, deny, lk, tape)
 
 
 def act_step(a, step, amap, s, entry, deny, lk=None, tape=None):
-    desc = json.dumps(step, ensure_ascii=False)[:120]
+    """One step (the shape the selftests and older callers use)."""
+    return act_steps(a, [(step, s, entry)], amap, deny, lk, tape)
+
+
+def act_steps(a, items, amap, deny, lk=None, tape=None):
+    """act-several-steps: the steps in order on one connection and one focus; the first failure stops the rest."""
+    descs = [json.dumps(step, ensure_ascii=False)[:120] for step, _, _ in items]
     if lk:
         cur = lk.read() or {}
         if (cur.get("strikes") or 0) >= STRIKES:     # step-effect-check D4: no fourth blind step
             print(f"STUCK: {cur['strikes']} failed steps in a row on {a.host}; run `look` before the next `act`.\n"
                   f"report: {cur.get('stuck')}")
             return 4
-        lk.status(state="running", step=desc)
+        lk.status(state="running", step=descs[0])
     run_dir = new_run_dir("act", "adhoc")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     if lk:
         cua.on_blocked = lambda tool, args, waited: lk.status(state="blocked", error=f"{tool} did not answer "
                                                               f"within {waited:.1f} s")
-    check_selectors([(s, None)])
+    check_selectors([(s, None) for _, s, _ in items])
     r = Runner(cua, "test")
     r.deny = deny                        # replay-guards D1: an agent learning a flow cannot click it either
     # step-outcome-check D4: act names unplanned windows as run does; the tape given with --append plans some
-    r.planned = expected_dialogs(tape or {}, amap, [(s, None)] + ([({"focus": a.window}, None)] if a.window else []))
+    plan = [(s, None) for _, s, _ in items] + ([({"focus": a.window}, None)] if a.window else [])
+    r.planned = expected_dialogs(tape or {}, amap, plan)
     r.failure_words += (amap or {}).get("failure_words") or []
     r.failure_ignore = (amap or {}).get("failure_ignore") or []
     r.failure_lines = (amap or {}).get("failure_lines", True) is not False
+    done, n = [], len(items)
     try:
-        kind, arg = next(iter(s.items()))
-        if "focus" not in s and kind != "open_file" and not (isinstance(arg, dict) and arg.get("into")):
+        kind, arg = next(iter(items[0][1].items()))
+        if "focus" not in items[0][1] and kind != "open_file" and not (isinstance(arg, dict) and arg.get("into")):
             # an `into` step goes to the window in front; its owner may be blocked by a modal (data-driven-import)
-            r.focus(a.window or (amap["window"] if amap else "Claude"))
-        r.step(s)
-    except Exception as e:
-        if r.win is not None:
             try:
-                r.snapshot()
-            except Exception as e2:
-                logger.warning("no snapshot for the repair bundle: %s", e2)
-        p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", 0, step, s, entry, e, r.tree,
-                          ignores(amap, a.host))
-        print(f"FAILED: {e}\nrepair bundle: {p}")
-        if isinstance(e, ProgramFailure):            # step-outcome-check D5: the program said so; say it now
-            alert(f"desktape {a.host}: {e}")
-        if lk:
-            st = strike(lk, a.host, desc, e, run_dir, r.tree, ignores(amap, a.host))
-            if st["state"] == "stuck":
-                print(f"STUCK: {st['strikes']} failed steps in a row; report: {st['stuck']}")
-        return 1
+                r.focus(a.window or (amap["window"] if amap else "Claude"))
+            except Exception as e:        # the focus, before any step ran: the first step's failure
+                return act_failed(a, r, run_dir, amap, lk, 0, items, descs, e)
+        for i, (step, s, entry) in enumerate(items):
+            if lk and i:
+                lk.status(state="running", step=descs[i])
+            try:
+                r.step(s)
+            except Exception as e:
+                return act_failed(a, r, run_dir, amap, lk, i, items, descs, e)
+            done.append(step)
+            if lk:
+                passed(lk, descs[i])
+            print(f"ok: {json.dumps(step, ensure_ascii=False)}")
+        if getattr(a, "new", False):
+            act_new_lines(a, r, amap)
     finally:
         cua.close()
-    if lk:
-        passed(lk, desc)
-    print(f"ok: {json.dumps(step, ensure_ascii=False)}")
-    if a.append:
-        append_step(a.append, step)
-        print(f"appended to {a.append}")
+        if a.append and done:             # D2: what passed, also when a later step failed
+            for step in done:
+                append_step(a.append, step)
+            print(f"appended {len(done)} step{'s' if len(done) > 1 else ''} to {a.append}")
     return 0
+
+
+def act_failed(a, r, run_dir, amap, lk, i, items, descs, e):
+    """The failing step's repair bundle, strike and output; the steps after it named as not run."""
+    step, s, entry = items[i]
+    if r.win is not None:
+        try:
+            r.snapshot()
+        except Exception as e2:
+            logger.warning("no snapshot for the repair bundle: %s", e2)
+    p = repair_bundle(os.path.join(run_dir, "repair.md"), "act", i, step, s, entry, e, r.tree,
+                      ignores(amap, a.host))
+    where = f" (step {i + 1} of {len(items)})" if len(items) > 1 else ""
+    print(f"FAILED{where}: {e}\nrepair bundle: {p}")
+    for later, _, _ in items[i + 1:]:
+        print(f"not run: {json.dumps(later, ensure_ascii=False)}")
+    if isinstance(e, ProgramFailure):            # step-outcome-check D5: the program said so; say it now
+        alert(f"desktape {a.host}: {e}")
+    if lk:
+        st = strike(lk, a.host, descs[i], e, run_dir, r.tree, ignores(amap, a.host))
+        if st["state"] == "stuck":
+            print(f"STUCK: {st['strikes']} failed steps in a row; report: {st['stuck']}")
+    if getattr(a, "new", False) and r.win is not None and getattr(r, "tree", None):
+        act_new_lines(a, r, amap)
+    return 1
+
+
+def act_new_lines(a, r, amap):
+    """act-several-steps D3: what `look --new` would print now, from the tree the act read last; the look state is
+    left for the next `look --new`."""
+    if r.win is None or not r.title:
+        print("# --new: no window was focused (an `into` or `open_file` step works on the window in front)")
+        return
+    try:
+        if not r.kept(getattr(r, "read_mark", None)):
+            r.snapshot()                   # the last read is older than the last action
+    except Exception as e:
+        logger.warning("act --new: the window could not be read again (%s); not printed", e)
+        print(f"# {r.title}: not read again ({e})")
+        return
+    state = os.path.join(RUNS, ".look", re.sub(r"[^\w.-]+", "_", r.title) + ".txt")
+    lines, hidden, unchanged = look_lines(r.tree, ignores(amap, a.host), new=True, state=state)
+    print(f"# {r.title}: {len(lines)} new or changed, {unchanged} unchanged since the last look")
+    if lines:
+        print("\n".join(lines))
 
 
 def utc_iso(t):
@@ -7816,7 +7882,70 @@ def selftest():
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     selftest_find()
     selftest_agent_efficiency()
+    selftest_act_steps()
     print("selftest ok")
+
+
+def selftest_act_steps():
+    """act-several-steps: steps in order on one connection, the first failure stops the rest, --append takes what
+    passed, --new prints the changes and leaves look's state."""
+    global Cua, RUNS
+    tree = '- Window "Main"\n  - [1] Button "Allow" [actions=[invoke]]\n  - [2] Button "Deny" [actions=[invoke]]'
+    made = []
+
+    class FakeCua:
+        def __init__(self, host, audit_path, autostart=True):
+            self.host, self.mac, self.acts, self.sent, self.on_blocked, self.tree = host, False, 0, [], None, tree
+            self.audit = open(os.devnull, "w")
+            made.append(self)
+        def call(self, tool, args, secret=False, timeout=None):
+            self.sent.append(tool)
+            if tool not in READ_TOOLS:
+                self.acts += 1
+            if tool == "click":
+                self.tree += '\n  - [3] Button "Undo" [actions=[invoke]]'
+            if tool == "list_windows":
+                return {"windows": [{"title": "Main", "pid": 7, "window_id": 1}]}, ""
+            if tool == "get_window_state":
+                return {"elements": [{"label": "Allow", "role": "Button", "element_token": "t"},
+                                     {"label": "Deny", "role": "Button", "element_token": "u"}]}, self.tree
+            return {}, "ok"
+        def close(self):
+            self.audit.close()
+    assert act_steps_given(["click: Allow", "[{click: Deny}, {key: Enter}]"]) == \
+        [{"click": "Allow"}, {"click": "Deny"}, {"key": "Enter"}]
+    try:
+        act_steps_given(["click: A", "just text"]); raise AssertionError("expected SystemExit")
+    except SystemExit as e:
+        assert "one key each" in str(e), e
+    real, runs, level = Cua, RUNS, logger.level
+    logger.setLevel(logging.CRITICAL)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            Cua, RUNS = FakeCua, d
+            tape = os.path.join(d, "t.yaml")
+            open(tape, "w", encoding="utf-8").write("name: t\nsteps:\n")
+            a = argparse.Namespace(host="user@box", window="Main", map=None, append=tape, new=True)
+            items = [({"click": c}, {"click": {"label": c, "role": "Button", "effect": "none",
+                                               **({"timeout": 0} if c == "Nope" else {})}}, None)
+                     for c in ("Allow", "Nope", "Deny")]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = act_steps(a, items, None, [])
+            text = out.getvalue()
+            assert rc == 1 and len(made) == 1 and made[0].sent.count("bring_to_front") == 1, (rc, made[0].sent)
+            assert 'ok: {"click": "Allow"}' in text and "FAILED (step 2 of 3)" in text, text
+            assert 'not run: {"click": "Deny"}' in text and "appended 1 step to" in text, text
+            assert yaml.safe_load(open(tape, encoding="utf-8"))["steps"] == [{"click": "Allow"}], text
+            assert made[0].sent.count("click") == 1, made[0].sent      # Deny never sent
+            assert '# Main: ' in text and 'Button "Undo"' in text, text   # --new: the click's change
+            state = os.path.join(d, ".look", "Main.txt")
+            assert os.path.exists(state)
+            again, _, _ = look_lines(made[0].tree, None, new=True, state=state)
+            assert again == [], again                                   # a look --new after it: nothing new
+    finally:
+        Cua, RUNS = real, runs
+        logger.setLevel(level)
 
 
 def selftest_agent_efficiency():
@@ -7956,7 +8085,9 @@ def main():
     p.add_argument("--new", action="store_true", help="only lines that changed since the last look")
     p.add_argument("--grep", metavar="PATTERN", help="only lines matching this regex (case-insensitive)")
     p.add_argument("--all", action="store_true", help="ignore the map's ignore regions")
-    p = sub.add_parser("act"); p.add_argument("step"); p.add_argument("--map"); p.add_argument("--window")
+    p = sub.add_parser("act"); p.add_argument("step", nargs="+", help="one or more steps (act-several-steps)")
+    p.add_argument("--map"); p.add_argument("--window")
+    p.add_argument("--new", action="store_true", help="then the window's lines that changed since the last look")
     p.add_argument("--append")
     p.add_argument("--var", action="append", metavar="NAME=VALUE", help="a tape variable; NAME=@file uploads the file")
     sub.add_parser("lock", help="who holds the target (box-lock)")
