@@ -5,7 +5,18 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-12
+
+### Added
+- `desktape find --target NAME`: a target whose address moved (a DHCP lease after a restart) is found on this
+  computer's local networks by its pinned SSH host key, without logging in anywhere; `--save` makes desktape connect
+  there (`-o HostName=`, the ssh config untouched), `--forget` goes back. The panel does it by itself for a target it
+  cannot reach, at most every 10 minutes, and logs the move (`find-moved-target`).
+
 ### Fixed
+- The panel counts a target as reachable only when its SSH server greets; a port forward whose machine behind it hangs
+  showed as reachable for hours.
+- The panel's input session got a unique name even when two are made within one millisecond.
 - A driver that never answers its handshake (a machine whose SSH accepts the connection and then hangs) is reported as
   "no answer to initialize within 60 s: the machine, its SSH or the driver does not respond"; the panel showed only
   "initialize".

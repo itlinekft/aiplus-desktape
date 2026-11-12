@@ -187,7 +187,7 @@ class Target:
 
     def __init__(self, host):
         self.host, self.local = host, host == "local"
-        self.opts = SSH_OPTS.get(host, [])      # target-profiles: the profile's identity file
+        self.opts = ssh_opts(host)      # target-profiles: the profile's identity file; find-moved-target D2
         if self.local and local_os() not in OSES:
             raise SystemExit("desktape: --host local drives the driver on this machine, which must be Windows or macOS")
         self.os = target_os(host, self.opts)
@@ -4167,7 +4167,7 @@ def cmd_pair(a):
     if a.check:
         host, _ = choose_target(None, a.name)
         SSH_OPTS[host] = SSH_OPTS.get(host, []) + ["-o", "StrictHostKeyChecking=accept-new"]   # first contact: learn the key
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", *SSH_OPTS[host], host, "echo ok"], capture_output=True, text=True)
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", *ssh_opts(host), host, "echo ok"], capture_output=True, text=True)
         if r.stdout.strip() != "ok":
             print(f"FAILED: key login to {a.name} ({host}): {r.stderr.strip()[-300:] or r.returncode}")
             return 1
@@ -4300,7 +4300,7 @@ def cmd_unpair(a):
     if t is not None and not a.local_only:
         host = ssh_host(t)
         SSH_OPTS[host] = ["-i", key, "-o", "IdentitiesOnly=yes"]
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", *SSH_OPTS[host], host,
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", *ssh_opts(host), host,
                             remove_line_cmd(t.get("os") or "windows", comment)], capture_output=True, text=True, errors="replace")
         left = re.search(r"left (\d+)", r.stdout)
         remote_ok = r.returncode == 0 and left and left.group(1) == "0"
@@ -4397,6 +4397,24 @@ def cmd_lock(a):
                             else "free")))
     for b in bookings:
         print(f"  booking: {describe_booking(b)}")
+    return 0
+
+
+def cmd_find(a):
+    """find-moved-target: the target's address on the local networks, by its pinned host key."""
+    if a.forget:
+        write_found(a.host, None)
+        print(f"{a.host}: found address forgotten; the ssh config's address is used again")
+        return 0
+    ip, keyname, tried = find_target(a.host)
+    if not ip:
+        print(f"desktape: {a.host}: no machine with the host key of {keyname} on {', '.join(map(str, lan_networks()))} "
+              f"({len(tried)} address(es) with the port open)", file=sys.stderr)
+        return 1
+    print(f"{a.host}: found at {ip} (host key of {keyname})")
+    if a.save:
+        write_found(a.host, {"address": ip, "keyname": keyname, "found": round(time.time())})
+        print(f"{a.host}: desktape connects to {ip} from now on; `find --forget` goes back to the ssh config")
     return 0
 
 
@@ -4642,13 +4660,138 @@ PANEL_AUDIT_DAYS = 7
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
+INPUT_SESSIONS = [0]          # panel-live D1: a counter for the input sessions' labels
+FIND_EVERY = 600.0            # find-moved-target D3: the panel looks for an unreachable target at most this often
+FIND_PORT_TIMEOUT = 0.5       # D1: seconds a sweep waits for one address's port
+_FOUND = {"mtime": None, "data": {}}
+
+
+def found_path(directory=None):
+    """Beside the locks folder, not in it: every JSON file there is a target's lock (the panel lists them)."""
+    return os.path.join(os.path.dirname(directory or lock_dir()), "found.json")
+
+
+def found_addresses(directory=None):
+    """find-moved-target D2: {host: {"address", "keyname", "found"}}, re-read when the file changes."""
+    p = found_path(directory)
+    try:
+        m = os.path.getmtime(p)
+    except OSError:
+        return {}
+    if _FOUND.get("path") != p or _FOUND["mtime"] != m:
+        try:
+            _FOUND.update(path=p, mtime=m, data=json.load(open(p, encoding="utf-8")) or {})
+        except (OSError, ValueError) as e:
+            logger.warning("found addresses not read (%s): %s", p, e)
+            return {}
+    return _FOUND["data"]
+
+
+def ssh_opts(host):
+    """The SSH options for a host: its profile's identity file, and a found address over the configured one (D2).
+    The key is still checked under its own name, so a found address never weakens the host key check."""
+    o = list(SSH_OPTS.get(host, []))
+    f = found_addresses().get(host)
+    if f and f.get("address"):
+        o += ["-o", f"HostName={f['address']}", "-o", f"HostKeyAlias={f['keyname']}"]
+    return o
+
+
+def write_found(host, entry, directory=None):
+    """Save (entry a dict) or forget (entry None) a host's found address."""
+    p = found_path(directory)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    data = dict(found_addresses(directory))
+    old = data.get(host)
+    if entry is None:
+        data.pop(host, None)
+    else:
+        data[host] = entry
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, p)
+    _FOUND.update(path=p, mtime=os.path.getmtime(p), data=data)     # a write within one clock tick keeps its mtime
+    logger.info("found address of %s: %s -> %s", host, (old or {}).get("address"), (entry or {}).get("address"))
+
+
+def ssh_config(host):
+    """`ssh -G` for a host as configured (no found address), as a dict."""
+    r = subprocess.run(["ssh", "-G", *SSH_OPTS.get(host, []), host], capture_output=True, text=True, timeout=5)
+    return dict(l.split(" ", 1) for l in r.stdout.splitlines() if " " in l)
+
+
+def pinned_keys(keyname, port):
+    """{(type, key)} known_hosts holds for a name (and `[name]:port`), hashed or not."""
+    keys = set()
+    for name in [keyname] + ([f"[{keyname}]:{port}"] if port != 22 else []):
+        r = subprocess.run(["ssh-keygen", "-F", name], capture_output=True, text=True)
+        keys |= {tuple(l.split()[1:3]) for l in r.stdout.splitlines() if l and not l.startswith("#") and len(l.split()) >= 3}
+    return keys
+
+
+def scan_keys(ip, port):
+    r = subprocess.run(["ssh-keyscan", "-T", "3", "-p", str(port), ip], capture_output=True, text=True, timeout=20)
+    return {tuple(l.split()[1:3]) for l in r.stdout.splitlines() if l and not l.startswith("#") and len(l.split()) >= 3}
+
+
+def lan_networks():
+    """The controller's private IPv4 networks to search, a /24 around each address; VPN ranges left out (D1)."""
+    nets = []
+    for ip in lan_addresses(vpn=False):
+        n = ipaddress.ip_network(f"{ip}/24", strict=False)
+        if n not in nets:
+            nets.append(n)
+    return nets
+
+
+def sweep_port(nets, port, timeout=FIND_PORT_TIMEOUT):
+    """The addresses on these networks whose port accepts a TCP connection, in address order."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+    def accepts(a):
+        try:
+            socket.create_connection((str(a), port), timeout=timeout).close()
+            return str(a)
+        except OSError:
+            return None
+    with ThreadPoolExecutor(64) as ex:
+        found = [a for a in ex.map(accepts, [h for n in nets for h in n.hosts()]) if a]
+    return found
+
+
+def find_target(host, nets=None, sweep=sweep_port, scan=scan_keys, known=pinned_keys, config=ssh_config):
+    """find-moved-target D1: (address or None, key name, addresses tried). The target is the machine on the
+    controller's private networks that shows the host key pinned for it; nothing logs in."""
+    kv = config(host)
+    if kv.get("proxyjump", "none") != "none" or kv.get("proxycommand", "none") != "none":
+        raise ValueError(f"{host} is reached through a proxy; it cannot be found on the local network")
+    port = int(kv.get("port") or 22)
+    alias = kv.get("hostkeyalias", "none")
+    keyname = alias if alias and alias != "none" else kv.get("hostname") or host.split("@")[-1]
+    pinned = known(keyname, port)
+    if not pinned:
+        raise ValueError(f"no host key pinned for {keyname} in known_hosts; connect once with ssh to pin it")
+    nets = lan_networks() if nets is None else nets
+    tried = sweep(nets, port)
+    logger.info("find %s: port %d open on %d address(es) of %s", host, port, len(tried), ", ".join(map(str, nets)))
+    configured = kv.get("hostname")         # one machine on two addresses: the configured one first (D1)
+    for ip in sorted(tried, key=lambda a: a != configured):
+        try:
+            if scan(ip, port) & pinned:
+                return ip, keyname, tried
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.debug("find %s: no key from %s (%s)", host, ip, e)
+    return None, keyname, tried
+
+
 def ssh_endpoint(host):
     """(hostname, port) that ssh connects to for this destination (`ssh -G`, so ~/.ssh/config aliases count);
     None for `local` or a destination behind a proxy, where a TCP probe says nothing."""
     if host == "local":
         return None
     try:
-        r = subprocess.run(["ssh", "-G", *SSH_OPTS.get(host, []), host], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["ssh", "-G", *ssh_opts(host), host], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.warning("ssh -G %s failed (%s); probing the name as written", host, e)
         return host.split("@")[-1], 22
@@ -4676,7 +4819,16 @@ def probe(host, timeout=2.0):
                 raise
             logger.debug("%s resolved by getent: %s", ep[0], r.stdout.split()[0])
             ep = (r.stdout.split()[0], ep[1])
-        socket.create_connection(ep, timeout=timeout).close()
+        c = socket.create_connection(ep, timeout=timeout)
+        try:              # find-moved-target D4: a port forward accepts even when the machine behind it is silent
+            c.settimeout(max(timeout, 3.0))
+            greeting = c.recv(64)
+        except OSError:
+            greeting = b""
+        finally:
+            c.close()
+        if not greeting.startswith(b"SSH-"):
+            return {"ok": False, "checked": t0, "detail": "accepts connections, no SSH greeting"}
         return {"ok": True, "checked": t0, "detail": f"ssh answered in {int((time.time() - t0) * 1000)} ms"}
     except OSError as e:
         return {"ok": False, "checked": t0, "detail": f"ssh: {e.strerror or e}"}
@@ -5245,7 +5397,8 @@ def grabber_act(g, op, body):
             if g.inp is None:
                 g.inp = g.connect()
                 g.inp.summarize = {"move_cursor", "helper press_key", "helper hotkey", "helper type_text"}   # not steps (D2, D5)
-                g.inp_session = f"desktape-panel-input-{os.getpid()}-{int(time.time() * 1000)}"
+                INPUT_SESSIONS[0] += 1          # unique even when two are made within one millisecond
+                g.inp_session = f"desktape-panel-input-{os.getpid()}-{int(time.time() * 1000)}-{INPUT_SESSIONS[0]}"
                 try:      # D5: the agent cursor's glide made each click 0.4-0.9 s and keys after it stall (measured)
                     g.inp.call("set_agent_cursor_enabled", {"enabled": False, "session": g.inp_session}, timeout=10)
                 except Exception as e:
@@ -5324,6 +5477,7 @@ class PanelState:
         self.allowed = LOOPBACK if bind in LOOPBACK else None
         self.token = "%032x" % random.SystemRandom().getrandbits(128)    # panel-control D3
         self.started = time.time()                                           # panel-live D6
+        self.find_at = {}           # host -> when the panel last looked for it on the network (find-moved-target D3)
         self.controls = {}          # name -> {"lk": BoxLock, "since": t, "last": t}
         self.audit_dir = os.path.join(os.path.dirname(lock_dir()), "panel")
         self.grabbers, self.reach, self._rows = {}, {}, []
@@ -5445,7 +5599,31 @@ class PanelState:
                 th.start()
             for th in threads:
                 th.join(10)
+            now = time.time()
+            for h in hosts:             # find-moved-target D3: an unreachable target may have moved
+                if (self.reach.get(h) or {}).get("ok") is False and now - self.find_at.get(h, 0) >= FIND_EVERY:
+                    self.find_at[h] = now
+                    threading.Thread(target=self.find_moved, args=(h,), daemon=True, name=f"find-{h}").start()
             self.stopping.wait(REACH_EVERY)
+
+    def find_moved(self, h, find=find_target, save=write_found, endpoint=ssh_endpoint):
+        """D3: look for a silent target by its pinned host key; use the address it shows up on."""
+        try:
+            ip, keyname, tried = find(h)
+        except (ValueError, OSError, subprocess.SubprocessError) as e:
+            logger.debug("panel: %s not searched: %s", h, e)
+            return None
+        if not ip:
+            logger.info("panel: %s does not answer, and no machine on the local network shows its host key "
+                        "(%d with the port open)", h, len(tried))
+            return None
+        cur = endpoint(h)
+        if cur and cur[0] == ip:
+            return None                   # the same address: the machine is there but silent
+        logger.warning("panel: %s moved from %s to %s (found by its host key); connecting there", h,
+                       cur[0] if cur else "?", ip)
+        save(h, {"address": ip, "keyname": keyname, "found": round(time.time())})
+        return ip
 
 
 def panel_handler(state):
@@ -5816,7 +5994,7 @@ def selftest_booking_panel():
             assert st.control("box", {"op": "click", "x": 99, "y": 1})[0] == 200
             assert [c[1].get("delivery_mode") for c in calls if c[0] == "click"][-2:] == [None, "foreground"]
             ended.add(g.inp_session); old_session = g.inp_session          # the driver ended the input session
-            assert st.control("box", {"op": "click", "x": 7, "y": 1})[0] == 200, "a new session, the click again"
+            _r = st.control("box", {"op": "click", "x": 7, "y": 1}); assert _r[0] == 200, ("a new session, the click again", _r)
             assert g.inp_session != old_session and [c[1]["session"] for c in calls if c[0] == "click"][-1] == g.inp_session
             assert st.control("box", {"op": "key", "key": "nope"})[0] == 400
             other = agent.try_acquire("look")                                 # the agent is kept out now
@@ -7541,10 +7719,71 @@ def selftest():
     selftest_click_offscreen()
     selftest_panel_audit()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
-                "knowledge", "book", "unbook", "bookings", "panel"):
+                "knowledge", "book", "unbook", "bookings", "panel", "find"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
+    selftest_find()
     print("selftest ok")
+
+
+def selftest_find():
+    """find-moved-target: the key match, the saved address in every SSH command, the panel's search, the greeting."""
+    import socket
+    key, other = ("ssh-ed25519", "AAAAkey"), ("ssh-ed25519", "AAAAother")
+    cfg = lambda h: {"hostname": "10.0.0.5", "port": "22220", "hostkeyalias": "box", "proxyjump": "none"}
+    scans = {"10.0.0.5": set(), "10.0.0.6": {other}, "10.0.0.9": {key}}
+    ip, keyname, tried = find_target("box", nets=["10.0.0.0/24"], sweep=lambda n, port: list(scans),
+                                     scan=lambda a, port: scans[a], known=lambda k, port: {key} if k == "box" else set(),
+                                     config=cfg)
+    assert (ip, keyname, len(tried)) == ("10.0.0.9", "box", 3), (ip, keyname, tried)
+    ip, _, _ = find_target("box", nets=[], sweep=lambda n, port: ["10.0.0.6"], scan=lambda a, port: {other},
+                           known=lambda k, port: {key}, config=cfg)
+    assert ip is None, "another machine on the same port is not the target"
+    two = lambda h: {**cfg(h), "hostname": "10.0.0.12"}
+    ip, _, _ = find_target("box", nets=[], sweep=lambda n, port: ["10.0.0.9", "10.0.0.12"], scan=lambda a, port: {key},
+                           known=lambda k, port: {key}, config=two)
+    assert ip == "10.0.0.12", "one machine on two addresses: the configured one"
+    try:
+        find_target("box", nets=[], sweep=lambda n, p: [], known=lambda k, p: set(), config=cfg)
+        raise AssertionError("no pinned key: nothing to find by")
+    except ValueError as e:
+        assert "no host key pinned" in str(e)
+    with tempfile.TemporaryDirectory() as d:
+        old_env = os.environ.get("XDG_STATE_HOME"); os.environ["XDG_STATE_HOME"] = d
+        try:
+            assert ssh_opts("user@box") == list(SSH_OPTS.get("user@box", [])), (ssh_opts("user@box"), found_addresses(), found_path())
+            write_found("user@box", {"address": "10.0.0.9", "keyname": "box", "found": 1})
+            o = ssh_opts("user@box")
+            assert o[-4:] == ["-o", "HostName=10.0.0.9", "-o", "HostKeyAlias=box"], o
+            st = PanelState("127.0.0.1", probe=False)
+            saved = []
+            got = st.find_moved("user@box", find=lambda h: ("10.0.0.12", "box", ["10.0.0.12"]),
+                                save=lambda h, e: saved.append((h, e)), endpoint=lambda h: ("10.0.0.9", 22220))
+            assert got == "10.0.0.12" and saved[0][1]["address"] == "10.0.0.12", saved
+            assert st.find_moved("user@box", find=lambda h: ("10.0.0.9", "box", []), save=lambda h, e: saved.append(1),
+                                 endpoint=lambda h: ("10.0.0.9", 22220)) is None and len(saved) == 1, "same address"
+            assert os.path.dirname(found_path()) != lock_dir(), "not in the locks folder: the panel lists every JSON there"
+            write_found("user@box", None)
+            assert ssh_opts("user@box") == list(SSH_OPTS.get("user@box", [])), (ssh_opts("user@box"), found_addresses(), found_path())
+        finally:
+            if old_env is None: os.environ.pop("XDG_STATE_HOME", None)
+            else: os.environ["XDG_STATE_HOME"] = old_env
+    # D4: a port that accepts and stays silent is not reachable; one that greets is
+    for greeting, ok in ((b"", False), (b"SSH-2.0-test\r\n", True)):
+        srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1); port = srv.getsockname()[1]
+        def serve(g=greeting):
+            c, _ = srv.accept()
+            if g:
+                c.sendall(g)
+            time.sleep(1.5); c.close()
+        threading.Thread(target=serve, daemon=True).start()
+        g = globals(); keep = g["ssh_endpoint"]; g["ssh_endpoint"] = lambda h: ("127.0.0.1", port)
+        try:
+            r = probe("user@box", timeout=0.5)
+        finally:
+            g["ssh_endpoint"] = keep; srv.close()
+        assert r["ok"] is ok, (greeting, r)
+        assert ok or "no SSH greeting" in r["detail"], r
     return 0
 
 
@@ -7584,6 +7823,9 @@ def main():
     p = sub.add_parser("unbook", help="remove a booking of this project")
     p.add_argument("id"); p.add_argument("--force", action="store_true", help="also another project's (a stale one)")
     sub.add_parser("bookings", help="every target's bookings")
+    p = sub.add_parser("find", help="find a target that moved on the local network, by its pinned SSH host key")
+    p.add_argument("--save", action="store_true", help="connect to the found address from now on")
+    p.add_argument("--forget", action="store_true", help="go back to the address in the ssh config")
     p = sub.add_parser("panel", help="a local web page: every target's lock, bookings, activity and live screen")
     p.add_argument("--port", type=int, default=PANEL_PORT)
     p.add_argument("--bind", default="127.0.0.1", help="the address to listen on (default 127.0.0.1: this machine only)")
@@ -7644,7 +7886,7 @@ def main():
                      f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
                 "status": cmd_status, "tidy": cmd_tidy, "record": cmd_record, "book": cmd_book,
-                "unbook": cmd_unbook}[a.cmd](a)
+                "unbook": cmd_unbook, "find": cmd_find}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
         return 3

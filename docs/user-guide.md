@@ -256,6 +256,8 @@ had kept a call hanging for 4 min 22 s, counted as done after 9.2 s.
 | `OCR task did not finish in 20 s` | the interactive session is locked or not rendering |
 | `` `steps:` must be the last key to append to it `` | move `steps:` to the end of the tape |
 | a run hangs or sees an empty window | the RDP window on the target is minimised or disconnected; keep it open and visible |
+| `no route to host`, or the panel shows a machine as gone after a restart | its address may have moved (DHCP). `desktape find --target NAME` looks for the machine on this computer's local networks by its pinned SSH host key; `--save` makes desktape connect there (your ssh config is not changed), `--forget` goes back. The panel does this by itself for a machine it cannot reach, at most every 10 minutes |
+| `no answer to initialize within 60 s`, or `accepts connections, no SSH greeting` | the machine's port accepts the connection and nothing answers behind it, typically a VM whose host forwards the port while the guest hangs or reboots: look at the machine itself |
 
 Typing (`type`, `key`, `hotkey`) is sent to the foreground window, so it takes the keyboard focus on the
 target: do not work on the target's desktop while a tape runs.

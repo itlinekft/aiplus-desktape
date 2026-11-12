@@ -328,6 +328,19 @@ A Windows 11 VM (user-mode network on a Linux host, reached through a port forwa
 - ffmpeg's `-fflags nobuffer` drops the packets it probed: with H.264 that is the first keyframe, and nothing decoded
   (0 bytes out of 5 frames, measured locally). The H.264 relay and decoder run without it.
 
+## 2026-11-12: a target that moved, found by its host key
+
+The Windows VM (port 22220 forwarded by its Linux host) came back after a VM restart on another address: the configured
+one said "No route to host". Before the restart the host's port accepted connections while the guest sent no SSH
+greeting for hours (`nc` printed nothing in 10 s); the panel's TCP probe had counted that as reachable.
+
+- `desktape find --target <vm>`: the controller's one /24, port 22220 open on 2 addresses (both the host's), both with
+  the pinned key; 2.5 s in all. With the configured address among them, that one is named.
+- The panel: the VM's saved address set to an unused one; after the restart the first probe failed, the search ran and
+  logged "moved from … to …" 3 s later, and the VM's commands used the found address. The same pass searched for the
+  MacBook reached over Tailscale (offline): 5 addresses with port 22 open on the LAN, none with its key, nothing saved.
+- `probe` with the SSH greeting: the four reachable targets answered in 54–87 ms, as before.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
