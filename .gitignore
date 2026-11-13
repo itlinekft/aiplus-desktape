@@ -1,5 +1,7 @@
 # Measurement output, screenshots and recordings stay local.
 runs/
+# stray root-level audit trail of ad-hoc runs (the per-run one lives under runs/)
+audit.jsonl
 *.png
 *.mp4
 # the published mark (brand exports) is not a screenshot
@@ -11,6 +13,7 @@ __pycache__/
 
 # Per-machine agent tooling (set-core); not part of desktape.
 .set/
+.set-core/
 set/
 .claude/rules/set-*.md
 .claude/commands/set/
