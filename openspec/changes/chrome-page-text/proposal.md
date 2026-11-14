@@ -11,19 +11,26 @@ only with `look --ocr` and a click by coordinates, driven by hand. Measured 2026
 accessibility: Chrome builds the page tree for UI Automation only when an assistive client asks for it or when it is
 started with `--force-renderer-accessibility`.
 
+Measured 2026-11-14 on another test PC (`docs/MEASURED.md`): without `--force-renderer-accessibility` Chrome's first
+read lists only its own controls, the next read the page; a `click` on a page button passed in 2.0 s, because a step
+reads again while it waits. A `look` reads once, so it shows an empty page. The page that stayed empty on every read
+is not reproduced.
+
 ## What changes
 
-- **Knowledge first.** `knowledge/windows.md` and `doctor` say how to get Chrome's page tree (the flag, or
-  `chrome://accessibility`), and `doctor` reports when a Chrome window has an empty page tree.
-- **An opt-in OCR fallback.** `click` and `expect` take `ocr: true`: when the text is not found in the tree before the
-  timeout, desktape reads the window with OCR, matches the text, and clicks its centre with the OS click. The audit
-  says the step was done by OCR.
+- **Knowledge.** `knowledge/windows.md` says the page tree comes on the second read, and how to have it from the
+  start (the flag).
+- **`look` reads a Chrome window again** when its tree has no page `Document`, once, after a short pause, and says so.
+- **`doctor`** reports a Chrome window whose page tree is still empty after that second read, and names the flag.
+- **Not now:** the opt-in OCR fallback for `click` and `expect` (`ocr: true`) waits until a page that stays empty is
+  reproduced; until then `look --ocr` reads such a page.
 
 ## Impact
 
-`desktape.py` (`find`, the `click` and `expect` steps, `doctor`), `knowledge/windows.md`, the tape reference, the
-CHANGELOG. Without `ocr: true` nothing changes.
+`desktape.py` (`look`, `doctor`), `knowledge/windows.md`, the CHANGELOG. Other windows are read as today.
 
 ## Decision
 
-The person chose this approach on 2026-11-14 (AskUserQuestion: „Opt-in OCR + doctor hint (Recommended)”).
+The person chose opt-in OCR + a doctor hint on 2026-11-14 (AskUserQuestion: „Opt-in OCR + doctor hint
+(Recommended)”), then, after the measurement above, the re-read + doctor instead, OCR deferred (AskUserQuestion,
+2026-11-14: „Re-read + doctor (Recommended)”).

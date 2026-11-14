@@ -1,20 +1,21 @@
 ## ADDED Requirements
 
-### Requirement: A step can fall back to OCR
-A `click` or `expect` step with `ocr: true` SHALL, when its text is not in the accessibility tree before the timeout,
-look for the text by OCR in the target window, act on its position, and record in the audit that OCR was used.
+### Requirement: look reads a browser page again
+`look` SHALL read a Chrome or Edge window a second time, once and after a short pause, when its tree has no page
+`Document`, because the browser builds the page's tree only after a client has asked for it.
 
-#### Scenario: A button on a Chrome page
-- **WHEN** a tape clicks `{text: "Allow", ocr: true}` on a Chrome page whose tree is empty
-- **THEN** the button is clicked by its OCR position and the audit line says `ocr`
+#### Scenario: A freshly started Chrome
+- **WHEN** the first read of a Chrome window lists only the browser's own controls
+- **THEN** `look` reads it again and prints the page's elements, with a line saying it read twice
 
-#### Scenario: No opt-in
-- **WHEN** the step has no `ocr: true`
-- **THEN** it fails as today when the text is not in the tree
+#### Scenario: Another program
+- **WHEN** the window is not a Chromium browser's, or its tree has a `Document`
+- **THEN** `look` reads it once, as today
 
 ### Requirement: doctor names an empty browser page tree
-`doctor` SHALL report a Chrome window whose page has no accessibility tree and name the fix.
+`doctor` SHALL report a Chrome or Edge window whose page has no accessibility tree after a second read, and name
+the fix.
 
 #### Scenario: Chrome without accessibility
-- **WHEN** a Chrome window is open and its page subtree is empty
+- **WHEN** a Chrome window is open and its tree has no `Document` on two reads
 - **THEN** `doctor` prints the warning and how to start Chrome with its accessibility tree

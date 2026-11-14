@@ -26,3 +26,5 @@ whole when the recorder dies.
 ## Decision
 
 The person chose this approach on 2026-11-14 (AskUserQuestion: „Segments + auto-restart (Recommended)”).
+It goes before `record-liveness` section 2 (`record --with ffmpeg`), which stays a separate change (AskUserQuestion,
+2026-11-14: „Segments first (Recommended)”).
