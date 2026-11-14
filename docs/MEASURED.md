@@ -372,6 +372,123 @@ each, wall time with `/usr/bin/time`:
 `act --new` after it, with no earlier `look` of that window in this run folder: all 41 lines of the window printed as
 new; a `look --new` right after: "0 elements and dialogs, 41 unchanged since the last look left out".
 
+## 2026-11-14: the run level follows the SSH session's token; one pipe per account (`standard-user-daemon`)
+
+**Machine:** the Windows 10 Pro 22H2 desktop PC (10.0.19045.6466), Cua Driver 0.34.1, two accounts paired: an
+administrator (signed in at the console) and a standard user (not signed in). Controller: Linux, branch
+`fix/windows-run-findings`.
+
+- `rl_flag` (`whoami /groups` over SSH, looking for `S-1-16-12288`): the administrator's key login gave
+  `" /rl highest"`, the standard account's gave `""`.
+- Administrator: `taskkill /f /im cua-driver.exe`, then `desktape look --target <admin> --window "Program Manager"`
+  logged "no driver daemon … starting it", started it with `/rl highest`, connected (no os error 233); the following
+  `look` of the same window passed in 1.45 s.
+- Standard account, while the administrator's daemon was running in the console session: `look` failed in 6.7 s
+  with `connect to named pipe \\.\pipe\cua-driver: Access denied (os error 5)`. The pipe name is machine-wide, and
+  the account had no desktop session, so nothing was started for it.
+- 15:22, the standard account signed in at the console by hand (Switch user), the administrator's session
+  disconnected with its elevated daemon still holding `\\.\pipe\cua-driver`: `look --target <standard>` failed
+  the same way (os error 5, 6.4 s for the denied connect alone: the driver retries). A daemon started by hand in
+  the standard session on another pipe (`serve --socket \\.\pipe\cua-driver-alt-test`, a `/it` task without
+  `/rl highest`) answered, and `look --window "Program Manager"` over it listed that account's desktop (18
+  elements; the administrator's windows were not in it).
+- With the per-account pipe in desktape (after 303d704): `look --target <standard> --window "Program Manager"`
+  logged "the driver pipe … belongs to another account's daemon; this account's own: `\\.\pipe\cua-driver-<8
+  hex>`", "no driver daemon … starting it", "driver daemon started", and listed the 18 elements, 14.6 s. With the
+  pipe remembered on the controller (`pipes.json` beside the locks), three more `look`s: 8.66 s (the first, before
+  the file existed), 1.51 s, 1.47 s.
+- 15:34, the administrator back at the console, the standard session disconnected with its daemon: `look --target
+  <admin> --window "Program Manager"` over the shared pipe, 1.56 s and 1.35 s (45 elements); right after it
+  `look --target <standard>` over its own pipe, 1.87 s (18 elements). Both accounts' daemons ran side by side.
+
+## 2026-11-14: a typed text read back whole (`type-verify-whole`)
+
+**Machine:** the same Windows 10 Pro 22H2 PC, the administrator account, Cua Driver 0.34.1, Claude Desktop
+5.11492.2.0 (Microsoft Store). Controller: Linux, branch `fix/windows-run-findings`.
+
+A scratch tape (not in the repo) opened Customize → Plugins → Add plugin → Add marketplace → from a repository,
+clicked the URL ComboBox, then 20 times `hotkey: [ctrl, a]` and `type:` an 84-character URL, then Cancel.
+`desktape run --target <admin> type20.yaml`:
+
+- 55 of 55 steps passed in 88.8 s; 20 `type_text` calls in `audit.jsonl` (82–105 ms each), so no retry was needed;
+  a `type` step, from the driver call to the next step, took 1.69–2.94 s (median 1.75 s).
+- The ComboBox has no `[value=…]`: it shows the text in its label (`ComboBox "URL https://…"`) and in a Text below
+  it. The first version of the near-match looked only at values and would have only warned on a lost keystroke
+  there; it now reads the labels of Edit, ComboBox, Text and Document lines too (the selftest has that case).
+- The lost keystroke itself was not reproduced on the machine: the retry and the failure are covered by the
+  selftest's fake driver only.
+- The tape's first Cancel after typing left the dialog open (it closed the ComboBox's drop-down); a second one
+  closed it.
+
+## 2026-11-14: a Chrome page in the UI Automation tree (`chrome-page-text` task 1.1)
+
+**Machine:** the same Windows 10 PC, the administrator account, Cua Driver 0.34.1, Chrome 157.0.8103.52 started with
+a throwaway `--user-data-dir` on a local test page (a heading, an Allow and a Deny button). Controller: Linux.
+
+- Without `--force-renderer-accessibility`: the first `desktape look --window "<title> - Google Chrome"` listed 13
+  elements, Chrome's own (tabs, address bar, window buttons), no page; a second `look` 5 s later listed 16, with
+  `Document`, `Button "Allow"`, `Button "Deny"`. Measured twice, on two fresh starts.
+- Without the flag, on a fresh start: `desktape act 'focus: …' 'click: {label: Allow, role: Button}' 'expect: Allowed'`
+  passed in 2.01 s.
+- With the flag: the first `look` listed the page (16 elements).
+- Not reproduced: the 2026-11-13 report of pages (a sign-in, a consent page) whose tree stayed empty.
+- **Half an hour later, different:** 11:38–11:45, seven fresh starts of the same Chrome on the same page (two with
+  a "Restore pages?" bubble after a forced close, five with a fresh profile, two of those with the flag): reading
+  the window every 0.5–1 s for 3–15 s, on one connection and on three new ones, never gave a `Document`. OCR of the
+  screen showed the tab and the address bar but no page content, with Claude Desktop in front and after it was
+  minimised. Chrome had not updated (still 157.0.8103.52). The cause: see the next section.
+
+## 2026-11-14: Chrome draws no page with the display off (`chrome-page-text` task 1.4)
+
+**Machine:** the same Windows 10 PC, the administrator account, Cua Driver 0.34.1, Chrome 157.0.8103.52, a throwaway
+`--user-data-dir`, the same test page under `C:\Users\Public`. The display's power plan: off after 900 s on AC.
+Controller: Linux, branch `fix/windows-run-findings` after cd3753f. 14:44–14:49.
+
+- 14:44, nobody at the PC: a fresh start, `desktape look --window "desktape page test - Google Chrome"` → 12
+  elements, "no page tree on two reads" (2.5 s). OCR of the window: the tab and the address bar, no page content.
+- The same, started with `--disable-features=CalculateNativeWinOcclusion`: the second read had `Document` and
+  `Button "Allow"`; a further `look` had it on the first read.
+- Without that flag, Claude Desktop minimised and Chrome the front window: 12 reads in 11 s, never a page.
+- A one-pixel mouse move there and back in the session (`mouse_event` from a scheduled task, `/it`): the next read of
+  the **same** Chrome window had the page (0.09 s). So the display was off, and Chrome counts its windows as hidden.
+- Display on, three fresh starts without any flag: each `look` printed "read twice, as its page tree comes after the
+  first read" with `Document "desktape page test"`, 2.42, 2.42 and 2.43 s wall time.
+- The display turned off on purpose (`WM_SYSCOMMAND SC_MONITORPOWER 2`), a fresh start: `look` → no page on two reads
+  with the new hint; `desktape doctor --target <admin>` → `MISSING page tree of 'desktape page test - Google
+  Chrome'`, 6 checked; after a mouse move the first read had the page.
+
+## 2026-11-14: the driver's recorder dies at minute 6 under UI Automation load (`record-segments`)
+
+**Machine:** the same Windows 10 PC, the administrator account, Cua Driver 0.34.1, ffmpeg 9.0.2 (winget). Controller:
+Linux, branch `fix/windows-run-findings` at a639502.
+
+`desktape record --target <admin> --seconds 480 --name die5`, and beside it, from 8 s later, a loop reading Claude
+Desktop's window (312 elements) every 2 s over its own driver connection (192 reads):
+
+- The recording grew to 63 321 892 bytes and stopped growing at 11:53:40, 6:00 after it started (11:47:40); the
+  liveness check said so at 11:54:41 and `record` stopped.
+- `record` then ended with a traceback from `scp` ("No such file or directory"), no video and no summary. **Not the
+  driver:** the file was there (63 MB, last written 11:52:43), but in `C:\Users\<name with U+FFFD>\desktape\rec\…`.
+  desktape read the profile folder with `echo %USERPROFILE%`, whose "á" came back as U+FFFD, and gave that path to
+  the driver, which made a new folder of that name (created 2026-10-29, the first `record` on this PC) and recorded
+  into it; the fetch and the cleanup used the real profile and never found it. Two other recordings stayed there
+  (2026-10-29 and 2026-11-13; left for their owners). desktape now reads the profile as UTF-8 through PowerShell
+  and base64, and names it in cmd lines by `%USERPROFILE%`.
+- With the two reports (minute 5 of 26, minute 5.5 of 37), three deaths at 5–6 minutes.
+
+The same `record` and load with segments (branch at the `record-segments` commit), all on the same day:
+
+- 600 s in 4-minute segments under the same load (240 reads of 312 elements): segments 0–240.3, 240.3–480.9 and
+  480.9–601.8 s, 46.6, 50.4 and 23.8 MB, none stopped growing. (These files went to the wrong folder above; found
+  and removed by hand.)
+- 50 s in 20-second segments (`DESKTAPE_SEGMENT_SECONDS=20`), after the profile fix: three parts joined on the target
+  into one file of 10 769 021 bytes, 51.37 s by `ffprobe`; the run's 50.1 s, 52.6 s by the segments' clocks. The
+  target's `desktape\rec` was empty afterwards.
+- 1800 s (`record --seconds 1800`, commit 0112a0b) under the same load (721 reads of 312 elements): 8 segments of
+  240.4–240.7 s (the last 118.3 s), 46.2–49.8 MB each, none stopped growing; joined on the target into one file of
+  362 391 318 bytes, 1800.23 s by `ffprobe`, against 1800.1 s by the controller's clock; exit 0, `gaps: []`. The
+  target's `desktape\rec` was empty afterwards.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

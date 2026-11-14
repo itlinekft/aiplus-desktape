@@ -56,9 +56,17 @@ start-at-logon task is installed.
 If the automatic start fails, desktape stops and points here: copy the script and start it by hand with
 the `/it` task pattern above.
 
-The daemon runs with the SSH session's token (`/rl highest`): an administrator's key login is elevated, and
-Cua Driver 0.34.1 refuses a pipe client whose elevation differs from the daemon's (os error 233). When you start
-it by hand, add `/rl highest`; a daemon that refuses desktape is stopped and started again (measured 2026-10-29).
+The daemon runs with the SSH session's token: an administrator's key login is elevated, and Cua Driver 0.34.1
+refuses a pipe client whose elevation differs from the daemon's (os error 233). desktape reads `whoami /groups`
+once per host and adds `/rl highest` only when the session is elevated (it lists `S-1-16-12288`, High Mandatory
+Level); a standard account cannot create a `/rl highest` task at all ("Access denied"). When you start it by hand,
+add `/rl highest` for an administrator and leave it out for a standard account; a daemon that refuses desktape is
+stopped and started again (measured 2026-10-29).
+
+The pipe `\\.\pipe\cua-driver` is machine-wide. When another account's daemon holds it (two accounts on one PC,
+one signed in at the console and the other disconnected), it answers "Access denied" (os error 5), and desktape
+starts this account's daemon on a pipe of its own, `\\.\pipe\cua-driver-<8 hex of the account name>`
+(`cua-serve.ps1 -Pipe …`), and remembers it in `pipes.json` beside its locks (measured 2026-11-14).
 Quote `%USERPROFILE%` paths: a profile folder name may contain a space.
 
 Check it from Linux:

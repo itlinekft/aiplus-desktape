@@ -33,7 +33,25 @@ open.
   Claude in a browser): a target's Chrome signed in to another Claude account (Team vs personal) does not answer
   a remote session's extension. Drive that browser with desktape (`look`/`act`), or by that machine's own Claude.
 
+- **A page's own tree is not always there.** Chrome builds a page's UI Automation tree only after a client has
+  asked for it, or from the start with `--force-renderer-accessibility`: with the display on, a fresh Chrome's first
+  `look` read has only the browser's own controls and the second has the page, so `look` reads a browser window
+  twice. Measured 2026-11-14 on the Windows 10 test PC, Chrome 157.0.8103.52, a local test page.
+- **With the display off, Chrome draws no page at all.** When the PC's display has gone off (its power plan: 15
+  minutes idle on that PC; the driver's input does not wake it), Chrome counts every window as hidden: no page
+  content on screen, no page in the tree, on any read, with or without `--force-renderer-accessibility`. Waking the
+  display (a real mouse move in the session) brought the page at once, on the first read of the same window;
+  starting Chrome with `--disable-features=CalculateNativeWinOcclusion` brought it with the display still off.
+  Turning the monitor off on purpose reproduced it. Measured 2026-11-14, same PC. `look` and `doctor` name this
+  when a browser window has no page on two reads. Claude Desktop (Electron) kept its tree with the display off.
+
 ## Over SSH, as a standard user
+
+- **The driver's pipe is machine-wide.** `\\.\pipe\cua-driver` belongs to whichever account's daemon made it: a
+  second account on the same PC gets "Access denied" (os error 5), even with its own desktop session, and the denied
+  connect takes 6.4 s (the driver retries). A daemon on another pipe (`serve --socket …`) works beside it. desktape
+  does this by itself (`standard-user-daemon`). Measured 2026-11-14, Windows 10, an administrator disconnected and
+  a standard account at the console.
 
 - **Process details are denied.** `Get-CimInstance Win32_Process` (command lines, parent processes) answers
   "Access denied"; `Get-Process` works (id, path, session), but not the command line. Anything that needs a
@@ -109,6 +127,13 @@ open.
   the same VM), so a size check once a minute tells a live recorder from a stopped one.
 - **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
   minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
+  Reproduced 2026-11-14 on a Windows 10 PC: with a driver connection reading a 312-element window every 2 s, the
+  recording stopped growing at about minute 5–6. So desktape records in 4-minute segments and starts a new one when a
+  segment stops growing (`docs/tape-format.md`); 10 minutes in segments under the same load did not stop.
+- **A user name with an accent comes back mangled from cmd over SSH.** `echo %USERPROFILE%` answered in the console's
+  code page, decoded as U+FFFD; a path spelt out with it in a cmd line was "not found", and the driver, given it,
+  made a new folder by that wrong name and recorded there. desktape reads the profile as UTF-8 through PowerShell
+  (base64), and writes `%USERPROFILE%` in cmd lines. Measured 2026-11-14 on a Windows 10 PC.
 
 - **An SSH session cannot capture the screen.** ffmpeg's gdigrab from an SSH logon fails with "Failed to capture
   image (error 5)": the logon has no desktop of its own. Started in the person's desktop session (a one-off

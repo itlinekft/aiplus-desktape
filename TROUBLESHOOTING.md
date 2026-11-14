@@ -96,7 +96,28 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Ellenőrzés:** `cua-driver status` SSH-n át „endpoint exists but is not reachable”-t ír, az asztalon futtatva
   „running”-ot.
 - **Javítás:** semmi: a desktape ilyenkor leállítja a háttérfolyamatot, és az SSH-munkamenet jogosultságával
-  újraindítja. Kézi indításnál a `schtasks` sorba kell a `/rl highest`.
+  újraindítja. Kézi indításnál a `schtasks` sorba rendszergazda fióknál kell a `/rl highest`, sima fióknál nem.
+- **Ki:** a desktape. **Óta:** Unreleased.
+
+### Windows: „Access denied” a háttérfolyamat indításakor, sima (nem rendszergazda) fiókkal
+
+- **Hol:** az első parancs, ami elindítaná a háttérfolyamatot (`look`, `run`, `act`), vagy a panel.
+- **Ok:** a 0.6.7-es és korábbi desktape a feladatot mindig `schtasks … /rl highest`-tel hozta létre, amit sima
+  fiók nem kaphat meg.
+- **Ellenőrzés:** `whoami /groups` SSH-n át: emelt jogú munkamenetben szerepel benne az `S-1-16-12288` (High
+  Mandatory Level), sima fióknál nem.
+- **Javítás:** frissíts: a desktape a `whoami /groups` alapján csak emelt jogú munkamenetnél adja meg a
+  `/rl highest`-et. Kézi indításnál sima fióknál hagyd el.
+- **Ki:** a desktape. **Óta:** Unreleased.
+
+### Windows: „Access denied (os error 5)” a `\\.\pipe\cua-driver`-re, két fiók egy gépen
+
+- **Hol:** `look`, `run`, `act` egy fiókkal, miközben ugyanazon a gépen egy másik fiók háttérfolyamata fut (például
+  a rendszergazda munkamenete lecsatlakozva).
+- **Ok:** a cső neve gépszintű; a másik fiók háttérfolyamatáé, és az nem enged be más fiókot.
+- **Javítás:** frissíts: a desktape ilyenkor a fiók saját csövén (`\\.\pipe\cua-driver-<8 hex>`) indít saját
+  háttérfolyamatot, és megjegyzi a vezérlőgépen (`pipes.json` a zárak mellett). Kézi indításnál:
+  `cua-serve.ps1 -Pipe` a desktape naplójában szereplő csőnévvel.
 - **Ki:** a desktape. **Óta:** Unreleased.
 
 ### A Cua Driver hiányzik (`doctor`: MISSING)
