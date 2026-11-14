@@ -8,6 +8,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ### Added
 - `look` reads a Chrome or Edge window a second time when the first read has no web page in it, and says when the
   page is still missing; `doctor` with a target lists a browser window whose page has no tree (`chrome-page-text`).
+  Both name the cause measured on a test PC: with the display off, Chrome draws no page for any window; wake the
+  display or start the browser with `--disable-features=CalculateNativeWinOcclusion`.
 
 ### Fixed
 - A long screen recording survives the driver's recorder dying (it stopped at minute 5–6 under UI Automation load on

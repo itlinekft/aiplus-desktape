@@ -34,12 +34,16 @@ open.
   a remote session's extension. Drive that browser with desktape (`look`/`act`), or by that machine's own Claude.
 
 - **A page's own tree is not always there.** Chrome builds a page's UI Automation tree only after a client has
-  asked for it, or from the start with `--force-renderer-accessibility`. Measured 2026-11-14 on the Windows 10 test
-  PC, Chrome 157.0.8103.52, a local test page: in the first half hour the page came on the second read (and at once
-  with the flag), so a `click` on a page button passed in 2.0 s; half an hour later, on seven fresh starts with and
-  without the flag, no read in 3–15 s had the page, and OCR showed no page content on screen either: Chrome was not
-  drawing the page at all. The cause is not found. `look` reads a browser window twice and says when the page is
-  still missing; then `look --ocr` shows whether the page is on screen at all.
+  asked for it, or from the start with `--force-renderer-accessibility`: with the display on, a fresh Chrome's first
+  `look` read has only the browser's own controls and the second has the page, so `look` reads a browser window
+  twice. Measured 2026-11-14 on the Windows 10 test PC, Chrome 157.0.8103.52, a local test page.
+- **With the display off, Chrome draws no page at all.** When the PC's display has gone off (its power plan: 15
+  minutes idle on that PC; the driver's input does not wake it), Chrome counts every window as hidden: no page
+  content on screen, no page in the tree, on any read, with or without `--force-renderer-accessibility`. Waking the
+  display (a real mouse move in the session) brought the page at once, on the first read of the same window;
+  starting Chrome with `--disable-features=CalculateNativeWinOcclusion` brought it with the display still off.
+  Turning the monitor off on purpose reproduced it. Measured 2026-11-14, same PC. `look` and `doctor` name this
+  when a browser window has no page on two reads. Claude Desktop (Electron) kept its tree with the display off.
 
 ## Over SSH, as a standard user
 

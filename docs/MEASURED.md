@@ -423,8 +423,26 @@ a throwaway `--user-data-dir` on a local test page (a heading, an Allow and a De
   a "Restore pages?" bubble after a forced close, five with a fresh profile, two of those with the flag): reading
   the window every 0.5–1 s for 3–15 s, on one connection and on three new ones, never gave a `Document`. OCR of the
   screen showed the tab and the address bar but no page content, with Claude Desktop in front and after it was
-  minimised. Chrome had not updated (still 157.0.8103.52). The cause is not found; the result above holds only for
-  that first half hour.
+  minimised. Chrome had not updated (still 157.0.8103.52). The cause: see the next section.
+
+## 2026-11-14: Chrome draws no page with the display off (`chrome-page-text` task 1.4)
+
+**Machine:** the same Windows 10 PC, the administrator account, Cua Driver 0.34.1, Chrome 157.0.8103.52, a throwaway
+`--user-data-dir`, the same test page under `C:\Users\Public`. The display's power plan: off after 900 s on AC.
+Controller: Linux, branch `fix/windows-run-findings` after cd3753f. 14:44–14:49.
+
+- 14:44, nobody at the PC: a fresh start, `desktape look --window "desktape page test - Google Chrome"` → 12
+  elements, "no page tree on two reads" (2.5 s). OCR of the window: the tab and the address bar, no page content.
+- The same, started with `--disable-features=CalculateNativeWinOcclusion`: the second read had `Document` and
+  `Button "Allow"`; a further `look` had it on the first read.
+- Without that flag, Claude Desktop minimised and Chrome the front window: 12 reads in 11 s, never a page.
+- A one-pixel mouse move there and back in the session (`mouse_event` from a scheduled task, `/it`): the next read of
+  the **same** Chrome window had the page (0.09 s). So the display was off, and Chrome counts its windows as hidden.
+- Display on, three fresh starts without any flag: each `look` printed "read twice, as its page tree comes after the
+  first read" with `Document "desktape page test"`, 2.42, 2.42 and 2.43 s wall time.
+- The display turned off on purpose (`WM_SYSCOMMAND SC_MONITORPOWER 2`), a fresh start: `look` → no page on two reads
+  with the new hint; `desktape doctor --target <admin>` → `MISSING page tree of 'desktape page test - Google
+  Chrome'`, 6 checked; after a mouse move the first read had the page.
 
 ## 2026-11-14: the driver's recorder dies at minute 6 under UI Automation load (`record-segments`)
 

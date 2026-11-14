@@ -2219,6 +2219,11 @@ class TypedOther(AssertionError):
 BROWSER_APPS = {"chrome", "msedge", "google chrome", "microsoft edge"}
 BROWSER_TITLES = (" - Google Chrome", " - Microsoft Edge", " - Microsoft\u200b Edge")
 BROWSER_REREAD = 1.5    # chrome-page-text: seconds before a browser window with no page is read again
+# measured 2026-11-14: with the display off (power settings, nobody at the PC) Chrome treats every window as
+# hidden, draws no page and builds no page tree, with or without --force-renderer-accessibility
+BROWSER_HIDDEN_HINT = ("Chrome builds no page for a window it counts as hidden, as when the display is off; wake "
+                       "the display, or start the browser with --disable-features=CalculateNativeWinOcclusion "
+                       "(knowledge/windows.md)")
 
 
 def browser_window(app, title):
@@ -4054,8 +4059,7 @@ def look(a):
         print(f"# not in front: {r.blocked_by}")
     if reread:
         print("# a browser window: read twice, as its page tree comes after the first read" if has_page(r.tree) else
-              "# a browser window with no page tree on two reads: start it with --force-renderer-accessibility "
-              "(knowledge/windows.md), or read it with --ocr")
+              "# a browser window with no page tree on two reads: " + BROWSER_HIDDEN_HINT)
     print("\n".join(lines))
     if a.ocr:
         o = mac_ocr_out if mac_ocr_out is not None else ocr_lines(a.host)
@@ -5024,8 +5028,8 @@ def doctor_browsers(host, cua=None):
             r.snapshot()
             read_page_again(r)
             if not has_page(r.tree):
-                rows.append((False, f"page tree of {title!r}", "the browser gives no page to UI Automation: start it "
-                             "with --force-renderer-accessibility (knowledge/windows.md), or use look --ocr"))
+                rows.append((False, f"page tree of {title!r}", "the browser gives no page to UI Automation: "
+                             + BROWSER_HIDDEN_HINT))
         return rows
     except Exception as e:
         logger.warning("doctor: the browser windows on %s were not checked: %s", host, e)
@@ -6688,7 +6692,7 @@ def selftest_browser_page():
         assert not read_page_again(r) and d.reads == 1
         assert browser_window("", "Inbox - Microsoft Edge") and not browser_window("claude.exe", "Claude")
         rows = doctor_browsers("fake", Drv("chrome.exe", title, [False, False]))
-        assert len(rows) == 1 and rows[0][0] is False and "force-renderer-accessibility" in rows[0][2], rows
+        assert len(rows) == 1 and rows[0][0] is False and "CalculateNativeWinOcclusion" in rows[0][2], rows
         assert doctor_browsers("fake", Drv("chrome.exe", title, [False, True])) == []
         assert doctor_browsers("fake", Drv("claude.exe", "Claude", [False])) == []
     finally:

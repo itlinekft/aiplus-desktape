@@ -14,15 +14,18 @@ started with `--force-renderer-accessibility`.
 Measured 2026-11-14 on another test PC (`docs/MEASURED.md`): without `--force-renderer-accessibility` Chrome's first
 read lists only its own controls, the next read the page; a `click` on a page button passed in 2.0 s, because a step
 reads again while it waits. A `look` reads once, so it shows an empty page. Half an hour later, on the same PC, seven
-fresh starts (with and without the flag) never had the page in the tree, and OCR showed no page drawn either; the
-cause is not found.
+fresh starts (with and without the flag) never had the page in the tree, and OCR showed no page drawn either. The cause,
+found the same afternoon: the PC's display had gone off (its power plan, 15 minutes idle), and Chrome then counts
+every window as hidden, draws no page and builds no page tree; waking the display brought the page at once, and
+`--disable-features=CalculateNativeWinOcclusion` brought it with the display off.
 
 ## What changes
 
 - **Knowledge.** `knowledge/windows.md` says the page tree comes on the second read, and how to have it from the
   start (the flag).
 - **`look` reads a Chrome window again** when its tree has no page `Document`, once, after a short pause, and says so.
-- **`doctor`** reports a Chrome window whose page tree is still empty after that second read, and names the flag.
+- **`doctor`** reports a Chrome window whose page tree is still empty after that second read, and names the fix:
+  wake the display, or start the browser with `--disable-features=CalculateNativeWinOcclusion`.
 - **Not now:** the opt-in OCR fallback for `click` and `expect` (`ocr: true`) waits until a page that stays empty is
   reproduced; until then `look --ocr` reads such a page.
 

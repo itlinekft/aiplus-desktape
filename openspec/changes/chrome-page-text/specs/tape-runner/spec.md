@@ -16,6 +16,7 @@
 `doctor` SHALL report a Chrome or Edge window whose page has no accessibility tree after a second read, and name
 the fix.
 
-#### Scenario: Chrome without accessibility
+#### Scenario: Chrome with no page tree
 - **WHEN** a Chrome window is open and its tree has no `Document` on two reads
-- **THEN** `doctor` prints the warning and how to start Chrome with its accessibility tree
+- **THEN** `doctor` prints the warning, that Chrome builds no page for a window it counts as hidden (the display
+  off), and how to start the browser so that it does
