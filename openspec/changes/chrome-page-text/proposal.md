@@ -23,3 +23,7 @@ started with `--force-renderer-accessibility`.
 
 `desktape.py` (`find`, the `click` and `expect` steps, `doctor`), `knowledge/windows.md`, the tape reference, the
 CHANGELOG. Without `ocr: true` nothing changes.
+
+## Decision
+
+The person chose this approach on 2026-11-14 (AskUserQuestion: „Opt-in OCR + doctor hint (Recommended)”).

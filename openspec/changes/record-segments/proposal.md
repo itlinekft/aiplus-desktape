@@ -22,3 +22,7 @@ whole when the recorder dies.
 ## Impact
 
 `desktape.py` (the recorder start and stop, `Liveness`, the summary), `knowledge/windows.md`, the CHANGELOG.
+
+## Decision
+
+The person chose this approach on 2026-11-14 (AskUserQuestion: „Segments + auto-restart (Recommended)”).
