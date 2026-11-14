@@ -110,6 +110,16 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
   `/rl highest`-et. Kézi indításnál sima fióknál hagyd el.
 - **Ki:** a desktape. **Óta:** Unreleased.
 
+### Windows: „Access denied (os error 5)” a `\\.\pipe\cua-driver`-re, két fiók egy gépen
+
+- **Hol:** `look`, `run`, `act` egy fiókkal, miközben ugyanazon a gépen egy másik fiók háttérfolyamata fut (például
+  a rendszergazda munkamenete lecsatlakozva).
+- **Ok:** a cső neve gépszintű; a másik fiók háttérfolyamatáé, és az nem enged be más fiókot.
+- **Javítás:** frissíts: a desktape ilyenkor a fiók saját csövén (`\\.\pipe\cua-driver-<8 hex>`) indít saját
+  háttérfolyamatot, és megjegyzi a vezérlőgépen (`pipes.json` a zárak mellett). Kézi indításnál:
+  `cua-serve.ps1 -Pipe` a desktape naplójában szereplő csőnévvel.
+- **Ki:** a desktape. **Óta:** Unreleased.
+
 ### A Cua Driver hiányzik (`doctor`: MISSING)
 
 - **Hol:** `desktape.py doctor`.

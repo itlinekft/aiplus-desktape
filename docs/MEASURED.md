@@ -372,7 +372,7 @@ each, wall time with `/usr/bin/time`:
 `act --new` after it, with no earlier `look` of that window in this run folder: all 41 lines of the window printed as
 new; a `look --new` right after: "0 elements and dialogs, 41 unchanged since the last look left out".
 
-## 2026-11-14: the run level follows the SSH session's token (`standard-user-daemon`, partly measured)
+## 2026-11-14: the run level follows the SSH session's token; one pipe per account (`standard-user-daemon`)
 
 **Machine:** the Windows 10 Pro 22H2 desktop PC (10.0.19045.6466), Cua Driver 0.34.1, two accounts paired: an
 administrator (signed in at the console) and a standard user (not signed in). Controller: Linux, branch
@@ -385,8 +385,21 @@ administrator (signed in at the console) and a standard user (not signed in). Co
   `look` of the same window passed in 1.45 s.
 - Standard account, while the administrator's daemon was running in the console session: `look` failed in 6.7 s
   with `connect to named pipe \\.\pipe\cua-driver: Access denied (os error 5)`. The pipe name is machine-wide, and
-  the account had no desktop session, so nothing was started for it. **Not measured yet:** the standard account
-  signed in to a desktop session of its own, the case the change is for.
+  the account had no desktop session, so nothing was started for it.
+- 15:22, the standard account signed in at the console by hand (Switch user), the administrator's session
+  disconnected with its elevated daemon still holding `\\.\pipe\cua-driver`: `look --target <standard>` failed
+  the same way (os error 5, 6.4 s for the denied connect alone: the driver retries). A daemon started by hand in
+  the standard session on another pipe (`serve --socket \\.\pipe\cua-driver-alt-test`, a `/it` task without
+  `/rl highest`) answered, and `look --window "Program Manager"` over it listed that account's desktop (18
+  elements; the administrator's windows were not in it).
+- With the per-account pipe in desktape (after 303d704): `look --target <standard> --window "Program Manager"`
+  logged "the driver pipe … belongs to another account's daemon; this account's own: `\\.\pipe\cua-driver-<8
+  hex>`", "no driver daemon … starting it", "driver daemon started", and listed the 18 elements, 14.6 s. With the
+  pipe remembered on the controller (`pipes.json` beside the locks), three more `look`s: 8.66 s (the first, before
+  the file existed), 1.51 s, 1.47 s.
+- 15:34, the administrator back at the console, the standard session disconnected with its daemon: `look --target
+  <admin> --window "Program Manager"` over the shared pipe, 1.56 s and 1.35 s (45 elements); right after it
+  `look --target <standard>` over its own pipe, 1.87 s (18 elements). Both accounts' daemons ran side by side.
 
 ## 2026-11-14: a typed text read back whole (`type-verify-whole`)
 

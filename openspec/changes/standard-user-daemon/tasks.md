@@ -2,4 +2,5 @@
 
 - [x] 1.1 `rl_flag(t)` from `whoami /groups` (cached per target); used at the three schtasks call sites [REQ: the-daemon-starts-on-a-standard-windows-account]
 - [x] 1.2 Selftest with a fake `sh` for both tokens [REQ: the-daemon-starts-on-a-standard-windows-account]
-- [ ] 1.3 Measured on a test PC: a standard account and an administrator account, `look` works on both; docs and CHANGELOG [REQ: the-daemon-starts-on-a-standard-windows-account]
+- [x] 1.4 `account_pipe`: on os error 5 the SSH account's own pipe, the daemon started there (`cua-serve.ps1 -Pipe`); selftest [REQ: each-windows-account-gets-its-own-pipe-when-the-shared-one-is-taken]
+- [x] 1.3 Measured on a test PC: a standard account and an administrator account, `look` works on both; docs and CHANGELOG [REQ: the-daemon-starts-on-a-standard-windows-account]

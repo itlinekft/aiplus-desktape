@@ -47,6 +47,12 @@ open.
 
 ## Over SSH, as a standard user
 
+- **The driver's pipe is machine-wide.** `\\.\pipe\cua-driver` belongs to whichever account's daemon made it: a
+  second account on the same PC gets "Access denied" (os error 5), even with its own desktop session, and the denied
+  connect takes 6.4 s (the driver retries). A daemon on another pipe (`serve --socket …`) works beside it. desktape
+  does this by itself (`standard-user-daemon`). Measured 2026-11-14, Windows 10, an administrator disconnected and
+  a standard account at the console.
+
 - **Process details are denied.** `Get-CimInstance Win32_Process` (command lines, parent processes) answers
   "Access denied"; `Get-Process` works (id, path, session), but not the command line. Anything that needs a
   process tree or a command line must run in the desktop session instead. Measured: 2026-10-25.

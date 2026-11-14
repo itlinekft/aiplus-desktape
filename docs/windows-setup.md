@@ -62,6 +62,11 @@ once per host and adds `/rl highest` only when the session is elevated (it lists
 Level); a standard account cannot create a `/rl highest` task at all ("Access denied"). When you start it by hand,
 add `/rl highest` for an administrator and leave it out for a standard account; a daemon that refuses desktape is
 stopped and started again (measured 2026-10-29).
+
+The pipe `\\.\pipe\cua-driver` is machine-wide. When another account's daemon holds it (two accounts on one PC,
+one signed in at the console and the other disconnected), it answers "Access denied" (os error 5), and desktape
+starts this account's daemon on a pipe of its own, `\\.\pipe\cua-driver-<8 hex of the account name>`
+(`cua-serve.ps1 -Pipe …`), and remembers it in `pipes.json` beside its locks (measured 2026-11-14).
 Quote `%USERPROFILE%` paths: a profile folder name may contain a space.
 
 Check it from Linux:

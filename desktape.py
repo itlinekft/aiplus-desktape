@@ -150,6 +150,46 @@ def choose_target(cli_host=None, cli_target=None, env=None, cfg=None):
 DRIVER_ENV = {"CUA_DRIVER_RS_TELEMETRY_ENABLED": "false", "DO_NOT_TRACK": "1",
               "CUA_DRIVER_RS_UPDATE_CHECK": "false", "CUA_DRIVER_DISABLE_RUN_SCRIPT": "1"}
 PIPE = r"\\.\pipe\cua-driver"
+PIPES = {}            # host string -> the account's own pipe, once the shared one answered "Access denied"
+
+
+def account_pipe(host):
+    """standard-user-daemon: the pipe of the SSH account's own daemon, for a PC where another account's daemon holds
+    PIPE (an administrator's, its session disconnected, while a standard account is at the console: measured
+    2026-11-14). Hex of the account name, as a name may not be ASCII."""
+    user = host.rsplit("@", 1)[0] if "@" in host else host
+    return PIPE + "-" + hashlib.sha1(user.encode("utf-8")).hexdigest()[:8]
+
+
+def pipes_path():
+    """Where the controller remembers which targets use their account's own pipe: a denied connect costs 6.4 s
+    (the driver retries; measured 2026-11-14), so only the first call on a target pays it."""
+    return os.path.join(os.path.dirname(lock_dir()), "pipes.json")
+
+
+def known_pipe(host):
+    if host not in PIPES:
+        try:
+            PIPES.update({h: p for h, p in json.load(open(pipes_path(), encoding="utf-8")).items() if h not in PIPES})
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as e:
+            logger.warning("the remembered driver pipes in %s were not read: %s", pipes_path(), e)
+    return PIPES.get(host)
+
+
+def remember_pipe(host, pipe):
+    PIPES[host] = pipe
+    try:
+        os.makedirs(os.path.dirname(pipes_path()), exist_ok=True)
+        try:
+            cur = json.load(open(pipes_path(), encoding="utf-8"))
+        except (OSError, ValueError):
+            cur = {}
+        cur[host] = pipe
+        json.dump(cur, open(pipes_path(), "w", encoding="utf-8"), indent=1)
+    except OSError as e:
+        logger.warning("the driver pipe of %s was not remembered in %s: %s", host, pipes_path(), e)
 # One-off tasks in the desktop session start PowerShell through a headless console host: with Windows Terminal as
 # the default terminal (Windows 11), `-WindowStyle Hidden` still flashed a terminal window on screen, and into a
 # recording (measured: 8 flashes in one take; one hosted the driver and could be closed by mistake).
@@ -253,7 +293,8 @@ class Target:
         if self.local:
             return [os.path.expandvars(EXE), "mcp", "--socket", PIPE], {**os.environ, **DRIVER_ENV}
         sets = "".join(f"set {k}={v}&& " for k, v in DRIVER_ENV.items())
-        return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f'"{EXE}" mcp --socket {PIPE}'], None
+        pipe = PIPES.get(self.host, PIPE)
+        return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f'"{EXE}" mcp --socket {pipe}'], None
 
     def sh(self, cmd, check=False, input=None):
         kw = dict(check=check, capture_output=True, text=True, encoding="utf-8", errors="replace", input=input)
@@ -363,6 +404,7 @@ class CallBlocked(RuntimeError):
 NO_DAEMON = "no Cua Driver daemon listening"            # the driver's words when the session has none
 MAC_NO_DAEMON = "daemon is not running"                 # … and on macOS
 PIPE_REFUSED = "(os error 233)"                     # Windows: the daemon closed the pipe on this client (RL_SSH)
+PIPE_DENIED = "(os error 5)"           # Windows: another account's daemon holds the pipe (standard-user-daemon)
 FOREGROUND_REFUSED = "foreground activation failed"     # bring_to_front: raised, but Windows kept the focus
 MAC_FRONT_UNVERIFIED = "was not verified as the frontmost"   # bring_to_front on macOS: raised, focus not confirmed
 SETUP_DOC = {"windows": "docs/windows-setup.md section 3", "macos": "docs/macos-setup.md steps 2 and 3"}
@@ -380,6 +422,8 @@ def start_daemon(host):
     t.sh('if not exist "%USERPROFILE%\\desktape" mkdir "%USERPROFILE%\\desktape"')
     t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
     tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\desktape\\cua-serve.ps1\\\""
+    if host in PIPES:
+        tr += " -Pipe " + PIPES[host]
     t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it{rl_flag(t)} /f >nul '
          f'&& schtasks /run /tn desktape-cua >nul',
          check=True)
@@ -398,7 +442,17 @@ class Cua:
         t = Target(host)
         self.mac, self.last = t.mac, {}
         try:
-            self._connect(host)
+            if not t.mac and not t.local:
+                known_pipe(host)
+            try:
+                self._connect(host)
+            except RuntimeError as e:
+                if PIPE_DENIED not in str(e) or t.mac or t.local or host in PIPES:
+                    raise
+                remember_pipe(host, account_pipe(host))
+                logger.info("the driver pipe on %s belongs to another account's daemon; this account's own: %s",
+                            host, PIPES[host])
+                self._connect(host)
         except RuntimeError as e:
             refused = PIPE_REFUSED in str(e) and not t.mac and not t.local
             if NO_DAEMON not in str(e) and MAC_NO_DAEMON not in str(e) and not refused:
@@ -7341,6 +7395,33 @@ def selftest():
                 assert "windows-setup.md" in str(e) and NO_DAEMON in str(e) and started == ["user@box"], e
     finally:
         Target.mcp, globals()["start_daemon"] = real
+
+    # standard-user-daemon: another account's daemon holds the shared pipe -> this account's own pipe, started there
+    pipe_denied = "import sys; sys.stderr.write('cua-driver-rs: connect to named pipe: Access denied. (os error 5)'); sys.exit(1)"
+    started, seen = [], []
+    old_state = os.environ.get("XDG_STATE_HOME")
+    def mcp(self):
+        seen.append(PIPES.get(self.host, PIPE))
+        return [sys.executable, "-c", pipe_denied if self.host not in PIPES else fake_server if started else no_daemon], None
+    Target.mcp = mcp
+    globals()["start_daemon"] = lambda host: started.append(PIPES.get(host))
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["XDG_STATE_HOME"] = d
+            c = Cua("std@box", os.path.join(d, "c.jsonl")); c.close()
+            own = account_pipe("std@box")
+            assert own.startswith(PIPE + "-") and len(own) == len(PIPE) + 9 and own != account_pipe("admin@box"), own
+            assert seen == [PIPE, own, own] and started == [own], (seen, started)
+            assert account_pipe("T\u00e9st \u00dcser@10.0.0.5").isascii()
+            PIPES.clear(); seen.clear()            # a new process: the pipe comes from the file, no denied try
+            c = Cua("std@box", os.path.join(d, "c.jsonl")); c.close()
+            assert seen == [own], seen
+    finally:
+        Target.mcp, globals()["start_daemon"] = real
+        PIPES.pop("std@box", None)
+        if old_state is None: os.environ.pop("XDG_STATE_HOME", None)
+        else: os.environ["XDG_STATE_HOME"] = old_state
+        logger.setLevel(level)
 
     class Refusing:                     # driver-autostart: a refused foreground is a warning, not a stop
         def call(self, tool, args, secret=False, timeout=None):

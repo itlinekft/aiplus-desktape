@@ -27,6 +27,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 - On a standard (non-administrator) Windows account the daemon and the panel's helpers start: the scheduled task
   gets `/rl highest` only when `whoami /groups` shows an elevated SSH session, where before it was always given and
   refused ("Access denied") (`standard-user-daemon`).
+- Two accounts on one Windows PC: when the driver's pipe answers "Access denied" because another account's daemon
+  holds it (an administrator's, its session disconnected), desktape starts this account's own daemon on a pipe of
+  its own (`\\.\pipe\cua-driver-<8 hex>`) and remembers it on the controller; before, `look` failed with os error 5.
 
 ## [0.6.7] - 2026-11-12
 
