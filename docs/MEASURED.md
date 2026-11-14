@@ -388,6 +388,25 @@ administrator (signed in at the console) and a standard user (not signed in). Co
   the account had no desktop session, so nothing was started for it. **Not measured yet:** the standard account
   signed in to a desktop session of its own, the case the change is for.
 
+## 2026-11-14: a typed text read back whole (`type-verify-whole`)
+
+**Machine:** the same Windows 10 Pro 22H2 PC, the administrator account, Cua Driver 0.34.1, Claude Desktop
+5.11492.2.0 (Microsoft Store). Controller: Linux, branch `fix/windows-run-findings`.
+
+A scratch tape (not in the repo) opened Customize → Plugins → Add plugin → Add marketplace → from a repository,
+clicked the URL ComboBox, then 20 times `hotkey: [ctrl, a]` and `type:` an 84-character URL, then Cancel.
+`desktape run --target <admin> type20.yaml`:
+
+- 55 of 55 steps passed in 88.8 s; 20 `type_text` calls in `audit.jsonl` (82–105 ms each), so no retry was needed;
+  a `type` step, from the driver call to the next step, took 1.69–2.94 s (median 1.75 s).
+- The ComboBox has no `[value=…]`: it shows the text in its label (`ComboBox "URL https://…"`) and in a Text below
+  it. The first version of the near-match looked only at values and would have only warned on a lost keystroke
+  there; it now reads the labels of Edit, ComboBox, Text and Document lines too (the selftest has that case).
+- The lost keystroke itself was not reproduced on the machine: the retry and the failure are covered by the
+  selftest's fake driver only.
+- The tape's first Cancel after typing left the dialog open (it closed the ComboBox's drop-down); a second one
+  closed it.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

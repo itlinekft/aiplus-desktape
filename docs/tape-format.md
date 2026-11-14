@@ -34,7 +34,7 @@ steps:
 | `click` | label, or `{label, role, prefix, nth, action}` | waits for an enabled element (up to 8 s), then clicks it through UI Automation; `action` picks e.g. `expand` or `select` |
 | `expect` | label, or `{label, role, prefix, nth, timeout}` | waits for the element; fails the run if it does not appear |
 | `absent` | label, or `{label, role, prefix, nth, timeout}` | waits until no such element is left; fails if one still is |
-| `type` | text, or `{text, secret, typing}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
+| `type` | text, or `{text, secret, typing, chunk}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
 | `key` | a key name, as Cua Driver's `press_key` takes it | presses one key |
 | `hotkey` | a list of key names, as Cua Driver's `hotkey` takes them | presses a key combination |
 | `caption` | text | in video mode, shown from this step until the next caption, and written to the `.srt`; `""` ends the previous caption |
@@ -163,8 +163,15 @@ The driver answers ✅ when it delivered a click or typed text, not when the pro
 - **A close-type button in a dialog** (OK, Cancel, Close, Save, Yes, No, Igen, Nem, Mégse, Bezárás,
   Mentés) must make that dialog go away, or open a confirmation window of the same program. "In a dialog"
   means a nested window, or a window smaller than another window of its program.
-- **Typed text** must show in the window, or the window must at least change. `secret: true` text is not
-  read back.
+- **Typed text** must show in the window whole, or the window must at least change. `secret: true` text is not
+  read back. When a field reads a text close to the typed one but not it (a keystroke lost or doubled; the field
+  starts or ends like the text), the runner selects the field's content (Ctrl+A, Cmd+A on macOS) and types the
+  text again in chunks of 16 characters; if it still differs, the step fails and prints both texts. A field that
+  had other text before the typing loses it in that retry. `chunk: N` types in N-character pieces from the start:
+
+```yaml
+  - type: { text: "https://example.com/a/long/path/api/mcp/", chunk: 16 }
+```
 
 A step that fails this stops with `no effect: …`. For a click or text that may rightly change nothing,
 write the step as a mapping with `effect: none`:

@@ -2174,6 +2174,47 @@ class NoEffect(AssertionError):
     """A step the driver accepted that changed nothing it should have (step-effect-check D2, D3)."""
 
 
+class TypedOther(AssertionError):
+    """type-verify-whole: a field reads a text like the typed one, but not it (a keystroke lost or doubled)."""
+    def __init__(self, read):
+        super().__init__(read)
+        self.read = read
+
+
+TYPE_CHUNK = 16         # type-verify-whole: characters in one driver call when a text is retyped in chunks
+TYPE_CHUNK_PAUSE = 0.15
+
+
+TEXT_ROLES = ("Edit", "ComboBox", "Text", "Document")   # whose label may be what a field shows
+
+
+def field_values(tree):
+    """The `[value="…"]` texts of a tree, unescaped, and the labels of its text-like lines: Claude Desktop's URL
+    ComboBox has no value and shows its text in the label (`ComboBox "URL https://…"`, measured 2026-11-14)."""
+    vals = [re.sub(r'\\(.)', r'\1', m.group(1)) for m in VALUE.finditer(tree)]
+    return vals + [n[2] for n in map(parse, tree.splitlines()) if n and n[1] in TEXT_ROLES and n[2]]
+
+
+def typed_shows(text, tree):
+    """The whole typed text is in the window: in a field's value or anywhere in the tree as written."""
+    t = spaces(text)
+    return t in spaces(tree) or any(t in spaces(v) for v in field_values(tree))
+
+
+def typed_like(text, tree):
+    """A field value that is the typed text with a keystroke or a few wrong (type-verify-whole): it starts or ends
+    like the text, and is close to it; None when no field reads like it (the field cannot be read)."""
+    t, head, tail = spaces(text), spaces(text)[:8], spaces(text)[-8:]
+    best, score = None, 0.0
+    for v in map(spaces, field_values(tree)):
+        if not v or not (head in v or v.endswith(tail)):
+            continue
+        r = difflib.SequenceMatcher(None, t, v[-len(t) - 4:]).ratio()
+        if r > score:
+            best, score = v, r
+    return best if score >= 0.75 else None
+
+
 class Runner:
     def __init__(self, cua, mode):
         self.cua, self.mode = cua, mode
@@ -2504,6 +2545,18 @@ class Runner:
                         return n[2] or "(untitled dialog)"
         return self.title if self.secondary else None
 
+    def type_text(self, text, chunk=None, secret=False):
+        """Type into the focused window in one driver call, or in `chunk`-character calls with a short pause
+        between (type-verify-whole: a long text in one call lost a keystroke, measured 2026-11-13)."""
+        n = int(chunk or 0)
+        if chunk is not None and n < 1:
+            raise ValueError(f"type: chunk must be a positive number of characters, not {chunk!r}")
+        parts = [text[i:i + n] for i in range(0, len(text), n)] if n else [text]
+        for i, part in enumerate(parts):
+            if i:
+                time.sleep(TYPE_CHUNK_PAUSE)
+            self.cua.call("type_text", {**self.win, "text": part, "delivery_mode": "foreground"}, secret=secret)
+
     def check_effect(self, before, what, close=None, text=None):
         """Poll until the action shows (D2, D3): the focused window gone; for a close-type click, the dialog
         `close` gone or a new window of the process (a confirmation); for typed `text`, the text in the window;
@@ -2525,7 +2578,7 @@ class Runner:
                     n and n[1] == "Window" and n[0] > 0 and (n[2] or "(untitled dialog)") == close
                     for n in map(parse, self.tree.splitlines()))
             elif text is not None:
-                done = text[:40] in self.tree
+                done = typed_shows(text, self.tree)
             else:
                 done = changed
             if done:
@@ -2533,6 +2586,8 @@ class Runner:
             if time.time() > end:
                 break
             time.sleep(0.3)
+        if text is not None and (other := typed_like(text, self.tree)) is not None:
+            raise TypedOther(other)
         if text is not None and changed:
             logger.warning("%s: the window changed, but the typed text is not readable in it", what)
             return
@@ -3346,10 +3401,22 @@ class Runner:
             elif mode == "human" and self.mode == "video":
                 self.type_like_a_person(a["text"], float(a.get("typing_cps", self.typing_cps)), a.get("secret", False))
             else:
-                self.cua.call("type_text", {**self.win, "text": a["text"], "delivery_mode": "foreground"},
-                              secret=a.get("secret", False))
+                self.type_text(a["text"], a.get("chunk"), a.get("secret", False))
             if check:   # D3: the text must show, or the window at least change; a secret is never read back
-                self.check_effect(before, f"type {a['text'][:30]!r}", text=a["text"])
+                what = f"type {a['text'][:30]!r}"
+                try:
+                    self.check_effect(before, what, text=a["text"])
+                except TypedOther as e:     # type-verify-whole: once more, in chunks, over the field's content
+                    logger.warning("%s: the field reads %r; typing it again in chunks of %d", what, e.read,
+                                   int(a.get("chunk") or TYPE_CHUNK))
+                    self.cua.call("hotkey", {**self.win, "keys": ["cmd" if self.mac else "ctrl", "a"],
+                                             "delivery_mode": "foreground"})
+                    self.type_text(a["text"], a.get("chunk") or TYPE_CHUNK)
+                    try:
+                        self.check_effect(before, what, text=a["text"])
+                    except TypedOther as e2:
+                        raise AssertionError(f"{what}: typed {a['text']!r}, the field reads {e2.read!r} "
+                                             "(typed twice, the second time in chunks)") from None
         elif kind == "hotkey":
             self.cua.call("hotkey", {**self.win, "keys": list(arg), "delivery_mode": "foreground"})
         elif kind == "key":
@@ -7274,6 +7341,51 @@ def selftest():
         r.step({"type": {"env": "DESKTAPE_SELFTEST_PW"}}); raise AssertionError("expected ValueError")
     except ValueError as e:
         assert "secret: true" in str(e)
+    # type-verify-whole: a keystroke lost after the 40th character is caught, retyped in chunks, or the step fails
+    url = "https://host.example/a/long/path/to/the/api/studio/mcp/"
+    for drops, ok in ((1, True), (99, False)):
+        sc = Screen(base); r = Runner(sc, "test"); r.focus("Main")
+        sent, typed = [], []
+        def on_type(w, tool, args, drops=drops):
+            if tool != "type_text":
+                return
+            sent.append(args["text"]); typed.append(args["text"])
+            whole = "".join(typed)
+            if len(sent) <= drops and len(whole) >= len(url):    # the lost keystroke: the "s" of "studio"
+                whole = whole.replace("/studio/", "/tudio/")
+            w.tree = re.sub(r'Edit "Path"( \[value="[^"]*"\])?', f'Edit "Path" [value="{whole}"]', w.tree)
+        def call(tool, args, real=sc.call, **kw):
+            if tool == "hotkey" and args["keys"][-1] == "a":
+                typed.clear()                                     # select all: the next typing replaces it
+            return real(tool, args, **kw)
+        sc.on_click, sc.call = on_type, call
+        if ok:
+            r.step({"type": url})
+            assert sent[0] == url and len(sent) > 2 and all(len(x) <= TYPE_CHUNK for x in sent[1:]), sent
+        else:
+            try:
+                r.step({"type": url}); raise AssertionError("expected the mismatch to fail")
+            except AssertionError as e:
+                assert "the field reads" in str(e) and "/tudio/" in str(e) and url in str(e), e
+    sc = Screen(base); r = Runner(sc, "test"); r.focus("Main"); typed = []      # the text in a label, not a value
+    def on_label(w, tool, args):
+        if tool == "type_text":
+            typed.append(args["text"]); whole = "".join(typed)
+            whole = whole.replace("/studio/", "/tudio/") if len(typed) == 1 else whole
+            w.tree = re.sub(r'Edit "Path[^"]*"', f'Edit "Path {whole}"', w.tree)
+    sc.on_click = on_label
+    real = sc.call
+    sc.call = lambda tool, args, **kw: (typed.clear() if tool == "hotkey" else None) or real(tool, args, **kw)
+    r.step({"type": url}); assert len(typed) > 1 and "".join(typed) == url, typed
+    sc = Screen(base); r = Runner(sc, "test"); r.focus("Main"); sent = []
+    sc.on_click = lambda w, tool, args: (sent.append(args["text"]), setattr(
+        w, "tree", w.tree.replace('Edit "Path"', f'Edit "Path" [value="{"".join(sent)}"]', 1) if len(sent) == 3 else w.tree))
+    r.step({"type": {"text": "abcdefghij", "chunk": 4}}); assert sent == ["abcd", "efgh", "ij"], sent
+    try:
+        r.step({"type": {"text": "x", "chunk": 0}}); raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "chunk" in str(e), e
+    sc = Screen(base); r = Runner(sc, "test"); r.focus("Main")
     # file-outcome-and-typing: typing modes
     calls = []
     sc.on_click = lambda w, tool, args: (calls.append(args["text"]), setattr(w, "tree", w.tree + f'\n  - Text "{args["text"]}"'))

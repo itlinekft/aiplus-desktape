@@ -6,6 +6,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Fixed
+- A `type` step is checked against the whole typed text, not its first 40 characters. A field that reads a text close
+  to it (a lost keystroke) is typed again once in 16-character chunks, and the step fails with both texts if it still
+  differs; `chunk: N` types in chunks from the start (`type-verify-whole`).
 - On a standard (non-administrator) Windows account the daemon and the panel's helpers start: the scheduled task
   gets `/rl highest` only when `whoami /groups` shows an elevated SSH session, where before it was always given and
   refused ("Access denied") (`standard-user-daemon`).
