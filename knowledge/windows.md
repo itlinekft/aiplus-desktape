@@ -117,6 +117,13 @@ open.
   the same VM), so a size check once a minute tells a live recorder from a stopped one.
 - **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
   minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
+  Reproduced 2026-11-14 on a Windows 10 PC: with a driver connection reading a 312-element window every 2 s, the
+  recording stopped growing at about minute 5–6. So desktape records in 4-minute segments and starts a new one when a
+  segment stops growing (`docs/tape-format.md`); 10 minutes in segments under the same load did not stop.
+- **A user name with an accent comes back mangled from cmd over SSH.** `echo %USERPROFILE%` answered in the console's
+  code page, decoded as U+FFFD; a path spelt out with it in a cmd line was "not found", and the driver, given it,
+  made a new folder by that wrong name and recorded there. desktape reads the profile as UTF-8 through PowerShell
+  (base64), and writes `%USERPROFILE%` in cmd lines. Measured 2026-11-14 on a Windows 10 PC.
 
 - **An SSH session cannot capture the screen.** ffmpeg's gdigrab from an SSH logon fails with "Failed to capture
   image (error 5)": the logon has no desktop of its own. Started in the person's desktop session (a one-off

@@ -426,6 +426,34 @@ a throwaway `--user-data-dir` on a local test page (a heading, an Allow and a De
   minimised. Chrome had not updated (still 157.0.8103.52). The cause is not found; the result above holds only for
   that first half hour.
 
+## 2026-11-14: the driver's recorder dies at minute 6 under UI Automation load (`record-segments`)
+
+**Machine:** the same Windows 10 PC, the administrator account, Cua Driver 0.34.1, ffmpeg 9.0.2 (winget). Controller:
+Linux, branch `fix/windows-run-findings` at a639502.
+
+`desktape record --target <admin> --seconds 480 --name die5`, and beside it, from 8 s later, a loop reading Claude
+Desktop's window (312 elements) every 2 s over its own driver connection (192 reads):
+
+- The recording grew to 63 321 892 bytes and stopped growing at 11:53:40, 6:00 after it started (11:47:40); the
+  liveness check said so at 11:54:41 and `record` stopped.
+- `record` then ended with a traceback from `scp` ("No such file or directory"), no video and no summary. **Not the
+  driver:** the file was there (63 MB, last written 11:52:43), but in `C:\Users\<name with U+FFFD>\desktape\rec\…`.
+  desktape read the profile folder with `echo %USERPROFILE%`, whose "á" came back as U+FFFD, and gave that path to
+  the driver, which made a new folder of that name (created 2026-10-29, the first `record` on this PC) and recorded
+  into it; the fetch and the cleanup used the real profile and never found it. Two other recordings stayed there
+  (2026-10-29 and 2026-11-13; left for their owners). desktape now reads the profile as UTF-8 through PowerShell
+  and base64, and names it in cmd lines by `%USERPROFILE%`.
+- With the two reports (minute 5 of 26, minute 5.5 of 37), three deaths at 5–6 minutes.
+
+The same `record` and load with segments (branch at the `record-segments` commit), all on the same day:
+
+- 600 s in 4-minute segments under the same load (240 reads of 312 elements): segments 0–240.3, 240.3–480.9 and
+  480.9–601.8 s, 46.6, 50.4 and 23.8 MB, none stopped growing. (These files went to the wrong folder above; found
+  and removed by hand.)
+- 50 s in 20-second segments (`DESKTAPE_SEGMENT_SECONDS=20`), after the profile fix: three parts joined on the target
+  into one file of 10 769 021 bytes, 51.37 s by `ffprobe`; the run's 50.1 s, 52.6 s by the segments' clocks. The
+  target's `desktape\rec` was empty afterwards.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

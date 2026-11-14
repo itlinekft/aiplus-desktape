@@ -10,7 +10,7 @@ name: add-marketplace-dialog          # used in run folder and video names
 app: Claude Desktop 3.6556 (Windows)  # free text, for the reader
 map: claude-desktop-win               # optional: maps/<name>.yaml, or a path
 video_pause: 1.2                      # optional: seconds after each step in video mode (default 1.2)
-on_dead: fail                         # optional, video mode: a recording that stops growing fails the run (fail), or only alerts (alert)
+on_dead: fail                         # optional, video mode: a recording with a gap (its recorder died) fails the run (fail), or only alerts (alert)
 typing: fast                          # optional: fast (default), human (a person's pace, video mode only) or paste
 typing_cps: 7                         # optional: characters a second for `human` (default 12)
 cursor: agent                         # optional: agent (default) or person (macOS, video mode only; see below)
@@ -467,6 +467,17 @@ folder, deletes the target's copy, and records `recording_started_at` (UTC, to t
 `summary.json`, as a video run's summary does too, so the edit lines the two videos up. On macOS the
 recorder writes a frame when the screen changes (2.8 frames a second on a still screen, measured): normalise
 the frame rate in the edit.
+
+### Long recordings: segments
+
+The driver's recorder on Windows died at minute 5–6 of a take, three times, under UI Automation load, and said
+nothing. So `record` and a video run record in segments of 4 minutes (`DESKTAPE_SEGMENT_SECONDS` changes it): the
+recorder is stopped and started again into `seg-002`, `seg-003`, …, and at the end the parts are joined on the target
+with ffmpeg's concat, without re-encoding. A segment whose file stops growing (checked once a minute) is ended and the
+next started at once. Between two segments there is a short gap (the time the recorder takes to stop and start); the
+captions and the redaction boxes are moved to the joined video's clock. `summary.json` lists the segments, the
+recorded seconds against the run's length, and every gap with its cause. A gap from a dead recorder makes the run
+fail (exit 1 for `record`) unless the tape says `on_dead: alert`; the video is kept either way.
 
 ## A person's pointer: `cursor: person` (macOS)
 

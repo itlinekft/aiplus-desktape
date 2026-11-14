@@ -213,6 +213,23 @@ def target_os(host, opts=None):
     return TARGET_OS[host]
 
 
+def win_home(t):
+    """A Windows target's profile folder, read as UTF-8 through base64: cmd's `echo %USERPROFILE%` comes back in the
+    console's code page, and a user name with "á" decoded as U+FFFD made the driver record into a new folder of that
+    wrong name, where desktape's cleanup never looked (measured 2026-11-14). Falls back to the echo."""
+    r = t.sh('powershell -NoProfile -Command "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($env:USERPROFILE))"')
+    try:
+        home = base64.b64decode(r.stdout.strip().splitlines()[-1]).decode("utf-8")
+        if home:
+            return home
+    except (ValueError, IndexError) as e:
+        logger.warning("the profile folder of %s was not read through PowerShell (%s); using echo", t.host, e)
+    home = t.sh("echo %USERPROFILE%").stdout.strip()
+    if "\ufffd" in home:
+        logger.warning("the profile folder of %s has a character the console mangled: %r", t.host, home)
+    return home
+
+
 class Target:
     """Where the driver runs (runner-robustness D6): another machine over SSH (`user@host`), or this machine
     (`local`). On Windows, commands are cmd.exe command lines; on macOS, sh (macos-target D1). Paths are
@@ -247,8 +264,12 @@ class Target:
     def home(self):
         """The target user's home folder, as the target writes it (cached per host)."""
         if self.host not in HOMES:
-            HOMES[self.host] = (os.path.expanduser("~") if self.mac else os.environ.get("USERPROFILE", "")) \
-                if self.local else self.sh("echo $HOME" if self.mac else "echo %USERPROFILE%").stdout.strip()
+            if self.local:
+                HOMES[self.host] = os.path.expanduser("~") if self.mac else os.environ.get("USERPROFILE", "")
+            elif self.mac:
+                HOMES[self.host] = self.sh("echo $HOME").stdout.strip()
+            else:
+                HOMES[self.host] = win_home(self)
         return HOMES[self.host]
 
     def mkdir(self, rel):
@@ -273,6 +294,19 @@ class Target:
             shutil.copyfile(self.path(rel), local_path)
         else:
             subprocess.run(["scp", "-q", *self.opts, f"{self.host}:{rel}", local_path], check=True)
+
+    def cmd_path(self, path):
+        """A Windows path for a cmd line sent over SSH: under the home folder it is written with %USERPROFILE%,
+        because cmd over SSH did not find a path spelt out with a non-ASCII user name ("a rendszer nem találja a
+        megadott elérési utat", measured 2026-11-14), while %USERPROFILE% works."""
+        if path.isascii():              # nothing to mangle
+            return path
+        home = "" if self.mac or self.local else self.home()
+        # a path read back from cmd (ffmpeg's, found by a probe) has the console's U+FFFD where the home has "á"
+        for h in (home, re.sub(r"[^\x00-\x7f]", "\ufffd", home)) if home else ():
+            if path.lower().startswith(h.lower()):
+                return "%USERPROFILE%" + path[len(h):]
+        return path
 
     def ffmpeg(self):
         """record-liveness: ffmpeg's full path on the target, or None (cached per host). macOS: Homebrew's
@@ -299,7 +333,8 @@ class Target:
                 return os.path.getsize(path)
             except OSError:
                 return None
-        out = self.sh(f'stat -f %z "{path}" 2>/dev/null' if self.mac else f'for %I in ("{path}") do @echo %~zI').stdout
+        out = self.sh(f'stat -f %z "{path}" 2>/dev/null' if self.mac else
+                      f'for %I in ("{self.cmd_path(path)}") do @echo %~zI').stdout
         out = out.strip().splitlines()[-1].strip() if out.strip() else ""
         return int(out) if out.isdigit() else None
 
@@ -3618,7 +3653,7 @@ def burn_captions_remote(host, rec_rel, captions, spans, total, local_dir, name)
     else:
         win = rec_rel.replace("/", "\\")
         need_ffmpeg(t, "burning the captions")
-        t.sh(f'cd /d "%USERPROFILE%\\{win}" && "{t.ffmpeg()}" -y -loglevel error -i recording.mp4 '
+        t.sh(f'cd /d "%USERPROFILE%\\{win}" && "{t.cmd_path(t.ffmpeg())}" -y -loglevel error -i recording.mp4 '
              f'-/filter:v captions.ffscript -c:v libx264 -crf 20 -preset veryfast captioned.mp4', check=True)
     out = os.path.join(local_dir, f"{name}.mp4")
     t.get(f"{rec_rel}/captioned.mp4", out)
@@ -3809,30 +3844,27 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         rec_rel = f"desktape/rec/{stamp}"
         rec_dir = profile + "/" + rec_rel if tt.mac else profile + "\\" + rec_rel.replace("/", "\\")
     t0 = time.time(); failed = None; done = 0; repair = None; frame_set = False; repairs = []
-    lv = None; on_dead = tape.get("on_dead", "fail")
+    seg = None; deaths = []; on_dead = tape.get("on_dead", "fail")
     if on_dead not in ("fail", "alert"):
         raise ValueError(f"tape: on_dead is fail or alert, not {on_dead!r}")
     logger.info("tape %s, mode %s, %d steps, run dir %s", tape["name"], a.mode, len(plan), run_dir)
     try:
         for i, (s, entry) in enumerate(plan):
             if a.mode == "video" and r.t_rec is None and r.win is not None:
+                seg = Segments(cua, tt, rec_dir, on_dead=lambda text: alert(
+                    f"desktape {a.host}: run {tape['name']}: {text}; recording goes on in a new segment"))
                 try:
-                    _, said = cua.call("start_recording", {"output_dir": rec_dir, "record_video": True})
-                    if capture_failed(said):
-                        r.t_rec = time.time()    # stopped in the finally below
-                        raise RuntimeError(f"the driver did not record video: {capture_failed(said)} "
-                                           "(on Windows the driver records through ffmpeg: `desktape doctor --video`)")
+                    seg.start()                  # stopped in the finally below
                 except Exception as e:           # no recording, no video run: but a summary and last.json
+                    seg = None
                     failed = f"step {i}: the screen recording did not start: {e}"
                     logger.error("tape failed at %s", failed)
                     break
-                r.t_rec = time.time()
-                lv = Liveness(tt, rec_dir + ("/" if tt.mac else "\\") + "recording.mp4")
-                lv.watch(lambda text: alert(f"desktape {a.host}: run {tape['name']}: {text}"))
-            if lv and lv.dead and on_dead != "alert":    # record-liveness: a dead recording fails the take
-                failed = f"step {i}: {lv.dead}"
-                logger.error("tape failed at %s", failed)
-                break
+                r.t_rec = seg.t0
+            if seg:                              # record-segments: a dead or full segment is followed by the next
+                dead = seg.tick()
+                if dead:
+                    deaths.append(f"step {i}: {dead}")
             desc = f"{tape['name']} step {i}: " + json.dumps(tape["steps"][i], ensure_ascii=False)[:100]
             if lk:
                 lk.status(state="running", step=desc)
@@ -3868,8 +3900,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
             logger.info("step %d ok: %s", i, json.dumps(tape["steps"][i], ensure_ascii=False)[:100])
             if a.mode == "video" and not {"pause", "redact"} & s.keys():
                 time.sleep(tape.get("video_pause", 1.2))
-        if failed is None and lv and lv.dead and on_dead != "alert":
-            failed = f"after the last step: {lv.dead}"
+        if seg:
+            seg.tick()
         if failed is None and r.win is not None:
             time.sleep(DIALOG_SETTLE)            # replay-guards D4: a dialog the last step opens takes a moment
             r.dirty = True
@@ -3883,16 +3915,12 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                                        ignores(amap, a.host))
     finally:
         total = time.time() - (r.t_rec or t0)
-        if lv:
-            lv.stop()
-        if r.t_rec is not None:
+        if seg:
             time.sleep(1.0)
-            try:
-                cua.call("stop_recording", {})
-            except Exception as e:
-                logger.warning("stop_recording failed (%s); the recording may be incomplete", e)
-                failed = failed or f"stopping the screen recording: {e}"
+            seg.stop()
         cua.close()
+    if failed is None and deaths and on_dead != "alert":   # the take has a hole: not a good take
+        failed = f"the recording has {len(deaths)} gap(s): " + "; ".join(deaths)
     if lk and failed is None:
         passed(lk, f"{tape['name']}: all {len(plan)} steps")
     summary = {"tape": tape["name"], "mode": a.mode, "map": tape.get("map"), "steps": len(plan), "passed": done,
@@ -3908,17 +3936,25 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
         summary["repair"] = repair
     if r.t_rec is not None:
         summary["recording_started_at"] = utc_iso(r.t_rec)   # screen-record: lines this video up with another
-        if lv:
-            summary["liveness"] = lv.summary()
+        if seg:
+            summary["recording"] = seg.summary(total)
     if r.t_rec is not None:
         local_raw = os.path.join(run_dir, "recording.mp4")
         try:
+            caps, reds, length = r.captions, r.redactions, total
+            if seg:         # record-segments: the parts joined on the target; the gaps are not in the video
+                seg.join()
+                vt = seg.video_time
+                caps = [(vt(c), x) for c, x in r.captions]
+                reds = [(vt(c), x) for c, x in r.redactions]
+                length = vt(total)
+                summary["recording"] = seg.summary(total)    # now with each part's bytes
             if redacting:   # video-redaction D3: the raw file is what the tape hides, so it stays out
                 logger.info("tape redacts: the unredacted recording is not downloaded")
             else:
                 Target(a.host).get(f"{rec_rel}/recording.mp4", local_raw)
-            spans = redact_spans(tape_boxes, r.redactions)
-            summary["video"] = burn_captions_remote(a.host, rec_rel, r.captions, spans, total, run_dir,
+            spans = redact_spans(tape_boxes, reds)
+            summary["video"] = burn_captions_remote(a.host, rec_rel, caps, spans, length, run_dir,
                                                     tape["name"])
             # The recordings show the whole screen: once both are here, none stays on the target.
             if Target(a.host).mac:
@@ -4253,6 +4289,134 @@ class Liveness:
         return {"last_grew": utc_iso(self.last_grew), "bytes_seen": self.size, "dead": self.dead}
 
 
+SEGMENT_SECONDS = 240.0   # record-segments: the driver's recorder died at minute 5-6 three times; a segment ends before
+
+
+class Segments:
+    """record-segments: one recording on the target as numbered segments `seg-001`, `seg-002`, … under `rec_dir`.
+    `tick()` (on the thread that makes the driver calls) ends a segment after `length` seconds, or at once when its
+    file stops growing, and starts the next; `join()` puts the parts together on the target, as `recording.mp4` in
+    `rec_dir`, with ffmpeg's concat (no re-encoding). Times are seconds since the first segment's start."""
+
+    def __init__(self, cua, t, rec_dir, start_args=None, length=None, every=None, clock=time.time, on_dead=None):
+        self.cua, self.t, self.rec_dir, self.clock = cua, t, rec_dir, clock
+        self.sep = "/" if t.mac else "\\"
+        self.args = dict(start_args or {})
+        self.length = float(length or os.environ.get("DESKTAPE_SEGMENT_SECONDS") or SEGMENT_SECONDS)
+        self.every, self.on_dead = every, on_dead
+        self.parts, self.cur, self.lv, self.t0 = [], None, None, None
+
+    def start(self):
+        """Start the next segment; raises when the driver says its video capture did not start."""
+        n = len(self.parts) + 1
+        d = f"{self.rec_dir}{self.sep}seg-{n:03d}"
+        t = self.clock()
+        _, said = self.cua.call("start_recording", {**self.args, "output_dir": d, "record_video": True})
+        if capture_failed(said):
+            try:
+                self.cua.call("stop_recording", {})
+            except Exception as e:
+                logger.warning("stop_recording after a failed start: %s", e)
+            raise RuntimeError(f"the driver did not record video: {capture_failed(said)} "
+                               "(on Windows the driver records through ffmpeg: `desktape doctor --video`)")
+        if self.t0 is None:
+            self.t0 = t
+        self.cur = {"n": n, "dir": d, "start": round(t - self.t0, 3), "end": None, "ended_by": None}
+        self.parts.append(self.cur)
+        self.lv = Liveness(self.t, d + self.sep + "recording.mp4", every=self.every, clock=self.clock)
+        logger.info("recording: segment %d started (%s)", n, d)
+
+    def stop(self, why="stop"):
+        """End the running segment (a failed stop is logged: the file is judged at join)."""
+        if not self.cur or self.cur["end"] is not None:
+            return
+        try:
+            self.cua.call("stop_recording", {})
+        except Exception as e:
+            logger.warning("stop_recording failed (%s); segment %d may be incomplete", e, self.cur["n"])
+        end = self.clock() - self.t0
+        if self.lv and self.lv.dead:       # it stopped writing when the file stopped growing, not now
+            end = min(end, self.lv.last_grew - self.t0)
+        self.cur["end"], self.cur["ended_by"] = round(end, 3), why
+
+    def tick(self):
+        """Between steps or in a wait loop: a dead or full segment is ended and the next started. Returns the
+        liveness text of a segment that died, else None."""
+        if not self.cur:
+            return None
+        dead = self.lv.check() if self.lv else None
+        if dead:
+            logger.warning("recording: segment %d %s; starting the next", self.cur["n"], dead)
+            if self.on_dead:
+                self.on_dead(dead)
+            self.stop(dead)
+            self.start()
+            return dead
+        if self.clock() - self.t0 - self.cur["start"] >= self.length:
+            self.stop("length")
+            self.start()
+        return None
+
+    def gaps(self):
+        """(from, to, why) where nothing was recorded, in seconds since the start."""
+        out = []
+        for a, b in zip(self.parts, self.parts[1:]):
+            if a["end"] is not None and b["start"] > a["end"]:
+                out.append({"from": a["end"], "to": b["start"], "seconds": round(b["start"] - a["end"], 3),
+                            "why": "the recorder stopped: " + a["ended_by"] if a["ended_by"] not in ("length", "stop")
+                            else "between two segments"})
+        return out
+
+    def video_time(self, w):
+        """The joined video's time of `w` seconds since the start: the gaps are not in the video."""
+        v = 0.0
+        for p in self.parts:
+            end = p["end"] if p["end"] is not None else float("inf")
+            if w < p["start"]:
+                return v
+            if w < end:
+                return v + w - p["start"]
+            v += end - p["start"]
+        return v
+
+    def recorded(self):
+        return round(sum((p["end"] or 0) - p["start"] for p in self.parts if p.get("bytes")), 1)
+
+    def join(self):
+        """Concatenate the segments' files into `recording.mp4` in `rec_dir`. A segment with no file is left out
+        (logged); raises when none has one."""
+        have = []
+        for p in self.parts:
+            p["bytes"] = self.t.size(p["dir"] + self.sep + "recording.mp4")
+            if p["bytes"]:
+                have.append(p)
+            else:
+                logger.warning("recording: segment %d has no video file; left out", p["n"])
+        if not have:
+            raise RuntimeError("no segment of the recording has a video file")
+        out = self.rec_dir + self.sep + "recording.mp4"
+        # the list names the parts relative to itself: a profile path may hold a character cmd's echo would mangle
+        if self.t.mac:
+            lst = "".join(f"file 'seg-{p['n']:03d}/recording.mp4'\\n" for p in have)
+            r = self.t.sh(f'cd "{self.rec_dir}" && printf "{lst}" > parts.txt && {FFMPEG_MAC} -y -loglevel error '
+                          f'-f concat -i parts.txt -c copy recording.mp4')
+        else:
+            lst = " & ".join(f"echo file 'seg-{p['n']:03d}/recording.mp4'" for p in have)
+            r = self.t.sh(f'cd /d "{self.t.cmd_path(self.rec_dir)}" && ({lst}) > parts.txt && '
+                          f'"{self.t.cmd_path(self.t.ffmpeg())}" -y -loglevel error '
+                          f'-f concat -i parts.txt -c copy recording.mp4')
+        if r.returncode:
+            raise RuntimeError(f"joining the segments failed: {(r.stderr or r.stdout).strip()[-300:]}")
+        return out
+
+    def summary(self, length=None):
+        s = {"segments": [{k: p.get(k) for k in ("n", "start", "end", "ended_by", "bytes")} for p in self.parts],
+             "recorded_seconds": self.recorded(), "gaps": self.gaps()}
+        if length is not None:
+            s["run_seconds"] = round(length, 1)
+        return s
+
+
 def cmd_record(a):
     """screen-record: the target's whole screen, recorded on its own until Ctrl+C, a stop file on the controller,
     or --seconds; acts on nothing and takes no lock, so a run beside it goes on."""
@@ -4267,15 +4431,14 @@ def cmd_record(a):
         raise ValueError(f"record: the stop file {a.until_file} exists already; remove it first")
     cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
     t0 = time.time()
+    seg = Segments(cua, t, rec_dir, {"include_accessibility_tree": False})
+    deaths = []
     try:
-        _, said = cua.call("start_recording", {"output_dir": rec_dir, "record_video": True,
-                                               "include_accessibility_tree": False})
+        try:
+            seg.start()
+        except RuntimeError as e:
+            raise RuntimeError(f"record: {e}") from None
         t1 = time.time()
-        if capture_failed(said):
-            cua.call("stop_recording", {})
-            raise RuntimeError(f"record: the driver did not record video: {capture_failed(said)} "
-                               "(on Windows the driver records through ffmpeg: `desktape doctor --video`)")
-        lv = Liveness(t, rec_dir + ("/" if t.mac else "\\") + "recording.mp4")
         print(f"recording {a.host} since {utc_iso(t0)}; stop with Ctrl+C" +
               (f", or create {a.until_file}" if a.until_file else "") + f" (at most {limit:.0f} s)", flush=True)
         logger.info("record: %s started (the call took %.2f s), output %s", a.host, t1 - t0, rec_dir)
@@ -4287,24 +4450,26 @@ def cmd_record(a):
                 if a.until_file and os.path.exists(a.until_file):
                     why = "stop file"
                     break
-                if lv.check() and not lv.alerted:
-                    lv.alerted = True
-                    alert(f"desktape {a.host}: record {a.name or 'screen'}: {lv.dead}")
-                    if getattr(a, "on_dead", "fail") != "alert":
-                        why = lv.dead
-                        break
+                dead = seg.tick()       # record-segments: a dead segment is followed by the next one
+                if dead:
+                    deaths.append(dead)
+                    alert(f"desktape {a.host}: record {a.name or 'screen'}: {dead}; recording goes on in a new segment")
                 time.sleep(0.2)
         except KeyboardInterrupt:
             why = "interrupted"
         finally:
             signal.signal(signal.SIGTERM, old)
         t2 = time.time()
-        cua.call("stop_recording", {})
+        seg.stop(why)
     finally:
         cua.close()
     local = os.path.join(run_dir, f"{a.name or 'screen'}.mp4")
     try:
+        seg.join()
         t.get(f"{rec_rel}/recording.mp4", local)
+    except (RuntimeError, subprocess.CalledProcessError) as e:
+        logger.error("record: no video: %s", e)
+        local = None
     finally:
         if t.mac:
             t.sh(f'rm -rf "$HOME/{rec_rel}"')      # the whole screen: no copy stays on the target
@@ -4312,11 +4477,12 @@ def cmd_record(a):
             t.sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
     summary = {"record": a.name or "screen", "host": a.host, "stopped_by": why, "recording_started_at": utc_iso(t0),
                "start_call_seconds": round(t1 - t0, 3), "seconds": round(t2 - t1, 1), "video": local,
-               "bytes": os.path.getsize(local), "liveness": lv.summary()}
+               "bytes": os.path.getsize(local) if local else None, **seg.summary(t2 - t1)}
     json.dump(summary, open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    logger.info("record: %s stopped by %s after %.1f s; %s", a.host, why, t2 - t1, local)
-    return 1 if lv.dead and getattr(a, "on_dead", "fail") != "alert" else 0
+    logger.info("record: %s stopped by %s after %.1f s; %s (%s s recorded in %d segments)", a.host, why, t2 - t1,
+                local, seg.recorded(), len(seg.parts))
+    return 1 if not local or (deaths and getattr(a, "on_dead", "fail") != "alert") else 0
 
 
 # ---- target-pairing: a controller's own key on a target, and taking it back --------------------------------
@@ -6467,6 +6633,30 @@ def selftest_run_level():
         logger.setLevel(level)
 
 
+def selftest_win_home():
+    """record-segments: a profile folder with "á" is read as UTF-8 (base64), and a cmd line names it by %USERPROFILE%."""
+    home = "C:\\Users\\Kiss \u00c1d\u00e1m"
+    class T(Target):
+        def __init__(self, out):
+            self.host, self.local, self.mac, self.out, self.cmds = "x@win-home-test", False, False, out, []
+        def sh(self, cmd, check=False, input=None):
+            self.cmds.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, self.out if "powershell" in cmd else "C:\\Users\\Kiss \ufffdd\ufffdm\r\n", "")
+    level = logger.level
+    logger.setLevel(logging.CRITICAL)
+    try:
+        t = T(base64.b64encode(home.encode("utf-8")).decode() + "\r\n")
+        assert win_home(t) == home, win_home(t)
+        assert win_home(T("not base64 !")).startswith("C:\\Users\\Kiss "), "falls back to echo"
+        HOMES.pop(t.host, None)
+        assert t.cmd_path(home + "\\desktape\\rec\\x") == "%USERPROFILE%\\desktape\\rec\\x"
+        assert t.cmd_path("C:\\rec\\x") == "C:\\rec\\x"          # ASCII: as written, home not asked
+        assert t.cmd_path("C:\\Users\\Kiss \ufffdd\ufffdm\\AppData\\ff.exe") == "%USERPROFILE%\\AppData\\ff.exe"
+    finally:
+        HOMES.pop("x@win-home-test", None)
+        logger.setLevel(level)
+
+
 def selftest_browser_page():
     """chrome-page-text: a browser window whose first read has no page is read once more; another program once;
     doctor names a browser whose page stays empty."""
@@ -6829,10 +7019,11 @@ def selftest_record():
     TARGET_OS["rec@mac"] = "macos"
     globals()["Cua"] = FakeCua
     Target.get = lambda self, rel, local: open(local, "wb").write(b"mp4")
-    Target.sh = lambda self, cmd, check=False, input=None: cmds.append(cmd)
+    Target.sh = lambda self, cmd, check=False, input=None: cmds.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
     Target.home = lambda self: "/Users/me"
     Target.ffmpeg = lambda self: FFMPEG_MAC
-    level = logger.level; logger.setLevel(logging.ERROR)
+    real_size, Target.size = Target.size, lambda self, path: 3
+    level = logger.level; logger.setLevel(logging.CRITICAL)
     try:
         with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
             stop = os.path.join(d, "stop")
@@ -6844,11 +7035,15 @@ def selftest_record():
                 globals()["RUNS"] = runs
         assert [c[0] for c in calls] == ["start_recording", "stop_recording"], calls
         assert calls[0][1]["output_dir"].startswith("/Users/me/desktape/rec/") and calls[0][1]["record_video"] is True
+        assert calls[0][1]["output_dir"].endswith("/seg-001"), calls[0][1]
         assert summary["stopped_by"] == "stop file" and summary["bytes"] == 3 and summary["recording_started_at"].endswith("Z")
+        assert len(summary["segments"]) == 1 and summary["gaps"] == [], summary
+        assert any("-f concat -i parts.txt -c copy recording.mp4" in c and "seg-001/recording.mp4" in c for c in cmds), cmds
         assert cmds and cmds[-1].startswith('rm -rf "$HOME/desktape/rec/'), cmds          # no copy stays on the target
-        # record-liveness: a recorder that stops growing ends the recording with an error, and keeps what it has
+        # record-segments: a recorder that stops growing is followed by a new segment; the gap is in the summary,
+        # and the exit is 1 (the take has a hole) unless on_dead is alert
         calls.clear()
-        real_size, Target.size = Target.size, lambda self, path: 100
+        Target.size = lambda self, path: 100
         os.environ["DESKTAPE_LIVENESS_EVERY"] = "0.3"
         try:
             with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
@@ -6856,17 +7051,35 @@ def selftest_record():
                 globals()["RUNS"], runs = d, globals()["RUNS"]
                 try:
                     stop_file = os.path.join(d, "stop")
-                    assert cmd_record(argparse.Namespace(host="rec@mac", seconds=5, until_file=stop_file, name="mac",
+                    assert cmd_record(argparse.Namespace(host="rec@mac", seconds=2, until_file=stop_file, name="mac",
                                                          on_dead="fail")) == 1
                     summary = json.load(open(glob_one(d, "summary.json")))
                 finally:
                     globals()["RUNS"] = runs
-            assert summary["stopped_by"].startswith("recording stopped growing at "), summary
-            assert summary["liveness"]["bytes_seen"] == 100 and summary["seconds"] < 3, summary
-            assert [c[0] for c in calls] == ["start_recording", "stop_recording"], calls      # stopped, then fetched
+            assert summary["stopped_by"] == "time limit" and summary["seconds"] >= 2, summary
+            assert len(summary["segments"]) >= 2 and summary["gaps"], summary
+            assert summary["gaps"][0]["why"].startswith("the recorder stopped: recording stopped growing"), summary
+            assert summary["segments"][0]["ended_by"].startswith("recording stopped growing"), summary
+            tools = [c[0] for c in calls]
+            assert tools[:4] == ["start_recording", "stop_recording", "start_recording", "stop_recording"], tools
+            assert tools.count("start_recording") == tools.count("stop_recording"), tools
         finally:
-            Target.size = real_size
             os.environ.pop("DESKTAPE_LIVENESS_EVERY", None)
+        # a full segment is ended and the next started; the joined video's clock skips the gaps
+        clock = [0.0]
+        sizes = iter(range(1000, 10 ** 6, 1000))
+        Target.size = lambda self, path: next(sizes)
+        class C:
+            def call(self, tool, args, **kw):
+                calls.append((tool, args)); return {}, ""
+        sg = Segments(C(), Target("rec@mac"), "/r", length=10, every=100, clock=lambda: clock[0])
+        sg.start(); clock[0] = 9; sg.tick(); assert len(sg.parts) == 1
+        clock[0] = 10.5; sg.tick(); assert len(sg.parts) == 2 and sg.parts[0]["end"] == 10.5
+        sg.parts[1]["start"] = 12.0                          # the next start took 1.5 s
+        clock[0] = 20; sg.stop()
+        assert sg.video_time(5) == 5 and sg.video_time(11) == 10.5 and sg.video_time(13) == 11.5, sg.parts
+        assert sg.gaps() == [{"from": 10.5, "to": 12.0, "seconds": 1.5, "why": "between two segments"}], sg.gaps()
+        sg.join(); assert sg.recorded() == 18.5, sg.summary()
         # ffmpeg is required: without it `record` stops before the driver is asked to record
         calls.clear()
         Target.ffmpeg = lambda self: None
@@ -6878,6 +7091,7 @@ def selftest_record():
         assert calls == [], calls
     finally:
         globals()["Cua"], Target.get, Target.sh, Target.home, Target.ffmpeg = real
+        Target.size = real_size
         logger.setLevel(level)
 
 
@@ -8142,6 +8356,7 @@ def selftest():
     selftest_click_offscreen()
     selftest_run_level()
     selftest_browser_page()
+    selftest_win_home()
     selftest_panel_audit()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
                 "knowledge", "book", "unbook", "bookings", "panel", "find"):
