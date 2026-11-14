@@ -453,6 +453,10 @@ The same `record` and load with segments (branch at the `record-segments` commit
 - 50 s in 20-second segments (`DESKTAPE_SEGMENT_SECONDS=20`), after the profile fix: three parts joined on the target
   into one file of 10 769 021 bytes, 51.37 s by `ffprobe`; the run's 50.1 s, 52.6 s by the segments' clocks. The
   target's `desktape\rec` was empty afterwards.
+- 1800 s (`record --seconds 1800`, commit 0112a0b) under the same load (721 reads of 312 elements): 8 segments of
+  240.4–240.7 s (the last 118.3 s), 46.2–49.8 MB each, none stopped growing; joined on the target into one file of
+  362 391 318 bytes, 1800.23 s by `ffprobe`, against 1800.1 s by the controller's clock; exit 0, `gaps: []`. The
+  target's `desktape\rec` was empty afterwards.
 
 ## Not tested yet
 
