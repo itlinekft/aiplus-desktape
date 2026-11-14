@@ -33,6 +33,14 @@ open.
   Claude in a browser): a target's Chrome signed in to another Claude account (Team vs personal) does not answer
   a remote session's extension. Drive that browser with desktape (`look`/`act`), or by that machine's own Claude.
 
+- **A page's own tree is not always there.** Chrome builds a page's UI Automation tree only after a client has
+  asked for it, or from the start with `--force-renderer-accessibility`. Measured 2026-11-14 on the Windows 10 test
+  PC, Chrome 157.0.8103.52, a local test page: in the first half hour the page came on the second read (and at once
+  with the flag), so a `click` on a page button passed in 2.0 s; half an hour later, on seven fresh starts with and
+  without the flag, no read in 3–15 s had the page, and OCR showed no page content on screen either: Chrome was not
+  drawing the page at all. The cause is not found. `look` reads a browser window twice and says when the page is
+  still missing; then `look --ocr` shows whether the page is on screen at all.
+
 ## Over SSH, as a standard user
 
 - **Process details are denied.** `Get-CimInstance Win32_Process` (command lines, parent processes) answers
@@ -109,6 +117,13 @@ open.
   the same VM), so a size check once a minute tells a live recorder from a stopped one.
 - **The driver's recorder can stop silently under load** (a 25-minute take with heavy UI Automation reads stopped at
   minute 5, and `stop_recording` still said "Recording stopped"). desktape checks once a minute that the file grows.
+  Reproduced 2026-11-14 on a Windows 10 PC: with a driver connection reading a 312-element window every 2 s, the
+  recording stopped growing at about minute 5–6. So desktape records in 4-minute segments and starts a new one when a
+  segment stops growing (`docs/tape-format.md`); 10 minutes in segments under the same load did not stop.
+- **A user name with an accent comes back mangled from cmd over SSH.** `echo %USERPROFILE%` answered in the console's
+  code page, decoded as U+FFFD; a path spelt out with it in a cmd line was "not found", and the driver, given it,
+  made a new folder by that wrong name and recorded there. desktape reads the profile as UTF-8 through PowerShell
+  (base64), and writes `%USERPROFILE%` in cmd lines. Measured 2026-11-14 on a Windows 10 PC.
 
 - **An SSH session cannot capture the screen.** ffmpeg's gdigrab from an SSH logon fails with "Failed to capture
   image (error 5)": the logon has no desktop of its own. Started in the person's desktop session (a one-off

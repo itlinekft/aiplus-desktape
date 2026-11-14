@@ -10,7 +10,7 @@ name: add-marketplace-dialog          # used in run folder and video names
 app: Claude Desktop 3.6556 (Windows)  # free text, for the reader
 map: claude-desktop-win               # optional: maps/<name>.yaml, or a path
 video_pause: 1.2                      # optional: seconds after each step in video mode (default 1.2)
-on_dead: fail                         # optional, video mode: a recording that stops growing fails the run (fail), or only alerts (alert)
+on_dead: fail                         # optional, video mode: a recording with a gap (its recorder died) fails the run (fail), or only alerts (alert)
 typing: fast                          # optional: fast (default), human (a person's pace, video mode only) or paste
 typing_cps: 7                         # optional: characters a second for `human` (default 12)
 cursor: agent                         # optional: agent (default) or person (macOS, video mode only; see below)
@@ -34,7 +34,7 @@ steps:
 | `click` | label, or `{label, role, prefix, nth, action}` | waits for an enabled element (up to 8 s), then clicks it through UI Automation; `action` picks e.g. `expand` or `select` |
 | `expect` | label, or `{label, role, prefix, nth, timeout}` | waits for the element; fails the run if it does not appear |
 | `absent` | label, or `{label, role, prefix, nth, timeout}` | waits until no such element is left; fails if one still is |
-| `type` | text, or `{text, secret, typing}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
+| `type` | text, or `{text, secret, typing, chunk}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
 | `key` | a key name, as Cua Driver's `press_key` takes it | presses one key |
 | `hotkey` | a list of key names, as Cua Driver's `hotkey` takes them | presses a key combination |
 | `caption` | text | in video mode, shown from this step until the next caption, and written to the `.srt`; `""` ends the previous caption |
@@ -163,8 +163,15 @@ The driver answers ✅ when it delivered a click or typed text, not when the pro
 - **A close-type button in a dialog** (OK, Cancel, Close, Save, Yes, No, Igen, Nem, Mégse, Bezárás,
   Mentés) must make that dialog go away, or open a confirmation window of the same program. "In a dialog"
   means a nested window, or a window smaller than another window of its program.
-- **Typed text** must show in the window, or the window must at least change. `secret: true` text is not
-  read back.
+- **Typed text** must show in the window whole, or the window must at least change. `secret: true` text is not
+  read back. When a field reads a text close to the typed one but not it (a keystroke lost or doubled; the field
+  starts or ends like the text), the runner selects the field's content (Ctrl+A, Cmd+A on macOS) and types the
+  text again in chunks of 16 characters; if it still differs, the step fails and prints both texts. A field that
+  had other text before the typing loses it in that retry. `chunk: N` types in N-character pieces from the start:
+
+```yaml
+  - type: { text: "https://example.com/a/long/path/api/mcp/", chunk: 16 }
+```
 
 A step that fails this stops with `no effect: …`. For a click or text that may rightly change nothing,
 write the step as a mapping with `effect: none`:
@@ -460,6 +467,17 @@ folder, deletes the target's copy, and records `recording_started_at` (UTC, to t
 `summary.json`, as a video run's summary does too, so the edit lines the two videos up. On macOS the
 recorder writes a frame when the screen changes (2.8 frames a second on a still screen, measured): normalise
 the frame rate in the edit.
+
+### Long recordings: segments
+
+The driver's recorder on Windows died at minute 5–6 of a take, three times, under UI Automation load, and said
+nothing. So `record` and a video run record in segments of 4 minutes (`DESKTAPE_SEGMENT_SECONDS` changes it): the
+recorder is stopped and started again into `seg-002`, `seg-003`, …, and at the end the parts are joined on the target
+with ffmpeg's concat, without re-encoding. A segment whose file stops growing (checked once a minute) is ended and the
+next started at once. Between two segments there is a short gap (the time the recorder takes to stop and start); the
+captions and the redaction boxes are moved to the joined video's clock. `summary.json` lists the segments, the
+recorded seconds against the run's length, and every gap with its cause. A gap from a dead recorder makes the run
+fail (exit 1 for `record`) unless the tape says `on_dead: alert`; the video is kept either way.
 
 ## A person's pointer: `cursor: person` (macOS)
 

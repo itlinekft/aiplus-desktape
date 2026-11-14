@@ -5,6 +5,27 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- `look` reads a Chrome or Edge window a second time when the first read has no web page in it, and says when the
+  page is still missing; `doctor` with a target lists a browser window whose page has no tree (`chrome-page-text`).
+
+### Fixed
+- A long screen recording survives the driver's recorder dying (it stopped at minute 5–6 under UI Automation load on
+  Windows, silently, three times): `record` and a video run record in 4-minute segments, start a new segment when one
+  stops growing, and join the parts on the target. `summary.json` lists the segments, the recorded seconds and every
+  gap; captions follow the joined video's clock. `record` no longer ends with a traceback when the recorder left no
+  file (`record-segments`).
+- On a Windows target whose user name has an accent ("á"), recordings went into a new folder with a mangled name,
+  where the fetch and the cleanup never looked, so full-screen recordings stayed on the target. desktape now reads
+  the profile folder as UTF-8 and names it by `%USERPROFILE%` in cmd lines. A target used before this fix may have a
+  `C:\Users\<name with a replacement character>\desktape\rec` folder to check and remove by hand.
+- A `type` step is checked against the whole typed text, not its first 40 characters. A field that reads a text close
+  to it (a lost keystroke) is typed again once in 16-character chunks, and the step fails with both texts if it still
+  differs; `chunk: N` types in chunks from the start (`type-verify-whole`).
+- On a standard (non-administrator) Windows account the daemon and the panel's helpers start: the scheduled task
+  gets `/rl highest` only when `whoami /groups` shows an elevated SSH session, where before it was always given and
+  refused ("Access denied") (`standard-user-daemon`).
+
 ## [0.6.7] - 2026-11-12
 
 ### Added
