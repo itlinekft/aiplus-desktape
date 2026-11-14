@@ -13,8 +13,9 @@ started with `--force-renderer-accessibility`.
 
 Measured 2026-11-14 on another test PC (`docs/MEASURED.md`): without `--force-renderer-accessibility` Chrome's first
 read lists only its own controls, the next read the page; a `click` on a page button passed in 2.0 s, because a step
-reads again while it waits. A `look` reads once, so it shows an empty page. The page that stayed empty on every read
-is not reproduced.
+reads again while it waits. A `look` reads once, so it shows an empty page. Half an hour later, on the same PC, seven
+fresh starts (with and without the flag) never had the page in the tree, and OCR showed no page drawn either; the
+cause is not found.
 
 ## What changes
 

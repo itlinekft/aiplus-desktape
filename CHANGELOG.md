@@ -5,6 +5,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- `look` reads a Chrome or Edge window a second time when the first read has no web page in it, and says when the
+  page is still missing; `doctor` with a target lists a browser window whose page has no tree (`chrome-page-text`).
+
 ### Fixed
 - A `type` step is checked against the whole typed text, not its first 40 characters. A field that reads a text close
   to it (a lost keystroke) is typed again once in 16-character chunks, and the step fails with both texts if it still

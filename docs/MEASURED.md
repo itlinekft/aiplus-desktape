@@ -419,6 +419,12 @@ a throwaway `--user-data-dir` on a local test page (a heading, an Allow and a De
   passed in 2.01 s.
 - With the flag: the first `look` listed the page (16 elements).
 - Not reproduced: the 2026-11-13 report of pages (a sign-in, a consent page) whose tree stayed empty.
+- **Half an hour later, different:** 11:38–11:45, seven fresh starts of the same Chrome on the same page (two with
+  a "Restore pages?" bubble after a forced close, five with a fresh profile, two of those with the flag): reading
+  the window every 0.5–1 s for 3–15 s, on one connection and on three new ones, never gave a `Document`. OCR of the
+  screen showed the tab and the address bar but no page content, with Claude Desktop in front and after it was
+  minimised. Chrome had not updated (still 157.0.8103.52). The cause is not found; the result above holds only for
+  that first half hour.
 
 ## Not tested yet
 

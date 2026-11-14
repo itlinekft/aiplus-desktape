@@ -2181,6 +2181,35 @@ class TypedOther(AssertionError):
         self.read = read
 
 
+BROWSER_APPS = {"chrome", "msedge", "google chrome", "microsoft edge"}
+BROWSER_TITLES = (" - Google Chrome", " - Microsoft Edge", " - Microsoft\u200b Edge")
+BROWSER_REREAD = 1.5    # chrome-page-text: seconds before a browser window with no page is read again
+
+
+def browser_window(app, title):
+    """A Chromium browser's window: by its program, or by the title's suffix when the driver gives no program."""
+    a = (app or "").lower().removesuffix(".exe")
+    return a in BROWSER_APPS or any((title or "").endswith(t) for t in BROWSER_TITLES)
+
+
+def has_page(tree):
+    """The tree has a web page in it (a `Document` line)."""
+    return any(n and n[1] == "Document" for n in map(parse, (tree or "").splitlines()))
+
+
+def read_page_again(r):
+    """chrome-page-text: Chrome builds a page's UI Automation tree only after a client asked for it, so the first
+    read of a browser window lists only the browser's own controls (measured 2026-11-14, Chrome 157). Read such a
+    window once more; True when it was read again."""
+    if not browser_window(getattr(r, "app", ""), r.title) or has_page(r.tree):
+        return False
+    time.sleep(BROWSER_REREAD)
+    r.snapshot()
+    logger.info("%r: no page in the first read of a browser window; read again (page %s)", r.title,
+                "found" if has_page(r.tree) else "still missing")
+    return True
+
+
 TYPE_CHUNK = 16         # type-verify-whole: characters in one driver call when a text is retyped in chunks
 TYPE_CHUNK_PAUSE = 0.15
 
@@ -2226,6 +2255,7 @@ class Runner:
         self.redactions = []     # (seconds since recording start, boxes from then on)
         self.t_rec = None
         self.title = None        # the focused window's title, for deny entries tied to a window
+        self.app = ""            # the focused window's program (chrome-page-text: a browser is read twice)
         self.deny = []           # the map's deny entries (replay-guards D1)
         self.expected = None     # a title predicate; None: no dialog check (replay-guards D3)
         self.answers = []        # prompt-answers: [{"name", "when", "steps", "once", "fired", "seen"}]
@@ -2711,6 +2741,7 @@ class Runner:
                                    "(docs/macos-setup.md step 5)")
             raise RuntimeError(f"no window titled {title!r} (waited {end - start:.0f} s)")
         self.win, self.title = {"pid": w["pid"], "window_id": w["window_id"]}, title
+        self.app = w.get("app_name") or w.get("app") or ""
         self.baseline = {x.get("window_id") for x in sc.get("windows", []) if x.get("pid") == w["pid"]}
         area = lambda x: (x.get("bounds") or {}).get("width", 0) * (x.get("bounds") or {}).get("height", 0)
         self.secondary = any(area(x) > area(w) for x in sc.get("windows", [])
@@ -3967,6 +3998,7 @@ def look(a):
         r = Runner(cua, "test")
         r.focus(window_title(a))
         r.snapshot()
+        reread = read_page_again(r)
         if a.ocr and cua.mac:                    # macOS reads the window through this connection (macos-target D4)
             mac_ocr_out = ocr_lines(a.host, cua, r.win)
     finally:
@@ -3984,6 +4016,10 @@ def look(a):
     print(f"# {title}: {len(lines)} {what}{extra}")
     if r.blocked_by:
         print(f"# not in front: {r.blocked_by}")
+    if reread:
+        print("# a browser window: read twice, as its page tree comes after the first read" if has_page(r.tree) else
+              "# a browser window with no page tree on two reads: start it with --force-renderer-accessibility "
+              "(knowledge/windows.md), or read it with --ocr")
     print("\n".join(lines))
     if a.ocr:
         o = mac_ocr_out if mac_ocr_out is not None else ocr_lines(a.host)
@@ -4804,6 +4840,35 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
     return rows
 
 
+def doctor_browsers(host, cua=None):
+    """chrome-page-text: a row for each Chrome or Edge window on the target whose page has no UI Automation tree on
+    two reads. Nothing when the driver does not answer (doctor's other rows say why) or no browser is open."""
+    run_dir = None
+    try:
+        if cua is None:
+            run_dir = new_run_dir("doctor", "adhoc")
+            cua = Cua(host, os.path.join(run_dir, "audit.jsonl"))
+        rows = []
+        for w in cua.call("list_windows", {})[0].get("windows", []):
+            app, title = w.get("app_name") or w.get("app") or "", w.get("title") or ""
+            if not title or not browser_window(app, title) or not w.get("is_on_screen", True):
+                continue
+            r = Runner(cua, "test")
+            r.win, r.title, r.app = {"pid": w["pid"], "window_id": w["window_id"]}, title, app
+            r.snapshot()
+            read_page_again(r)
+            if not has_page(r.tree):
+                rows.append((False, f"page tree of {title!r}", "the browser gives no page to UI Automation: start it "
+                             "with --force-renderer-accessibility (knowledge/windows.md), or use look --ocr"))
+        return rows
+    except Exception as e:
+        logger.warning("doctor: the browser windows on %s were not checked: %s", host, e)
+        return []
+    finally:
+        if run_dir and cua is not None:
+            cua.close()
+
+
 def cmd_doctor(a):
     rows = doctor_report(a.local, a.video)
     if not a.local and (a.host or a.target or host_default()):     # a named target: what it needs, over SSH
@@ -4816,6 +4881,8 @@ def cmd_doctor(a):
                          + " (run it on that machine)"))
         except (Exception, SystemExit) as e:
             rows.append((False, f"target {host or a.host or a.target}", f"not reachable: {e}"))
+        if host:
+            rows += doctor_browsers(host)
     for ok, piece, detail in rows:
         print(f"{'ok     ' if ok else 'MISSING'}  {piece}: {detail}")
     missing = [p for ok, p, _ in rows if not ok]
@@ -6397,6 +6464,45 @@ def selftest_run_level():
         assert rl_flag(f) == ""
     finally:
         RL.clear(); RL.update(saved)
+        logger.setLevel(level)
+
+
+def selftest_browser_page():
+    """chrome-page-text: a browser window whose first read has no page is read once more; another program once;
+    doctor names a browser whose page stays empty."""
+    class Drv:
+        def __init__(self, app, title, pages):
+            self.app, self.title, self.pages, self.reads = app, title, list(pages), 0
+        def call(self, tool, args, secret=False, timeout=None):
+            if tool == "list_windows":
+                return {"windows": [{"title": self.title, "app_name": self.app, "pid": 3, "window_id": 9,
+                                     "bounds": {"width": 900, "height": 700}}]}, ""
+            if tool == "get_window_state":
+                page = self.pages[min(self.reads, len(self.pages) - 1)]
+                self.reads += 1
+                tree = '- Window "x"\n  - [1] Edit "Address" [actions=[set_value]]' + \
+                       ('\n  - [2] Document "page"\n    - [3] Button "Allow" [actions=[invoke]]' if page else "")
+                return {"elements": [{"element_index": 1}]}, tree
+            return {}, "ok"
+    global BROWSER_REREAD
+    level, wait = logger.level, BROWSER_REREAD
+    logger.setLevel(logging.CRITICAL)
+    BROWSER_REREAD = 0
+    try:
+        title = "Consent - Google Chrome"
+        d = Drv("chrome.exe", title, [False, True]); r = Runner(d, "test"); r.focus(title); r.snapshot()
+        assert read_page_again(r) and d.reads == 2 and has_page(r.tree), d.reads
+        d = Drv("chrome.exe", title, [True]); r = Runner(d, "test"); r.focus(title); r.snapshot()
+        assert not read_page_again(r) and d.reads == 1
+        d = Drv("notepad.exe", "notes - Notepad", [False]); r = Runner(d, "test"); r.focus("notes - Notepad"); r.snapshot()
+        assert not read_page_again(r) and d.reads == 1
+        assert browser_window("", "Inbox - Microsoft Edge") and not browser_window("claude.exe", "Claude")
+        rows = doctor_browsers("fake", Drv("chrome.exe", title, [False, False]))
+        assert len(rows) == 1 and rows[0][0] is False and "force-renderer-accessibility" in rows[0][2], rows
+        assert doctor_browsers("fake", Drv("chrome.exe", title, [False, True])) == []
+        assert doctor_browsers("fake", Drv("claude.exe", "Claude", [False])) == []
+    finally:
+        BROWSER_REREAD = wait
         logger.setLevel(level)
 
 
@@ -8035,6 +8141,7 @@ def selftest():
     selftest_booking_panel()
     selftest_click_offscreen()
     selftest_run_level()
+    selftest_browser_page()
     selftest_panel_audit()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
                 "knowledge", "book", "unbook", "bookings", "panel", "find"):

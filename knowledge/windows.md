@@ -33,14 +33,13 @@ open.
   Claude in a browser): a target's Chrome signed in to another Claude account (Team vs personal) does not answer
   a remote session's extension. Drive that browser with desktape (`look`/`act`), or by that machine's own Claude.
 
-- **The page's own tree comes on the second read.** Chrome builds a page's UI Automation tree only after a client
-  has asked for it, or from the start with `--force-renderer-accessibility`. Measured 2026-11-14 on the Windows 10
-  test PC, Chrome 157.0.8103.52, a local test page: without the flag the first `look` listed only Chrome's own
-  controls (tabs, address bar), the next one the page (`Document`, its buttons); a `click` on a page button right
-  after a fresh start passed in 2.0 s, because a step waits and reads again. With the flag the first `look` had
-  the page. So a `look` that shows no page content: look again before concluding the page is unreadable. A page
-  that stayed empty on every read (reported 2026-11-13: a sign-in and a consent page on another test PC) is not
-  reproduced yet; `look --ocr` reads it.
+- **A page's own tree is not always there.** Chrome builds a page's UI Automation tree only after a client has
+  asked for it, or from the start with `--force-renderer-accessibility`. Measured 2026-11-14 on the Windows 10 test
+  PC, Chrome 157.0.8103.52, a local test page: in the first half hour the page came on the second read (and at once
+  with the flag), so a `click` on a page button passed in 2.0 s; half an hour later, on seven fresh starts with and
+  without the flag, no read in 3–15 s had the page, and OCR showed no page content on screen either: Chrome was not
+  drawing the page at all. The cause is not found. `look` reads a browser window twice and says when the page is
+  still missing; then `look --ocr` shows whether the page is on screen at all.
 
 ## Over SSH, as a standard user
 
