@@ -372,6 +372,22 @@ each, wall time with `/usr/bin/time`:
 `act --new` after it, with no earlier `look` of that window in this run folder: all 41 lines of the window printed as
 new; a `look --new` right after: "0 elements and dialogs, 41 unchanged since the last look left out".
 
+## 2026-11-14: the run level follows the SSH session's token (`standard-user-daemon`, partly measured)
+
+**Machine:** the Windows 10 Pro 22H2 desktop PC (10.0.19045.6466), Cua Driver 0.34.1, two accounts paired: an
+administrator (signed in at the console) and a standard user (not signed in). Controller: Linux, branch
+`fix/windows-run-findings`.
+
+- `rl_flag` (`whoami /groups` over SSH, looking for `S-1-16-12288`): the administrator's key login gave
+  `" /rl highest"`, the standard account's gave `""`.
+- Administrator: `taskkill /f /im cua-driver.exe`, then `desktape look --target <admin> --window "Program Manager"`
+  logged "no driver daemon … starting it", started it with `/rl highest`, connected (no os error 233); the following
+  `look` of the same window passed in 1.45 s.
+- Standard account, while the administrator's daemon was running in the console session: `look` failed in 6.7 s
+  with `connect to named pipe \\.\pipe\cua-driver: Access denied (os error 5)`. The pipe name is machine-wide, and
+  the account had no desktop session, so nothing was started for it. **Not measured yet:** the standard account
+  signed in to a desktop session of its own, the case the change is for.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

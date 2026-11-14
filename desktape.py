@@ -158,8 +158,25 @@ HIDDEN = "conhost.exe --headless "
 # elevation differs from the daemon's ("service named-pipe connection rejected before request parsing", os error
 # 233; measured 2026-10-29 on a laptop whose account is in Administrators). So over SSH the daemon task runs with
 # the highest token the account has: elevated for an administrator, the plain one otherwise. A local controller
-# runs unelevated, so its daemon does too.
+# runs unelevated, so its daemon does too. A standard account cannot create a `/rl highest` task at all ("Access
+# denied", measured 2026-11-13), so the flag is given only when the token is elevated (standard-user-daemon).
 RL_SSH = " /rl highest"
+ELEVATED_SID = "S-1-16-12288"   # Mandatory Label\High Mandatory Level: `whoami /groups` lists it for an elevated token
+RL = {}               # host string -> RL_SSH or "", asked once
+
+
+def rl_flag(t):
+    """The schtasks run level for a task in the target's desktop session (standard-user-daemon): `/rl highest`
+    when the token desktape runs with on the target (the SSH session's, or this process's for `local`) is
+    elevated, nothing otherwise. Cached per host."""
+    if t.host not in RL:
+        r = t.sh("whoami /groups")
+        if r.returncode:
+            logger.warning("whoami /groups failed on %s (%s): tasks run unelevated", t.host,
+                           (r.stderr or r.stdout).strip()[:200])
+        RL[t.host] = RL_SSH if ELEVATED_SID in r.stdout else ""
+        logger.debug("target %s: token %s", t.host, "elevated" if RL[t.host] else "not elevated")
+    return RL[t.host]
 # macos-target D1: on a Mac the installer links this into /Applications/CuaDriver.app; `mcp` proxies to the app's
 # daemon, which holds the Accessibility and Screen Recording grants (not SSH, not this process)
 MAC_DRIVER = "~/.local/bin/cua-driver"
@@ -328,7 +345,7 @@ def start_daemon(host):
     t.sh('if not exist "%USERPROFILE%\\desktape" mkdir "%USERPROFILE%\\desktape"')
     t.put(os.path.join(HERE, "windows", "cua-serve.ps1"), "desktape/cua-serve.ps1")
     tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\desktape\\cua-serve.ps1\\\""
-    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it{RL_SSH if not t.local else ""} /f >nul '
+    t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it{rl_flag(t)} /f >nul '
          f'&& schtasks /run /tn desktape-cua >nul',
          check=True)
     time.sleep(4)
@@ -5057,7 +5074,7 @@ class LiveStream:
         tr = (HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "
               f"\\\"%USERPROFILE%\\desktape\\live-stream.ps1\\\" -Port {self.port} -Fps {self.fps} -Width {self.width}"
               f" -Codec {self.codec}")
-        r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{RL_SSH} /f >nul '
+        r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{rl_flag(t)} /f >nul '
                  f'&& schtasks /run /tn {tn} >nul & schtasks /delete /tn {tn} /f >nul')
         if r.returncode:
             raise RuntimeError(f"the stream task did not start on {self.host}: {(r.stderr or r.stdout).strip()[-200:]}")
@@ -5167,7 +5184,7 @@ class WinInput:
         t.sh(f'echo {token}> "{tok}"')
         tn = f"desktape-input-{self.port}"
         tr = HIDDEN + f"\\\"%USERPROFILE%\\{exe}\\\" serve {self.port} \\\"{tok}\\\""
-        r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{RL_SSH} /f >nul '
+        r = t.sh(f'schtasks /create /tn {tn} /tr "{tr}" /sc once /st 23:59 /it{rl_flag(t)} /f >nul '
                  f'&& schtasks /run /tn {tn} >nul & schtasks /delete /tn {tn} /f >nul')
         if r.returncode:
             raise RuntimeError(f"the input task did not start on {host}: {(r.stderr or r.stdout).strip()[-200:]}")
@@ -6283,6 +6300,36 @@ def selftest_click_offscreen():
         except RuntimeError as e:
             assert "indices like [106]" in str(e), e
     finally:
+        logger.setLevel(level)
+
+
+def selftest_run_level():
+    """standard-user-daemon: `/rl highest` only for an elevated token (its High Mandatory Level SID); a standard
+    account, or a failed `whoami`, gets no flag; the answer is asked once per host."""
+    class T:
+        def __init__(self, host, out, code=0):
+            self.host, self.out, self.code, self.calls = host, out, code, 0
+        def sh(self, cmd, check=False, input=None):
+            self.calls += 1
+            assert cmd == "whoami /groups", cmd
+            return subprocess.CompletedProcess(cmd, self.code, self.out, "")
+    admin = ("BUILTIN\\Administrators  Alias  S-1-5-32-544  Mandatory group, Enabled by default, Enabled group, Group owner\n"
+             "Mandatory Label\\High Mandatory Level  Label  S-1-16-12288\n")
+    user = ("BUILTIN\\Users  Alias  S-1-5-32-545  Mandatory group, Enabled by default, Enabled group\n"
+            "Mandatory Label\\Medium Mandatory Level  Label  S-1-16-8192\n")
+    level = logger.level
+    logger.setLevel(logging.CRITICAL)
+    saved = dict(RL)
+    try:
+        RL.clear()
+        a = T("admin@rl-test", admin)
+        assert rl_flag(a) == " /rl highest" and rl_flag(a) == " /rl highest" and a.calls == 1, a.calls
+        u = T("user@rl-test", user)
+        assert rl_flag(u) == "" and u.calls == 1
+        f = T("broken@rl-test", "", code=1)
+        assert rl_flag(f) == ""
+    finally:
+        RL.clear(); RL.update(saved)
         logger.setLevel(level)
 
 
@@ -7875,6 +7922,7 @@ def selftest():
     selftest_knowledge()
     selftest_booking_panel()
     selftest_click_offscreen()
+    selftest_run_level()
     selftest_panel_audit()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
                 "knowledge", "book", "unbook", "bookings", "panel", "find"):

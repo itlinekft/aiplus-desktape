@@ -5,6 +5,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Fixed
+- On a standard (non-administrator) Windows account the daemon and the panel's helpers start: the scheduled task
+  gets `/rl highest` only when `whoami /groups` shows an elevated SSH session, where before it was always given and
+  refused ("Access denied") (`standard-user-daemon`).
+
 ## [0.6.7] - 2026-11-12
 
 ### Added
