@@ -407,6 +407,19 @@ clicked the URL ComboBox, then 20 times `hotkey: [ctrl, a]` and `type:` an 84-ch
 - The tape's first Cancel after typing left the dialog open (it closed the ComboBox's drop-down); a second one
   closed it.
 
+## 2026-11-14: a Chrome page in the UI Automation tree (`chrome-page-text` task 1.1)
+
+**Machine:** the same Windows 10 PC, the administrator account, Cua Driver 0.34.1, Chrome 157.0.8103.52 started with
+a throwaway `--user-data-dir` on a local test page (a heading, an Allow and a Deny button). Controller: Linux.
+
+- Without `--force-renderer-accessibility`: the first `desktape look --window "<title> - Google Chrome"` listed 13
+  elements, Chrome's own (tabs, address bar, window buttons), no page; a second `look` 5 s later listed 16, with
+  `Document`, `Button "Allow"`, `Button "Deny"`. Measured twice, on two fresh starts.
+- Without the flag, on a fresh start: `desktape act 'focus: …' 'click: {label: Allow, role: Button}' 'expect: Allowed'`
+  passed in 2.01 s.
+- With the flag: the first `look` listed the page (16 elements).
+- Not reproduced: the 2026-11-13 report of pages (a sign-in, a consent page) whose tree stayed empty.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

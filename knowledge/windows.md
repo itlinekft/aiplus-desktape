@@ -33,6 +33,15 @@ open.
   Claude in a browser): a target's Chrome signed in to another Claude account (Team vs personal) does not answer
   a remote session's extension. Drive that browser with desktape (`look`/`act`), or by that machine's own Claude.
 
+- **The page's own tree comes on the second read.** Chrome builds a page's UI Automation tree only after a client
+  has asked for it, or from the start with `--force-renderer-accessibility`. Measured 2026-11-14 on the Windows 10
+  test PC, Chrome 157.0.8103.52, a local test page: without the flag the first `look` listed only Chrome's own
+  controls (tabs, address bar), the next one the page (`Document`, its buttons); a `click` on a page button right
+  after a fresh start passed in 2.0 s, because a step waits and reads again. With the flag the first `look` had
+  the page. So a `look` that shows no page content: look again before concluding the page is unreadable. A page
+  that stayed empty on every read (reported 2026-11-13: a sign-in and a consent page on another test PC) is not
+  reproduced yet; `look --ocr` reads it.
+
 ## Over SSH, as a standard user
 
 - **Process details are denied.** `Get-CimInstance Win32_Process` (command lines, parent processes) answers
