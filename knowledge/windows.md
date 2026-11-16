@@ -40,6 +40,23 @@ Copilot pane or sign-in dialog another way (clipboard paste, or click the pane's
 Windows 11 PC, Word M365 Apps 16.0.20527 (hu-HU, Hungarian layout), by a peer session driving that PC;
 scancodes 0x14 0x12 0x1F 0x14 typed "test" into the Copilot pane.
 
+## A Visual FoxPro program (RLB) takes characters, but drops editing keys without a scan code
+
+In a Visual FoxPro 9 program (RLB Kettős könyvvitel 26.6.0 demo, measured on a Windows VM, 2026-11-16): a
+textbox accepts `KEYEVENTF_UNICODE` characters from desktape's helper — accented Hungarian text ("Demó Cég
+Kft.") landed, and the DBF behind it holds it correctly. But the same helper's **editing keys are dropped**:
+its `keys` path sends VK events with `wScan` 0, and Backspace, Home, End and the arrows do nothing in a
+textbox (characters typed after them keep appending). What works for editing: WScript SendKeys, which sends
+VK **with a scan code** (`{END}{BS 12}2611` cleared and retyped a field) — the same scan-code rule as the
+WebView2 panes above, one notch milder: characters arrive without a scan code, editing keys do not. Two more
+FoxPro notes from the same run: its textboxes implement no UI Automation `ValuePattern` (`set` fails with
+"does not implement ValuePattern"; type instead), and an open in-place edit can stall the window's UI
+Automation reads and the driver's own `type_text`/`hotkey` verification ("did not answer within 6 s") — the
+input may have landed anyway, check the screen before retrying. The program's menu bar (Alapadatok,
+Könyvelés, …) is drawn by FoxPro and is invisible to UI Automation: open it with Alt+<first letter> (Alt+A)
+and navigate with arrows+Enter, or pixel-click it; taking a UIA snapshot closes an open dropdown, so open
+the menu and pick the item on one driver connection.
+
 ## Web pages in Edge or Chrome
 
 - **A button below the fold.** Chromium lists web elements that are scrolled out of view with their real position
