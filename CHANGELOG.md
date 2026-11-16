@@ -12,6 +12,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   display or start the browser with `--disable-features=CalculateNativeWinOcclusion`.
 
 ### Fixed
+- `uv run desktape.py` on a fresh Windows machine with no Python: uv took the newest Python (3.15), for which
+  PyYAML 6.0.3 has no Windows wheel, and the build failed asking for Microsoft C++ Build Tools. The script now asks
+  for Python below 3.15, so uv takes 3.14 or older, which have wheels.
 - A long screen recording survives the driver's recorder dying (it stopped at minute 5–6 under UI Automation load on
   Windows, silently, three times): `record` and a video run record in 4-minute segments, start a new segment when one
   stops growing, and join the parts on the target. `summary.json` lists the segments, the recorded seconds and every

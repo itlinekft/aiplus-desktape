@@ -489,6 +489,18 @@ The same `record` and load with segments (branch at the `record-segments` commit
   362 391 318 bytes, 1800.23 s by `ffprobe`, against 1800.1 s by the controller's clock; exit 0, `gaps: []`. The
   target's `desktape\rec` was empty afterwards.
 
+## 2026-11-16: `uv run` on a fresh Windows machine picks a Python without a PyYAML wheel
+
+**Machine:** a Windows 11 VM (Hungarian build), no Python installed; uv 0.x installed by
+`winget install --id astral-sh.uv -e --scope user`. Controller: Linux, over SSH.
+
+| command | result |
+|---|---|
+| `uv run -q desktape.py doctor --local` (`requires-python = ">=3.9"`) | uv downloaded CPython 3.15.2; building `pyyaml==6.0.3` failed: "Microsoft Visual C++ 14.0 or greater is required" |
+| `uv run -q --python 3.13 desktape.py doctor --local` | 5 checked, 0 missing |
+| the same with `requires-python = ">=3.9,<3.15"`, no `--python` | 5 checked, 0 missing (3.13 already in uv's store) |
+| PyPI, PyYAML 6.0.3 files | Windows wheels for cp314 and cp314t, none for cp315 |
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

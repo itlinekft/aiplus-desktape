@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.9"
+# requires-python = ">=3.9,<3.15"   # 3.15: no PyYAML wheel yet, and uv picks the newest (measured)
 # dependencies = ["pyyaml>=6.0"]
 # ///
 """desktape — drive a remote desktop through Cua Driver over SSH: run a YAML tape, look, act.
