@@ -125,6 +125,20 @@ the menu and pick the item on one driver connection.
   session (a "please turn off the widgets and the notifications") is not that yes; ask the owner, naming each
   setting and how to undo it. Measured: 2026-10-25.
 
+## A locked console: windows are listed, but nothing can be seen or typed
+
+- When the console session locks (idle lock, or anything that brings up the sign-in screen), the driver keeps
+  answering `list_windows` with the program's windows, so the target looks alive. But every whole-screen grab
+  fails with `BitBlt failed … (0x80070006)` ("the handle is invalid"), and input cannot reach the program.
+- How to tell: `LogonUI.exe` runs in the session (`tasklist`), and a one-off `/it` task in the user's session
+  gets "access denied" (error 5) from `OpenInputDesktop` and a foreground window of 0: the input desktop is the
+  sign-in desktop, not the user's. Its start time (`(Get-Process LogonUI).StartTime`) says when it locked.
+- Only a person with the account's password unlocks it: at the screen, or at the VM's console. desktape does not
+  bypass the sign-in screen. Before a long unattended run, ask the machine's owner whether to turn off the idle
+  lock for it (Settings › Accounts › Sign-in options), naming the setting and how to undo it.
+- Measured on a Windows 11 VM (Hungarian build), 2026-11-16: locked during an evening run (the cause was not measured);
+  the panel's live screen showed the last frame, so check a frame's time before trusting it.
+
 ## Closing windows
 
 - Send Alt+F4 only to a window you have checked is in front. When the focus has fallen to the desktop,
