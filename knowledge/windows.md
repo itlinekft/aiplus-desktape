@@ -21,6 +21,25 @@ open.
 - `type` / `key` with `into: "<title>"` and `os: true` go through Windows' own input (SendKeys), from a
   one-off task in the user's desktop session. It reaches whatever has the keyboard focus in that window.
 
+## WebView2 panes drop synthesised text, but not scancodes
+
+A WebView2 pane hosted by an Office program (Word's Copilot pane, the WAM / AAD sign-in dialog) receives mouse
+clicks but silently drops every synthesised keyboard event that does not carry a scan code: WScript SendKeys,
+`keybd_event` with scan 0, and `SendInput` with `KEYEVENTF_UNICODE` (VK_PACKET) — `SendInput` still reports
+success, the focus is the Office window (`Chrome_WidgetWin_0`), and nothing appears. What reaches the pane:
+`SendInput` with `KEYEVENTF_SCANCODE` (flags 8 down / 16 up, scan from `MapVirtualKeyEx` and the active
+layout). The caller's integrity level does not matter (a medium-IL task in the desktop session worked with
+scancodes), so it is not UIPI. For text outside the active layout, the measured way in was the clipboard
+(`Set-Clipboard` + a right-click "Beillesztés"); a scancode Ctrl+V chord sent as one `SendInput` array did not
+paste — send the chord split (control down, key down, key up, control up) or click the paste menu until a
+split chord is measured. **Every desktape Windows keyboard path is affected**: `type` / `key` with
+`os: true` (SendKeys), the panel's keyboard helper (`desktape-input.cs` sends `KEYEVENTF_UNICODE` for text
+and VK-only for keys), and the driver's own typing (its source sets the keyboard by Unicode string,
+`keyboardSetUnicodeString` — the method class the pane drops). Until they send scancodes, type into a
+Copilot pane or sign-in dialog another way (clipboard paste, or click the pane's own buttons). Measured 2026-11-16 on a
+Windows 11 PC, Word M365 Apps 16.0.20527 (hu-HU, Hungarian layout), by a peer session driving that PC;
+scancodes 0x14 0x12 0x1F 0x14 typed "test" into the Copilot pane.
+
 ## Web pages in Edge or Chrome
 
 - **A button below the fold.** Chromium lists web elements that are scrolled out of view with their real position
