@@ -5,6 +5,21 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Changed
+- Installing, for someone who has never seen desktape (`install-cold-read`, from the AI+ install review of
+  2026-11-17): the README (Hungarian and English) opens with "Before you start": the controller and the target in
+  plain words, the Claude surfaces that run desktape (Claude Desktop's Code tab, Claude Code; not plain Chat), the
+  plan, where Claude comes from, uv as the controller's one prerequisite, and the person needed once at the target.
+  One default install route, an uninstall line, a many-machines note, and the new-target status measured on
+  2026-11-07. The site's "Get started" is the plugin route.
+- `doctor` without a target no longer says "everything is in place": it says the controller is ready, that no target
+  was checked, and the command that checks one. `--local` on Linux and an unreachable target name the next step.
+- One Cua Driver procedure on Windows: `docs/windows-setup.md` §2 takes the pinned GitHub release and its SHA-256, as
+  `docs/setup-target.md` does (the old cua.ai script and its hash are gone). `docs/windows-setup.md` has an uninstall
+  section, and `docs/pairing.md` names both ways a target takes the pairing line.
+- The `desktape` skill speaks of Windows and macOS; `desktape-start` says first that desktape needs a Claude with a
+  shell, how to find the plugin folder, and where the macOS driver steps are.
+
 ### Added
 - Forms a program draws itself (a Visual FoxPro program, measured) replay under `desktape run`: `settle: off` skips
   the window reads around acting steps (the window list is still checked, so a message box stops the run), an

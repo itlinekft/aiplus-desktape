@@ -41,9 +41,14 @@ changed).
 
 ## 2. On the target: accept the line
 
-The target accepts exactly that line, showing the same fingerprint (`pair --accept "<line>"` on the target;
-on Windows the line goes into the user's own `%USERPROFILE%\.ssh\authorized_keys`, or for an admin user
-into `C:\ProgramData\ssh\administrators_authorized_keys`). Compare the fingerprint on both screens.
+The target accepts exactly that line, showing the same fingerprint. Two ways, the same result:
+
+- **The usual one, desktape not installed on the target:** the Claude on the target follows
+  [`setup-target.md`](setup-target.md) step 2 with the person, which puts the line in place by hand.
+- **desktape on the target too:** `pair --accept "<line>"` there.
+
+Either way, on Windows the line goes into the user's own `%USERPROFILE%\.ssh\authorized_keys`, or for an
+administrator into `C:\ProgramData\ssh\administrators_authorized_keys`. Compare the fingerprint on both screens.
 
 ## 3. Check
 

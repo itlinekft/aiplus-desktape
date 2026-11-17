@@ -1,13 +1,13 @@
 ---
 name: desktape
-description: Run a desktape tape (a recorded, checked sequence of clicks and typing) against a Windows desktop program that has no API (accounting, inventory, any old Windows app), on this computer or on a Windows machine over SSH; check first what is missing and install it with the person's approval; read a failed step's repair note. Use for "import this file into the program", "run the tape", "do it in the desktop app", "record a video of it", and Hungarian jobs - importálás a programba, árak felvitele, szalag futtatása, asztali program kezelése.
+description: Run a desktape tape (a recorded, checked sequence of clicks and typing) against a Windows or macOS desktop program that has no API (accounting, inventory, any older desktop app), on this computer or on another Windows or macOS machine over SSH; check first what is missing and install it with the person's approval; read a failed step's repair note. Use for "import this file into the program", "run the tape", "do it in the desktop app", "record a video of it", and Hungarian jobs - importálás a programba, árak felvitele, szalag futtatása, asztali program kezelése.
 ---
 
-# desktape: drive a Windows program through a recorded tape
+# desktape: drive a desktop program through a recorded tape
 
 desktape replays a **tape**: a YAML file of steps (focus a window, click a labelled control, type, open a file,
-check a table by value), each with an expected outcome. It drives the program through Cua Driver (Windows UI
-Automation), the way a person would, and stops at the first step whose outcome did not happen. **The runner
+check a table by value), each with an expected outcome. It drives the program through Cua Driver (UI Automation on
+Windows, the accessibility API on macOS), the way a person would, and stops at the first step whose outcome did not happen. **The runner
 never calls a model.** Your job is to choose and start the right tape, give it its inputs, and report what it
 measured, not to click around yourself.
 
@@ -26,7 +26,7 @@ running shell may not have that folder on its PATH yet. Call it by its full path
 ## 1. Check first, every time on a new machine
 
 ```bash
-desktape doctor --local            # the program runs on THIS Windows computer
+desktape doctor --local            # the program runs on THIS Windows or macOS computer
 desktape doctor --target NAME      # the program runs on another machine: also checks that machine over SSH
 ```
 

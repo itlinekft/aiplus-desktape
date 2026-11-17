@@ -4,13 +4,15 @@ Every install desktape or a bundled tape depends on, on both machines, with the 
 reference setup, whether it needs an administrator, and how to check it. Step-by-step setup of the target
 is in [`windows-setup.md`](windows-setup.md); this page is the inventory. Versions were read on 2026-10-24.
 
-**Controller** is the machine desktape runs on (Linux, or the Windows target itself in local mode).
+**Controller** is the machine desktape and Claude run on: Linux, macOS or Windows, or the target itself in local
+mode.
 **Target** is the Windows or macOS machine it drives.
 
 `desktape.py doctor [--local] [--video]` checks this inventory on the machine it runs on and prints, for each
 missing piece, the command that installs it; as a Claude plugin, Claude runs those commands with the person's
 approval. With [uv](https://docs.astral.sh/uv/) (`winget install --id astral-sh.uv -e`, `brew install uv`), `uv
 run desktape.py …` needs no Python or PyYAML installed: the script declares them (PEP 723).
+uv is the one thing a controller needs installed; the Python and PyYAML rows below are the route without it.
 
 ## Controller
 
@@ -26,7 +28,7 @@ run desktape.py …` needs no Python or PyYAML installed: the script declares th
 | What | Needed for | Measured | Admin | Source | Check |
 |---|---|---|---|---|---|
 | OpenSSH Server | remote mode only | OpenSSH_9.5p2 for Windows | **yes**: adding the optional feature and starting `sshd` | Settings › Optional features › "OpenSSH Server", or `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0` | key login works from the controller (above) |
-| Cua Driver 0.34.1 | always | 0.34.1 | **no**: installs into `%USERPROFILE%\.cua-driver` (measured with a standard user) | `https://cua.ai/driver/install.ps1`, version pinned; [`windows-setup.md`](windows-setup.md) §2 | `desktape.py look --window "<title>"` lists elements |
+| Cua Driver 0.34.1 | always | 0.34.1 | **no**: installs into `%USERPROFILE%\.cua-driver` (measured with a standard user) | the pinned GitHub release `cua-driver-rs-v0.34.1`, `install.ps1` checked against its SHA-256; [`windows-setup.md`](windows-setup.md) §2 | `desktape.py look --window "<title>"` lists elements |
 | Python 3.9+ and PyYAML | local mode only (desktape on the target) | CPython 3.14.8 from `uv`, per user | no | [python.org](https://www.python.org/downloads/windows/) or `uv python install` | `python -c "import yaml"`; the `WindowsApps\python.exe` alias is not a Python |
 | ffmpeg, full build | required (the driver records video through it) | 9.0.1 and 9.0.2 full_build (gyan.dev) | not needed for the measured per-user package in `%LOCALAPPDATA%\Microsoft\WinGet\Packages`; whether winget asked for UAC was not recorded | `winget install --id Gyan.FFmpeg -e` | `desktape doctor --target <name>` (or `--local`) says `ok ffmpeg` |
 | Windows OCR | `look --ocr` only | built in | no install | Windows | `look --ocr` prints lines |

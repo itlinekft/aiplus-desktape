@@ -21,10 +21,11 @@ ssh -o BatchMode=yes user@windows-host "echo ok"
 
 ## 2. Cua Driver, pinned
 
-Download the installer, `https://cua.ai/driver/install.ps1`, to `%USERPROFILE%\desktape\cua-install.ps1`
-and read it before running it. The copy used here had SHA-256
-`d9d4d29aa10c76dcc1bb3595cd9003d2fbf554f99c09ce3dd6147dfaa869da9b`; a newer one will differ, which is a
-reason to read it, not to skip the check.
+Download the installer from the pinned release, `https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.1/install.ps1`,
+to `%USERPROFILE%\desktape\cua-install.ps1`, and read it before running it. Its SHA-256 must be
+`16eedffc982de6d4b8fa71e7395e4617023394eb050ab23a8fd0930121f45c56`, the line for `install.ps1` in that release's
+`SHA256SUMS` (re-checked 2026-11-17). This is the same download as step 3 of [`setup-target.md`](setup-target.md),
+which also has the PowerShell lines; a different hash is a stop, not a retry.
 [`spike/windows-setup/cua-setup.ps1`](../spike/windows-setup/cua-setup.ps1), copied next to it, runs it with
 the version pinned (`CUA_DRIVER_RS_VERSION=0.34.1`) and `-NoAutoStart -NoPathUpdate`, then turns telemetry,
 the update check and the script runner off, and writes `cua-setup.log` with the binary's Authenticode
@@ -115,6 +116,21 @@ Either way:
   reference machine reports cp936). A shell that captures desktape's output may still show them garbled.
 - A Python installed by `uv` sits behind a junction; call it by its real directory when you are in an SSH
   session (pitfall 1 below).
+
+## Uninstall
+
+In reverse order, each undoing only what this page made:
+
+1. On the controller: `desktape unpair <name>` removes the controller's line from the target's `authorized_keys` over
+   SSH (or prints it to remove by hand), then the key and the profile.
+2. Cua Driver: the release's `uninstall.ps1`, checked the same way (SHA-256
+   `72bfa26fad3b3635c03c67bce5e0663cb019e7d7ac43bdf0f9fb23a519aff061`), in the desktop session; then delete
+   `%USERPROFILE%\desktape`.
+3. ffmpeg: `winget uninstall --id Gyan.FFmpeg -e`.
+4. The SSH server, when nothing else uses it (administrator): `Stop-Service sshd; Set-Service sshd -StartupType
+   Disabled`, or remove the optional feature with `Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`.
+   A firewall rule added for it goes with `Remove-NetFirewallRule -Name <the rule's name>`; the name is in
+   `Get-NetFirewallRule -DisplayGroup "OpenSSH*"`.
 
 ## Pitfalls
 

@@ -5161,7 +5161,9 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
             doctor_mac(rows, video, which, exists, how, perms, version)
         elif osname != "win32":
             rows.append((False, "Windows or macOS",
-                         "--local drives the driver on this machine, which must be Windows or macOS"))
+                         "--local drives the driver on this machine, which must be Windows or macOS; this machine "
+                         "can drive another one: run `desktape doctor` without --local, then `desktape doctor --target "
+                         "NAME` for the Windows or macOS machine"))
         else:
             rows.append((exists(os.path.expandvars(EXE)), "Cua Driver 0.34.1", os.path.expandvars(EXE)
                          if exists(os.path.expandvars(EXE)) else how("driver")))
@@ -5201,6 +5203,17 @@ def doctor_browsers(host, cua=None):
             cua.close()
 
 
+def doctor_verdict(missing, target_checked):
+    """install-cold-read: the last line never says more than was checked, and names the next command."""
+    if missing:
+        return f"{len(missing)} missing: install each with the command shown, then run doctor again"
+    if target_checked:
+        return "everything is in place"
+    return ("this computer is ready to drive; no target was checked. Next: `desktape doctor --target NAME` for a "
+            "machine you have paired, or `desktape pair NAME --os windows` (or --os macos) to set up a new one; "
+            "`desktape doctor --local` when the program runs on this Windows or macOS computer")
+
+
 def cmd_doctor(a):
     rows = doctor_report(a.local, a.video)
     if not a.local and (a.host or a.target or host_default()):     # a named target: what it needs, over SSH
@@ -5212,14 +5225,16 @@ def cmd_doctor(a):
             rows.append((bool(ff), f"ffmpeg on {host}", ff or INSTALL["ffmpeg"]["darwin" if t.mac else "win32"]
                          + " (run it on that machine)"))
         except (Exception, SystemExit) as e:
-            rows.append((False, f"target {host or a.host or a.target}", f"not reachable: {e}"))
+            rows.append((False, f"target {host or a.host or a.target}", f"not reachable: {e}. Next: `desktape "
+                         "targets` lists the known names; `desktape pair NAME --check` tests the key login; a new "
+                         "machine: `desktape pair NAME --os windows` (docs/pairing.md)"))
         if host:
             rows += doctor_browsers(host)
     for ok, piece, detail in rows:
         print(f"{'ok     ' if ok else 'MISSING'}  {piece}: {detail}")
     missing = [p for ok, p, _ in rows if not ok]
-    print("everything is in place" if not missing else
-          f"{len(missing)} missing: install each with the command shown, then run doctor again")
+    target_checked = a.local or any(p.startswith(("ffmpeg on ", "target ")) for _, p, _ in rows)
+    print(doctor_verdict(missing, target_checked))
     logger.info("doctor: %d checked, %d missing%s", len(rows), len(missing), f" ({', '.join(missing)})" if missing else "")
     return 0 if not missing else 1
 
@@ -8538,6 +8553,13 @@ def selftest():
     ok, _, said = doctor_report(which=lambda x: None, exists=lambda p: p.endswith(os.path.join(".local", "bin", "uv.exe")),
                                 platform="win32")[2]
     assert ok and "not on this shell's PATH" in said, said
+    # install-cold-read: doctor says what it did not check, and a dead end names the way on
+    assert doctor_verdict([], True) == "everything is in place"
+    said = doctor_verdict([], False)
+    assert "no target was checked" in said and "doctor --target NAME" in said and "pair NAME --os windows" in said, said
+    assert doctor_verdict(["uv"], False).startswith("1 missing"), doctor_verdict(["uv"], False)
+    _, _, said = doctor_report(local=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: True, platform="linux")[-1]
+    assert "without --local" in said and "doctor --target NAME" in said, said
     selftest_macos()
     selftest_tidy()
     selftest_record()

@@ -12,6 +12,17 @@ and authoring tapes belong to the `desktape` skill.
 **Answer in the person's language.** Every user-facing block below has a Hungarian (**HU**) and an English (**EN**)
 version with the same facts: Hungarian first. No jargon to the person beyond „tape”, „Cua Driver” and „SSH”.
 
+## 0. Can this Claude run it?
+
+desktape runs commands, so it needs a Claude with a shell: Claude Code, or Claude Desktop's Code tab. In plain Chat
+(or wherever you cannot run a command), do not try; say so:
+
+> **HU:** A desktape parancsokat futtat, ezért a Claude Desktop **Code** fülén vagy a Claude Code-ban működik. Nyisd
+> meg ott, és kérdezd meg újra: „hogyan kezdjem?”
+>
+> **EN:** desktape runs commands, so it works in Claude Desktop's **Code** tab or in Claude Code. Open it there and
+> ask again: "how do I start?"
+
 ## 1. Which machine is driven?
 
 Ask once, if it is not clear: is the program on **this** computer, or on another one reached over SSH? That decides
@@ -33,6 +44,10 @@ desktape doctor --target NAME      # the program runs on another machine: this c
 The plugin puts `desktape` on the PATH. Where it is not found, call `uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" …`
 (PowerShell: `uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py" …`).
 
+Where `${CLAUDE_PLUGIN_ROOT}` is not set in your shell, find the plugin folder first: the `installPath` of `aiplus-desktape` in
+`~/.claude/plugins/installed_plugins.json` (Windows: `%USERPROFILE%\.claude\plugins\installed_plugins.json`).
+The documents this skill cites (`docs/…`, `TROUBLESHOOTING.md`) are in that folder too.
+
 If `uv` itself is missing, look in `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) first; otherwise it
 is the first thing to install (`winget install --id astral-sh.uv -e` or `brew install uv`), with the person's yes.
 
@@ -50,8 +65,14 @@ then ask:
 > the target's desktop session: I will walk you through it. Shall I start?
 
 Then follow the `desktape` skill §1: one command at a time, each approved in its permission prompt, never chained,
-never a downloaded script piped into a shell; run `doctor` again until it says `everything is in place`. Stop and ask
+never a downloaded script piped into a shell; run `doctor` again until nothing is missing. Without a target,
+`doctor` ends with "this computer is ready to drive; no target was checked": that is the controller done, and its
+line names the next command (`doctor --target NAME`, or `pair NAME --os windows|macos` for a new machine). Stop and ask
 for an administrator, a restart, or the Cua Driver install in the desktop session.
+
+The Cua Driver goes on the driven machine, in its desktop session: on Windows `docs/windows-setup.md` §2 (or
+`docs/setup-target.md` step 3, for the Claude on that machine); on macOS `bash macos/cua-setup.sh`, as
+`docs/macos-setup.md` step 2 says.
 
 On macOS the driver needs four approvals that only a person at the screen can give (Accessibility, Screen Recording,
 Automation of System Events, direct capture). Never grant them to SSH, Terminal or a shell:
@@ -105,5 +126,5 @@ measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 
 ## 7. Close
 
-When `doctor` says `everything is in place`, hand over to the `desktape` skill: pick or record a tape and run it in
+When `doctor` says `everything is in place` (a target or `--local` was checked), hand over to the `desktape` skill: pick or record a tape and run it in
 test mode first.

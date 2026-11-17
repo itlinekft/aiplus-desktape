@@ -35,27 +35,43 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 
 Állapot: korai verzió. A tape formátuma és a parancsok még változhatnak.
 
-### Mi kell hozzá
+### Mielőtt elkezded
 
-- **A vezérelt gépen:** Windows 11 vagy macOS, a Cua Driver, SSH-belépés kulccsal és az ffmpeg (kötelező: a felvétel és a feliratok ezzel készülnek).
-- **Ahonnan vezérled:** Linux, Windows vagy macOS. A Pythont és a többi eszközt a `uv` hozza magával.
-- **Futás közben:** Windowson nyitva kell lennie egy RDP-ablaknak, macOS-en a képernyő nem lehet zárolva.
+**Két szerep, lehet egy gép is.** A **vezérlő gép** az, ahol a Claude és a desktape fut. A **vezérelt gép** az, ahol
+a program fut, amit kezelni kell. Ha a program a saját gépeden van, a kettő ugyanaz, és nem kell SSH.
+
+- **Claude, fizetős előfizetéssel.** A pluginokhoz Pro vagy magasabb Claude-előfizetés kell. A desktape-nek
+  parancsokat kell futtatnia, ezért a **Claude Desktop Code fülén** vagy a **Claude Code**-ban működik. A sima Chat
+  nem tud parancsot futtatni, a Cowork-öt még nem próbáltuk ki. Letöltés: [claude.ai/download](https://claude.ai/download)
+  (Claude Desktop), a Claude Code telepítése: [code.claude.com/docs/en/setup](https://code.claude.com/docs/en/setup).
+- **A vezérlő gép:** Windows, macOS vagy Linux. Egyetlen eszköz kell rá, a [uv](https://docs.astral.sh/uv/), ez hozza
+  a Pythont és a többit. Ha hiányzik, a Claude megmondja a telepítő parancsát, és a jóváhagyásod után telepíti.
+- **A vezérelt gép:** Windows 10 vagy 11, vagy macOS. Rá kerül a Cua Driver (rögzített verzió, ellenőrzött hash-sel),
+  az ffmpeg (kötelező: a felvétel és a feliratok ezzel készülnek), és ha másik gépről vezérled, egy SSH-szerver,
+  csak a helyi hálózatról vagy VPN-ről elérhetően.
+- **Egyszer egy ember a vezérelt gépnél, rendszergazdai joggal:** az SSH-szerver telepítéséhez (Windows UAC), macOS-en
+  a Cua Driver engedélyeihez a Rendszerbeállításokban. Ezt senki nem teheti meg helyetted, a Claude sem.
+- **Futás közben:** Windowson nyitva kell lennie egy RDP-ablaknak a vezérelt gép felé, macOS-en a képernyő nem lehet
+  zárolva.
 
 ### Telepítés
 
-- **Claude Desktop:** Customize › Plugins › Add › Add marketplace, ide írd be: `itlinekft/aiplus-plugins`, majd
-  add hozzá az AI+ desktape-et. A desktape saját piactere is működik: `https://github.com/itlinekft/aiplus-desktape.git`.
-- **Claude Code:** `claude plugin marketplace add itlinekft/aiplus-plugins`, utána
-  `claude plugin install aiplus-desktape@aiplus-plugins`.
+1. **A plugin, a vezérlő gépen.** Claude Desktopban: Customize › Plugins › Add › Add marketplace, ide írd be:
+   `itlinekft/aiplus-plugins`, majd Sync, és az AI+ desktape kártyán Add. Claude Code-ban:
+   `claude plugin marketplace add itlinekft/aiplus-plugins`, utána `claude plugin install aiplus-desktape@aiplus-plugins`.
+2. **Kérdezd meg a Claude-ot (a Code fülön): „hogyan kezdjem?”** Lefuttatja a `desktape doctor` ellenőrzést, ami
+   semmit nem telepít, csak megmondja, mi hiányzik és mivel pótolható. Minden letöltésnél megmondja a forrást, és csak
+   a jóváhagyásod után telepít.
+3. **Ha a program egy másik gépen fut,** azt a gépet egyszer be kell kötni (lent).
 
-Első lépés: kérdezd meg a Claude-ot, „hogyan kezdjem?”. Megnézi, mi hiányzik a gépről, megmondja, honnan jön
-minden letöltés, és csak a jóváhagyásod után telepít.
+A desktape saját piactere is működik, ha az ITLine-é nem elérhető: `https://github.com/itlinekft/aiplus-desktape.git`.
 
 ### Új vezérelt gép bekötése
 
 Ha az új gépen van Claude (Claude Code, vagy a Claude Desktop Code füle), azt kérd meg, hogy állítsa be:
 
-1. A vezérlő gépen: `desktape.py pair <név> --os windows`. Ez a géphez külön kulcsot készít, és kiír egy kérést.
+1. A vezérlő gépen: `desktape pair <név> --os windows` (Macnél `--os macos`). Ez a géphez külön kulcsot készít, és
+   kiír egy kérést.
 2. Ezt a kérést másold be az új gép Claude-jának. Ő végigmegy a [beállítási útmutatón](docs/setup-target.md):
    - SSH-szerver, csak a helyi hálózatról vagy VPN-ről;
    - a vezérlő kulcsa;
@@ -63,10 +79,20 @@ Ha az új gépen van Claude (Claude Code, vagy a Claude Desktop Code füle), azt
    - ffmpeg.
 
    Minden lépés előtt megmutatja, mit csinál, és rákérdez. A végén jelentést ad a gép címével.
-3. A vezérlőn: `desktape.py pair <név> --host <user>@<cím>`, utána `desktape.py pair <név> --check`.
+3. A vezérlőn: `desktape pair <név> --host <user>@<cím>`, utána `desktape pair <név> --check`.
 
-Windowsra és macOS-re szól. Linux vezérelt gépként még nem támogatott. Élesen még nem próbáltuk ki, a mérés
-folyamatban van ([amit mértünk](docs/MEASURED.md)).
+Ha az új gépen nincs Claude, ugyanezt kézzel is végig lehet csinálni: [Windows](docs/windows-setup.md),
+[macOS](docs/macos-setup.md) (angolul).
+
+Windowsra és macOS-re szól, Linux vezérelt gépként még nem támogatott. Így állítottunk be egy Windows 10-es gépet
+2026-11-07-én; macOS-en ez az út még nincs kipróbálva ([amit mértünk](docs/MEASURED.md)).
+
+**Több gép:** egy Team vagy Enterprise Claude-szervezet adminja a szervezet beállításaiban minden tag gépére
+kiteheti a plugint (az Anthropic leírása: [code.claude.com/docs/en/plugins/org](https://code.claude.com/docs/en/plugins/org));
+desktape-pel ezt még nem mértük. Minden vezérelt gépet külön kell bekötni, saját kulccsal.
+
+**Eltávolítás:** a plugin a Customize › Plugins alatt (vagy `claude plugin uninstall aiplus-desktape`), minden
+vezérelt gépre `desktape unpair <név>`, utána a vezérelt gépen a [visszaállítás lépései](docs/setup-target.md#undo-everything).
 
 Részletesen: [használati útmutató](docs/user-guide.md) (angolul), [hibaelhárítás](TROUBLESHOOTING.md) (magyarul és
 angolul), [amit mértünk](docs/MEASURED.md).
@@ -138,39 +164,56 @@ Status: **early**. The tape format and the commands may still change.
 
 Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with the model.
 
-## Requirements
+## Before you start
 
-- **Controller (where desktape runs):** Linux, macOS, or Windows from the user's desktop session; Python 3.9+,
-  PyYAML (`pip install -r requirements.txt`), and an OpenSSH client with key login to the target.
-- **Target:** Windows (tested on Windows 11) with OpenSSH Server, Cua Driver 0.34.1 running in the user's interactive
-  session, and an ffmpeg full build (required: the driver records video through it). Step by step: [`docs/windows-setup.md`](docs/windows-setup.md).
-  Or macOS (tested on macOS 26.4, Apple Silicon) with Remote Login, Cua Driver 0.34.1 and its permissions
-  granted once by a person, and `ffmpeg-full` (required): [`docs/macos-setup.md`](docs/macos-setup.md).
-  Every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
-- **A new target with Claude on it** can set itself up: `desktape.py pair NAME --os windows` prints a request to
-  paste into that Claude, which follows [`docs/setup-target.md`](docs/setup-target.md) with the person (SSH server
-  limited to the local network or VPN, the controller's key, the pinned Cua Driver with its checksum, ffmpeg) and
-  reports the address for `pair NAME --host user@address`. Windows and macOS; Linux is not a target yet. Not yet
-  measured on a new machine.
-- An RDP client must stay connected and visible on a Windows target during a run, because Windows stops
-  rendering a minimised or disconnected session. Holding the session headless from Linux is the next change
-  (`openspec/changes/headless-session`).
-- A macOS target needs no viewer window, but its screen must be unlocked during a run: macOS hides every
-  window from Accessibility behind the lock screen.
+**Two roles, possibly one computer.** The **controller** is where Claude and desktape run. The **target** is where
+the program to drive runs. When the program is on your own computer, the two are the same and no SSH is needed.
 
-## Install as a Claude plugin
+- **Claude, on a paid plan.** Plugins need a Pro or higher Claude plan. desktape runs commands, so it works in
+  **Claude Desktop's Code tab** or in **Claude Code**. Plain Chat cannot run commands; Cowork is not tested yet.
+  Get Claude Desktop at [claude.ai/download](https://claude.ai/download), Claude Code at
+  [code.claude.com/docs/en/setup](https://code.claude.com/docs/en/setup).
+- **The controller:** Windows, macOS or Linux. The one tool it needs is [uv](https://docs.astral.sh/uv/), which brings
+  Python and PyYAML (`uv run desktape.py`). When it is missing, Claude names its install command and runs it after
+  your yes. Without uv: Python 3.9+ and `pip install --user -r requirements.txt`.
+- **The target:** Windows 10 or 11, or macOS (tested on macOS 26.4, Apple Silicon). It gets Cua Driver 0.34.1 (pinned,
+  checksum checked), an ffmpeg full build (required: the driver records video through it), and, when another
+  computer drives it, an SSH server reachable only from the local network or a VPN.
+- **Once, a person at the target with an administrator account:** for the SSH server (Windows UAC), and on macOS for
+  Cua Driver's permissions in System Settings. Nobody can do this for you, Claude included.
+- **During a run:** on Windows an RDP client stays connected and visible (Windows stops rendering a minimised or
+  disconnected session; a headless keeper is `openspec/changes/headless-session`); on macOS the screen stays
+  unlocked (macOS hides every window from Accessibility behind the lock screen).
 
-In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste `itlinekft/aiplus-plugins` (ITLine's
-marketplace, which lists desktape) or `https://github.com/itlinekft/aiplus-desktape.git` (desktape's own), **Sync**, then
-the **Add** button on the AI+ desktape card. In Claude Code: `claude plugin marketplace add itlinekft/aiplus-plugins`, then
-`claude plugin install aiplus-desktape@aiplus-plugins`; or `/plugin marketplace add itlinekft/aiplus-desktape`, then
-`/plugin install aiplus-desktape@aiplus-desktape`.
+Every install with its version, admin need and check: [`docs/install.md`](docs/install.md).
 
-Then ask Claude "how do I start?". The `desktape-start` skill runs `desktape.py doctor`, which names what this
-machine still lacks and the one command that installs each piece (`winget`, `brew` or the tool's official
-script); Claude runs those one at a time, each approved in its permission prompt. Nothing is installed by hand:
-`uv run desktape.py` brings Python and PyYAML itself. The one exception is the Cua Driver on a Windows target, which
-is installed in the desktop session with a pinned version ([`docs/windows-setup.md`](docs/windows-setup.md) §2).
+## Install
+
+1. **The plugin, on the controller.** In Claude Desktop: **Customize › Plugins › Add › Add marketplace**, paste
+   `itlinekft/aiplus-plugins`, **Sync**, then **Add** on the AI+ desktape card. In Claude Code:
+   `claude plugin marketplace add itlinekft/aiplus-plugins`, then `claude plugin install aiplus-desktape@aiplus-plugins`.
+2. **Ask Claude (in the Code tab) "how do I start?"** The `desktape-start` skill runs `desktape doctor`, which installs
+   nothing: it names what this machine lacks and the one command that installs each piece (`winget`, `brew` or the
+   tool's official script). Claude runs those one at a time, each approved in its permission prompt.
+3. **When the program runs on another computer,** set that computer up once (below).
+
+desktape's own marketplace works too: `https://github.com/itlinekft/aiplus-desktape.git`, then
+`aiplus-desktape@aiplus-desktape`.
+
+**A new target.** `desktape pair NAME --os windows` (or `--os macos`) makes a key for it and prints a request to paste
+into the Claude on that machine, which follows [`docs/setup-target.md`](docs/setup-target.md) with the person (SSH
+server limited to the local network or VPN, the controller's key, the pinned Cua Driver with its checksum, ffmpeg)
+and reports the address for `pair NAME --host user@address`, then `pair NAME --check`. Without Claude on the target,
+the same by hand: [`docs/windows-setup.md`](docs/windows-setup.md), [`docs/macos-setup.md`](docs/macos-setup.md).
+Measured on a Windows 10 PC on 2026-11-07; not yet on a Mac. Linux is not a target yet.
+
+**Many machines.** A Team or Enterprise Claude organisation's admin can put the plugin on every member's machine
+through managed settings ([code.claude.com/docs/en/plugins/org](https://code.claude.com/docs/en/plugins/org)); not
+measured with desktape yet. Each target is paired on its own, with its own key.
+
+**Uninstall:** remove the plugin in Customize › Plugins (or `claude plugin uninstall aiplus-desktape`), `desktape
+unpair NAME` for each target, then the target's own steps: [`docs/setup-target.md`](docs/setup-target.md#undo-everything).
+
 When something fails: [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md). What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md).
 
 ## Use

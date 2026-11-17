@@ -341,20 +341,29 @@ desktape.py run tape.yaml --mode video</code></pre>
 
   <section>
     <h2>Get started</h2>
-    <pre><code>git clone https://github.com/itlinekft/aiplus-desktape && cd aiplus-desktape
-pip install -r requirements.txt
-python3 desktape.py --selftest                       # offline, no host needed
-export DESKTAPE_HOST=user@windows-host
-python3 desktape.py look --map claude-desktop-win    # what is on screen, cheaply
-python3 desktape.py run tapes/claude-desktop-add-marketplace-dialog.yaml</code></pre>
-    <p>The target needs OpenSSH Server, <a href="https://github.com/trycua/cua">Cua Driver</a> in the user's session,
-      and ffmpeg for video: <a href="https://github.com/itlinekft/aiplus-desktape/blob/main/docs/windows-setup.md">Windows setup</a>.</p>
+    <p><b>Before you start:</b> Claude on a Pro or higher plan, in Claude Desktop's Code tab or in Claude Code (plain
+      Chat cannot run commands). The program to drive runs on Windows 10 or 11, or macOS: on your own computer, or on
+      another one that a person with an administrator account sets up once.</p>
+    <ol>
+      <li>In Claude Desktop: <b>Customize › Plugins › Add › Add marketplace</b>, paste <code>itlinekft/aiplus-plugins</code>,
+        <b>Sync</b>, then <b>Add</b> on the AI+ desktape card. In Claude Code:
+        <code>claude plugin marketplace add itlinekft/aiplus-plugins</code>, then
+        <code>claude plugin install aiplus-desktape@aiplus-plugins</code>.</li>
+      <li>Ask Claude <b>"how do I start?"</b> It runs <code>desktape doctor</code>, which installs nothing: it names what
+        is missing and where each piece comes from, and installs only after your yes.</li>
+      <li>Another computer to drive? <code>desktape pair NAME --os windows</code> prints a request to paste into the Claude
+        on that machine, which sets it up with the person:
+        <a href="https://github.com/itlinekft/aiplus-desktape/blob/main/docs/setup-target.md">the guide it follows</a>.</li>
+    </ol>
+    <p>Everything, step by step: the <a href="https://github.com/itlinekft/aiplus-desktape#readme">README</a> (Hungarian
+      and English). Developers: <code>git clone</code>, then <code>uv run desktape.py --selftest</code>.</p>
   </section>
 
   <section>
     <h2>Status</h2>
-    <p>Early: the tape format and the commands may still change. Next: a headless session keeper (FreeRDP on
-      Xvfb, so a run needs no RDP window), desktape as a local MCP server for Claude Desktop, and macOS targets.</p>
+    <p>Early: the tape format and the commands may still change. Windows and macOS targets work; Linux is not
+      a target yet. Next: a headless session keeper (FreeRDP on Xvfb, so a run needs no RDP window), and desktape as a local MCP
+      server for Claude Desktop.</p>
   </section>
 
   <footer>

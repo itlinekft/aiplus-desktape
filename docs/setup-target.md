@@ -5,7 +5,8 @@ Claude with a shell). A person on another computer, the **controller**, runs des
 this one over SSH: its screen, mouse and keyboard, through Cua Driver. The person at this computer pasted you a
 request with this page's address and **one pairing line**. Follow this page with them.
 
-desktape itself is **not** installed here: it runs on the controller. This computer needs an SSH server, the
+desktape itself is **not** installed here: it runs on the controller (a target that has desktape can take the
+line with `pair --accept` instead, `pairing.md` §2). This computer needs an SSH server, the
 controller's line, Cua Driver at the pinned version, and ffmpeg.
 
 ## Rules for you
