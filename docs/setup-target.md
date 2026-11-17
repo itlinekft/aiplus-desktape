@@ -92,12 +92,12 @@ Set-Service sshd -StartupType Automatic
 Start-Service sshd
 ```
 
-Limit the firewall rule the feature made to the local subnet, plus the controller's VPN addresses from `from=` if
-there are any (replace the example):
+Limit the firewall rule the feature made to the local subnet plus every address in the line's `from=` (the
+controller's own addresses: its VPN address, and its LAN address when this computer is a VM behind a port forward,
+whose local subnet is not the controller's). Replace the example addresses:
 
 ```powershell
-Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -RemoteAddress LocalSubnet                      # local network only
-Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -RemoteAddress LocalSubnet,100.101.102.103      # local + VPN
+Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -RemoteAddress LocalSubnet,10.0.0.12,100.101.102.103   # from=
 Get-NetFirewallRule -Name OpenSSH-Server-In-TCP | Get-NetFirewallAddressFilter                  # check
 ```
 

@@ -5,6 +5,14 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-18
+
+### Fixed
+- `windows/setup-target.ps1` narrowed an open SSH firewall rule to `LocalSubnet` plus the VPN addresses only. A
+  controller that reaches the target from outside its subnet (a VM behind a port forward) would have been locked
+  out. The rule now also admits every address in the pairing line's `from=`; the manual step in
+  `docs/setup-target.md` says the same. Found in a dry run of 0.7.0 on the test VM, before any rule was changed.
+
 ## [0.7.0] - 2026-11-18
 
 ### Added

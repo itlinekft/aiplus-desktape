@@ -15,8 +15,10 @@ The pairing line is checked exactly as `pair --accept` checks it: the fixed opti
 `desktape-pair-<name>@<controller>` comment, and `from=` holding only local-network or VPN addresses. The fingerprint
 is printed to compare with the controller's.
 
-The firewall rule is narrowed only when it allows `Any`: to `LocalSubnet` plus the controller's VPN addresses from
-`from=`. A rule already narrower gets the VPN addresses added. `-KeepFirewall` leaves it alone, for a VM behind a
+The firewall rule is narrowed only when it allows `Any`: to `LocalSubnet` plus every address in `from=`. A rule
+already narrower gets the `from=` addresses added. `LocalSubnet` alone is not enough: measured on the test VM (a
+dry run of 0.7.0), the controller reaches a VM through a port forward from outside the VM's subnet, and the narrowed
+rule would have locked it out. `-KeepFirewall` leaves it alone, for a VM behind a
 port forward whose controller packets arrive from the host rather than the subnet.
 
 The ACL of `administrators_authorized_keys` is set by SID (`*S-1-5-32-544`, `*S-1-5-18`): measured on a Hungarian

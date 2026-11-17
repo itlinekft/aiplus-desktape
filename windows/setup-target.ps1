@@ -16,7 +16,7 @@
 #
 # What it does, each step skipped when it is already in place:
 #   1. OpenSSH Server (Microsoft's optional feature), automatic start, firewall rule limited to the local subnet and
-#      the controller's VPN addresses   [elevated]
+#      the controller's own addresses from the line   [elevated]
 #   2. the controller's one line: the user's authorized_keys, or administrators_authorized_keys for an
 #      administrator   [elevated for an administrator]
 #   3. Cua Driver 0.34.1 from the pinned GitHub release, its install.ps1 checked against the SHA-256 below,
@@ -108,7 +108,9 @@ function Get-FirewallScope {
 }
 
 function Want-FirewallScope($info) {
-    return @('LocalSubnet') + $info.Vpn
+    # the controller's own addresses from from= too: a VM behind a port forward sees the controller from outside its
+    # local subnet, and LocalSubnet alone would lock it out (target-installer D1)
+    return @(@('LocalSubnet') + $info.Addrs | Select-Object -Unique)
 }
 
 function Get-SshState($info) {
@@ -117,8 +119,8 @@ function Get-SshState($info) {
     $want = Want-FirewallScope $info
     $scopeOk = $false
     if ($scope) {
-        $missing = @($want | Where-Object { $scope -notcontains $_ })
-        $scopeOk = ($scope -notcontains 'Any') -and ($missing.Count -eq 0 -or ($scope -notcontains 'LocalSubnet'))
+        $missing = @($info.Addrs | Where-Object { $scope -notcontains $_ })
+        $scopeOk = ($scope -notcontains 'Any') -and ($missing.Count -eq 0)
     }
     if ($KeepFirewall) { $scopeOk = $true }
     return @{
@@ -170,7 +172,7 @@ function Invoke-ElevatedPart($info) {
         $out.Add('firewall: no OpenSSH-Server-In-TCP rule; left as it is (check the firewall by hand)')
     } elseif (-not (Get-SshState $info).ScopeOk) {
         $want = Want-FirewallScope $info
-        if ($scope -contains 'Any') { $new = $want } else { $new = @($scope + $want | Select-Object -Unique) }
+        if ($scope -contains 'Any') { $new = $want } else { $new = @($scope + $info.Addrs | Select-Object -Unique) }
         Set-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -RemoteAddress $new
         $out.Add('firewall: OpenSSH-Server-In-TCP was ' + ($scope -join ',') + ', now ' + ($new -join ','))
     }

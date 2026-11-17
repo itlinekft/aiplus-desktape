@@ -566,15 +566,16 @@ desktape at the change's working tree. A throwaway ed25519 key made for the test
 | the same with `from=` naming other addresses than the controller's | refused; sshd's log: "correct key but not from a permitted host" |
 | asked once, no `-Yes`: stdin closed (an SSH command) / the answer `n` / the answer `y`, then `n` to the screen question | first version: with stdin closed it went on and added the key (`$null -notmatch` is not `$true`); fixed: "Not confirmed: nothing was changed", exit 2 / the same / the key added, the screen left as it was |
 | exit codes (`cmd /v:on`, `!errorlevel!`): no answer / a bad line / `-Yes` with everything in place | 2 / 1 / 0 |
+| the command `pair` prints, from the `v0.7.0` tag, `-DryRun` after the `-Pair` value, in PowerShell 5.1 | downloaded, the hash matched, the plan printed; with a changed hash: `STOP: the download is not the same as the controller copy; nothing was run` |
+| that plan without `-KeepFirewall` (0.7.0) | `Any -> LocalSubnet`: the controller comes from outside the VM's subnet, so this would have locked it out; 0.7.1 plans `Any -> LocalSubnet,<the controller's address>` |
 
 **The skill's command form (Linux controller, Claude Code, `--plugin-dir` this tree, a headless Haiku run in an
 empty folder):** the skill's `uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" doctor --local` arrived as
 `uv run --quiet "<the plugin folder>/desktape.py" doctor --local` and ran (`doctor`'s Linux answer, exit 1).
 
 Not measured: a UAC prompt itself (the VM has UAC off); a first install of OpenSSH, Cua Driver or ffmpeg through the
-script; the firewall change (left alone with `-KeepFirewall`: the VM is reached through a port forward); the
-download from the `v0.7.0` tag before it existed; `macos/setup-target.sh` on a Mac (only `bash -n`); the skill's
-form in PowerShell or Git Bash.
+script; the firewall change (left alone with `-KeepFirewall`: the VM is reached through a port forward); `macos/setup-target.sh`
+on a Mac (only `bash -n`); the skill's form in PowerShell or Git Bash.
 
 ## Not tested yet
 
