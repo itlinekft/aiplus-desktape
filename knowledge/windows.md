@@ -74,6 +74,12 @@ read back):
   (`bizx`, `megjx`, `DATUM`, `KOD`) and their values, and the program's own list grids expose every cell's
   value: a booked entry can be read back by value, without a screenshot. Buttons (`Mentés`, `Új számlasor`)
   take an `act` click by label.
+- **A big list grid needs a longer read, and its current row hides its values.** A trial-balance grid of about
+  250 cells ran out the driver's default 1 s tree budget ("PARTIAL TREE … 0 nodes"); `get_window_state` with
+  `timeout_ms: 10000` read it whole. Its cells come back in tree order, not row order: group them by their
+  frame's `y`. The row that has the focus reported every cell as 0; select another row and read again for it.
+  Two text columns (account number and name) did not appear in the tree at all; those came from OCR of the
+  same screen rows.
 
 ## Web pages in Edge or Chrome
 
