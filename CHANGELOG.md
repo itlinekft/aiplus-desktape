@@ -5,6 +5,28 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-18
+
+### Added
+- **A setup script for a new target** (`target-installer`): `windows/setup-target.ps1` and `macos/setup-target.sh`
+  do the steps of `docs/setup-target.md` in one run, skip what is already in place, and end with the report.
+  Windows: run in a normal (not administrator) PowerShell window, one UAC approval for the SSH server, its firewall
+  rule and an administrator's key file. Mac: Remote Login and the CuaDriver permissions stay the person's; the
+  script opens the right page. Each prints the plan and the key's fingerprint and asks once; `-DryRun` /
+  `--dry-run` stops after the plan, `-Yes` / `--yes` is for an agent that already has the person's yes.
+- `pair` prints one command per OS that downloads the script from this release's tag, runs it only when its
+  SHA-256 matches the controller's own copy, and passes the pairing line base64-encoded (PowerShell 5.1 mangles
+  quotes). The request for the target's Claude names the same command: a dry run first, then `-Yes`.
+
+### Changed
+- The plugin has no `bin/` folder any more: claude.ai's organization sync refuses a plugin that has one, and the
+  bare `desktape` command was on the Bash tool's PATH only. The skills call
+  `uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" …`, one form for every shell, and say where uv is when it is
+  not on the PATH yet.
+- `docs/setup-target.md` starts with the script; the step-by-step sections stay as the fallback. The ACL of
+  `administrators_authorized_keys` is set by SID: on a Hungarian Windows the name `Administrators` does not
+  resolve.
+
 ## [0.6.9] - 2026-11-18
 
 ### Changed

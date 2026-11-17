@@ -159,6 +159,26 @@ read back):
   session (a "please turn off the widgets and the notifications") is not that yes; ask the owner, naming each
   setting and how to undo it. Measured: 2026-10-25.
 
+## Writing a PowerShell 5.1 script for a target
+
+Measured on the Hungarian build 26300 VM while writing `windows/setup-target.ps1`, 2026-11-18:
+
+- **`"$name: text"` does not parse.** A colon right after a variable inside a double-quoted string reads as a
+  drive-qualified variable (`$env:` style) and the whole file fails to parse. Write `"${name}: text"`. Check a
+  script with `[System.Management.Automation.Language.Parser]::ParseFile(path, [ref]$null, [ref]$errors)` on the
+  target before running it.
+- **`$null -notmatch 'x'` is not `$true`.** It returns an empty result, so `if ($answer -notmatch '^y$') { stop }`
+  goes on when `$answer` is `$null`. `Read-Host` returns `$null` when stdin is closed (an SSH command, an agent's
+  shell). Cast first: `if (-not ([string]$answer -match '^y$')) { stop }`.
+- **Group names are translated; SIDs are not.** `icacls … /grant "Administrators:F"` fails on a Hungarian Windows
+  (the group is „Rendszergazdák”) with a mapping error; `/grant "*S-1-5-32-544:F" /grant "*S-1-5-18:F"` works on
+  any language. Check `$LASTEXITCODE` after `icacls`: piping it to `Out-Null` hides the failure.
+- **With UAC off (`EnableLUA=0`) every window of an administrator is elevated.** A script that refuses an elevated
+  window refuses every window there; `Start-Process -Verb RunAs` gives no prompt. Read `EnableLUA` from
+  `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System` and run the elevated part in place.
+- **`%errorlevel%` in a one-line cmd command is expanded before the line runs**, so `prog & echo %errorlevel%` over
+  SSH prints the code from before `prog`. Use `cmd /v:on /c "prog & echo !errorlevel!"`.
+
 ## A locked console: windows are listed, but nothing can be seen or typed
 
 - When the console session locks (idle lock, or anything that brings up the sign-in screen), the driver keeps

@@ -14,14 +14,17 @@ measured, not to click around yourself.
 ## The command
 
 ```bash
-desktape doctor --local          # the plugin puts `desktape` on the PATH; run folders go to ./desktape-runs
+uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" doctor --local     # run folders go to ./desktape-runs
 ```
 
-Nothing to set up per call. If `desktape` is not found (a shell without the plugin's `bin/` on its PATH), call it
-by its path: `uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" …` (PowerShell: `uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py"
-…`). `uv` brings Python and PyYAML itself; nothing else is installed by hand. If `uv` is not found, look in
-`~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) before installing it: uv's installers put it there, and a
-running shell may not have that folder on its PATH yet. Call it by its full path then.
+**Below, `desktape …` is short for `uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" …`: write the whole form
+every time.** Claude Code puts the plugin's folder into it when it loads this skill, and the same line runs in Bash,
+Git Bash, PowerShell and cmd. There is no bare `desktape` command: the plugin ships no `bin/` folder, since
+claude.ai's organization sync refuses a plugin that has one. `uv` brings Python and PyYAML itself; nothing else is
+installed by hand. If `uv` is not found, look for it before installing it, and call it by its full path in place of
+`uv`: `~/.local/bin/uv` (Windows: `%USERPROFILE%\.local\bin\uv.exe`, or after a winget install
+`%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe`). Its installers put it there, and a running shell may not have that
+folder on its PATH yet.
 
 ## 1. Check first, every time on a new machine
 

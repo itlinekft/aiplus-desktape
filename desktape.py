@@ -4802,23 +4802,78 @@ def cmd_pair(a):
     else:                                  # target-setup-guide D3: the address comes back in the target's report
         print(f"target {a.name!r}: no --host yet, so not added to {path}; when the target's report gives its address:\n"
               f"  desktape.py pair {a.name} --host <user>@<address> --os <windows|macos>")
-    print(f"\nOn {a.name}, accept this ONE line (the target's own `pair --accept`, or the user's authorized_keys):\n\n{line}\n")
+    oses = [a.os] if a.os else ["windows", "macos"]
+    print(f"\nThe quick way, on {a.name} itself (target-installer): paste ONE command into a normal "
+          + ("PowerShell window (not as administrator)" if oses == ["windows"] else "Terminal" if oses == ["macos"]
+             else "PowerShell window (Windows, not as administrator) or Terminal (Mac)")
+          + ". It downloads the setup script of this desktape version, checks it against this computer's own copy, "
+            "shows the plan and the key's fingerprint and asks once, then sets the machine up: one UAC approval on "
+            "Windows; on a Mac, Remote Login and the permissions stay the person's.\n")
+    for o in oses:
+        print(f"[{o}]\n{setup_command(o, line)}\n")
     print(f"Or paste this to the Claude on {a.name} (Claude Code, or Claude Desktop's Code tab):\n")
-    print(setup_request(a.name, line))
+    print(setup_request(a.name, line, oses))
+    print(f"\nBy hand instead: accept this ONE line (the target's own `pair --accept`, or the user's authorized_keys):"
+          f"\n\n{line}\n")
     print(f"\nThen: desktape.py pair {a.name} --check      Undo: desktape.py unpair {a.name}")
     return 0
 
 
-def setup_request(name, line):
-    """target-setup-guide: the request a person pastes into the Claude on the new target (Hungarian first)."""
+def plugin_version():
+    """The plugin's version, from its manifest: the release tag the setup scripts are downloaded from."""
+    try:
+        return json.load(open(os.path.join(HERE, ".claude-plugin", "plugin.json"), encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError) as e:
+        logger.warning("no plugin version in .claude-plugin/plugin.json: %s", e)
+        return "main"
+
+
+SETUP_FILES = {"windows": ["windows/setup-target.ps1"], "macos": ["macos/setup-target.sh", "macos/cua-setup.sh"]}
+RAW_URL = "https://raw.githubusercontent.com/itlinekft/aiplus-desktape"
+
+
+def file_sha256(rel):
+    return hashlib.sha256(open(os.path.join(HERE, rel), "rb").read()).hexdigest()
+
+
+def setup_command(osname, line, version=None):
+    """target-installer D2: one command for the target that downloads the setup script of this desktape release,
+    checks it against this controller's own copy (SHA-256), and runs it with the pairing line base64-encoded."""
+    tag = f"v{version or plugin_version()}"
+    b64 = base64.b64encode(line.encode("ascii")).decode()
+    if osname == "windows":
+        rel = SETUP_FILES["windows"][0]
+        return (f"$d=\"$env:USERPROFILE\\desktape\"; New-Item -ItemType Directory -Force $d | Out-Null; "
+                "[Net.ServicePointManager]::SecurityProtocol='Tls12'; "
+                f"Invoke-WebRequest {RAW_URL}/{tag}/{rel} -OutFile $d\\setup-target.ps1 -UseBasicParsing; "
+                f"if ((Get-FileHash $d\\setup-target.ps1).Hash -eq '{file_sha256(rel)}') "
+                f"{{ powershell -NoProfile -ExecutionPolicy Bypass -File $d\\setup-target.ps1 -Pair {b64} }} "
+                "else { 'STOP: the download is not the same as the controller copy; nothing was run' }")
+    sums = " ".join(f"'{file_sha256(r)}  {os.path.basename(r)}'" for r in SETUP_FILES["macos"])
+    gets = " && ".join(f"curl -fsSLO $u/{os.path.basename(r)}" for r in SETUP_FILES["macos"])
+    return (f"mkdir -p ~/desktape && cd ~/desktape && u={RAW_URL}/{tag}/macos && {gets} && "
+            f"printf '%s\\n' {sums} | shasum -a 256 -c - && bash setup-target.sh --pair {b64}")
+
+
+def setup_request(name, line, oses=("windows", "macos")):
+    """target-setup-guide: the request a person pastes into the Claude on the new target (Hungarian first);
+    target-installer: the quick way first, a dry run, one yes, then the run."""
+    cmds = "\n".join(f"[{o}] {setup_command(o, line)}" for o in oses)
     return (f"---\nÁllítsd be ezt a gépet desktape-célgépnek ({name}) ezen az útmutatón: {GUIDE_URL}\n"
-            "Minden lépés előtt mutasd meg, mit futtatsz és honnan, és kérdezz meg. A vezérlő párosító sora, "
-            "pontosan ezt fogadd el:\n\n"
+            "A gyors út a telepítő script: a gép rendszeréhez illő parancsot futtasd (Windowson PowerShellben), "
+            "előbb úgy, hogy a -Pair érték után beírod: -DryRun (Macen --dry-run). Mutasd meg a tervet és a kulcs "
+            "ujjlenyomatát, és egyetlen igen után futtasd -Yes (Macen --yes) kapcsolóval. A UAC-ot és a Mac "
+            "engedélyeit én hagyom jóvá.\n\n"
+            f"{cmds}\n\n"
+            "Ha a script nem megy, lépésenként az útmutató szerint; minden lépés előtt mutasd meg, mit futtatsz és "
+            "honnan, és kérdezz meg. A vezérlő párosító sora, pontosan ezt fogadd el:\n\n"
             f"{line}\n\n"
             "A végén írd ki az útmutató szerinti jelentést (gépnév, felhasználó, címek, fingerprint), azt viszem "
             "vissza a vezérlőhöz.\n"
-            f"(English: set this computer up as a desktape target following {GUIDE_URL}; show and ask before each "
-            "step; accept exactly the line above; end with the guide's report.)\n---")
+            f"(English: set this computer up as a desktape target following {GUIDE_URL}; the quick way is the setup "
+            "command above, first with -DryRun / --dry-run after the -Pair value, then after one yes with -Yes / --yes; "
+            "otherwise step by step, "
+            "show and ask before each step; accept exactly the line above; end with the guide's report.)\n---")
 
 
 PAIR_LINE = re.compile(r'from="([0-9.,]+)",' + re.escape(PAIR_OPTS) +
@@ -7197,6 +7252,17 @@ def selftest_pairing():
                 cmd_pair(argparse.Namespace(host=None, **ns))
             first = out.getvalue()
             assert GUIDE_URL in first and "Állítsd be ezt a gépet" in first and "box3" not in load_targets()["targets"], first
+            # target-installer D2: the quick way names this release's tag and the controller copy's SHA-256
+            ver = plugin_version()
+            win = setup_command("windows", "from=x")
+            assert f"/v{ver}/windows/setup-target.ps1" in win and file_sha256("windows/setup-target.ps1") in win, win
+            assert "-Pair " + base64.b64encode(b"from=x").decode() in win and '"' not in win.split("-Pair")[1], win
+            mac = setup_command("macos", "from=x")
+            assert file_sha256("macos/cua-setup.sh") in mac and "shasum -a 256 -c -" in mac and "| sh " not in mac and "| bash" not in mac, mac
+            real = next(l for l in first.splitlines() if l.startswith("from="))
+            assert setup_command("windows", real) in first and "-DryRun" in first, first
+            for rel in ("windows/setup-target.ps1", "macos/setup-target.sh", "macos/cua-setup.sh"):
+                assert open(os.path.join(HERE, rel), "rb").read().isascii(), rel
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 cmd_pair(argparse.Namespace(host="10.0.0.23", **{**ns, "user": "demo"}))

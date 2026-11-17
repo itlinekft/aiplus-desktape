@@ -1,0 +1,5 @@
+# target-installer: the setup scripts are downloaded by URL and checked against the controller's copy by
+# SHA-256, so no checkout may change their bytes (core.autocrlf on a Windows controller would).
+windows/setup-target.ps1 -text
+macos/setup-target.sh -text
+macos/cua-setup.sh -text

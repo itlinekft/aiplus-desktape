@@ -9,6 +9,36 @@ desktape itself is **not** installed here: it runs on the controller (a target t
 line with `pair --accept` instead, `pairing.md` §2). This computer needs an SSH server, the
 controller's line, Cua Driver at the pinned version, and ffmpeg.
 
+## The quick way: the setup script
+
+The request the person pasted holds a **setup command** for Windows and one for a Mac (Linux has none: follow the
+steps below). The command downloads `windows/setup-target.ps1` (Mac: `macos/setup-target.sh` with `cua-setup.sh`)
+from this repository's release tag, checks it against the controller's own copy by SHA-256, and only then runs it
+with the pairing line. The script does §1–§5 below in one go, skips every step already in place, and ends with the
+report.
+
+1. Run the person's command for this computer's system (Windows: in PowerShell) with **`-DryRun` added right after
+   the `-Pair` value** (Mac: `--dry-run`). It changes nothing and prints the key's fingerprint and its plan. Show
+   both to the person; the fingerprint must match the one on the controller's screen.
+2. One yes for the whole plan, then run the same command with **`-Yes`** in that place (Mac: `--yes`). Add
+   `-KeepAwake` (Mac: `--keep-awake`) only after a yes to keeping the screen awake.
+   - **Windows:** not as administrator (Cua Driver installs in the person's own session; the script refuses an
+     elevated window). Windows asks once for UAC: the person approves it. On a computer with UAC switched off there
+     is no prompt, and the script says so.
+   - **Mac:** as an administrator. The script opens the Sharing page for Remote Login and starts the CuaDriver
+     permission dialogs: those clicks are the person's.
+3. Pass the report it prints to the person. If the script stops (`STOP: …`) or lists a `skipped:` step, report
+   that line and do that step by hand from the section below.
+
+The person can also paste the command into PowerShell (Mac: Terminal) themselves, unchanged: the script then
+shows the plan and the fingerprint, asks once (`y`), and asks whether to keep the screen awake.
+
+A download whose hash differs stops before anything runs: that is a stop, not a retry. The log is in
+`%USERPROFILE%\desktape\setup-target.log` (Mac: `~/desktape/setup-target.log`).
+
+**Step by step instead:** when the script cannot run, or the person wants to see each step, follow the sections
+below.
+
 ## Rules for you
 
 - **Speak the person's language.** The request they pasted is Hungarian first; answer in Hungarian when they do,
@@ -91,10 +121,10 @@ append it to the file this user's SSH logins read:
 
 - **standard user:** `%USERPROFILE%\.ssh\authorized_keys` (create `.ssh` if missing);
 - **administrator:** `C:\ProgramData\ssh\administrators_authorized_keys` (elevated), then set its ACL, or sshd
-  ignores it:
+  ignores it. By SID, since the group names are translated ("Rendszergazdák" on a Hungarian Windows):
 
 ```powershell
-icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant "*S-1-5-32-544:F" /grant "*S-1-5-18:F"
 ```
 
 Show the key's fingerprint so the person compares it with the controller's screen:
@@ -220,4 +250,5 @@ The controller then runs `desktape.py pair <name> --host <user>@<address>` and `
 
 Each step's undo is listed with it. In order: the controller's `desktape.py unpair <name>` removes the line over
 SSH; then on this computer uninstall the driver (step 3), ffmpeg (step 4), turn the SSH server off (step 1), and
-set the power values back (step 5).
+set the power values back (step 5). The setup script leaves only its own folder,
+`%USERPROFILE%\desktape` (Mac: `~/desktape`), with the script and its log: delete it when it is no longer needed.

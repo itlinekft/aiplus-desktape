@@ -29,29 +29,30 @@ Ask once, if it is not clear: is the program on **this** computer, or on another
 `--local`. ffmpeg is required on the driven machine either way: `doctor` checks it, and over SSH it checks the
 named target's.
 
-**A new machine to drive, not set up yet?** `desktape pair NAME` (no address needed yet) makes its key and prints a request
-for the person to paste into the Claude on that machine; that Claude follows `docs/setup-target.md` from the public
-repository with them and reports back the address; then `desktape pair NAME --host user@address --os windows` and
+**A new machine to drive, not set up yet?** `desktape pair NAME` (no address needed yet) makes its key and prints
+one command for that machine: it downloads the setup script of this desktape version, checks it against this
+computer's own copy, and sets the machine up (Windows: one UAC approval; Mac: Remote Login and the permissions stay
+the person's). Pasted there unchanged it shows the plan and the key's fingerprint and asks once; an agent adds
+`-DryRun` after the `-Pair` value (Mac: `--dry-run`), shows the plan, then runs it with `-Yes`. `pair` also prints a request to
+paste into the Claude on that machine instead, which runs the same command or follows `docs/setup-target.md` step by
+step. Either ends with a report that gives the address; then `desktape pair NAME --host user@address --os windows` and
 `desktape pair NAME --check`. Local network and VPN both work; a public address is never paired.
 
 ## 2. Check: `doctor` installs nothing
 
 ```bash
-desktape doctor --local            # the program runs on THIS computer
-desktape doctor --target NAME      # the program runs on another machine: this computer, then that machine over SSH
+uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" doctor --local          # the program runs on THIS computer
+uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" doctor --target NAME    # on another machine: this one, then that one
 ```
 
-The plugin puts `desktape` on the PATH. Where it is not found, call `uv run "${CLAUDE_PLUGIN_ROOT}/desktape.py" …`
-(PowerShell: `uv run "$env:CLAUDE_PLUGIN_ROOT\desktape.py" …`).
-
-Where `${CLAUDE_PLUGIN_ROOT}` is not set in your shell, find the plugin folder first: the `installPath` of `aiplus-desktape` in
-`~/.claude/plugins/installed_plugins.json` (Windows: `%USERPROFILE%\.claude\plugins\installed_plugins.json`).
-The documents this skill cites (`docs/…`, `TROUBLESHOOTING.md`) are in that folder too.
+Every `desktape …` here is short for `uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" …`, the same line in every
+shell (the `desktape` skill, "The command"). The documents this skill cites (`docs/…`, `TROUBLESHOOTING.md`) are in
+`${CLAUDE_PLUGIN_ROOT}` too.
 
 If `uv` itself is missing, look in `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) first; otherwise it
 is the first thing to install, with the person's yes: `winget install --id astral-sh.uv -e` (Windows; it reaches
-the PATH of new shells only, so `doctor` also looks in winget's `Links` folder, and a restart of Claude puts it on the
-PATH), `brew install uv` (macOS), or on Linux the official script downloaded, read, then run (`doctor` prints it).
+the PATH of new shells only, so call `%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe` by its path until Claude is
+restarted), `brew install uv` (macOS), or on Linux the official script downloaded, read, then run (`doctor` prints it).
 
 ## 3. Where everything comes from, then ask
 
@@ -100,7 +101,7 @@ Automation of System Events, direct capture). Never grant them to SSH, Terminal 
 <!-- desktape:tested: the ONLY place that says what has been tried. Update this block (both languages) when a
 measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 
-> **HU, kipróbálva (2026-11-07):**
+> **HU, kipróbálva (2026-11-18):**
 > - Windows 11, Claude Desktop: a tape-ek tesztként és videóként is lefutnak, AI-modell nélkül; egy 22 lépéses
 >   importálás ellenőrzéssel együtt lefutott.
 > - Claude Code a Windows gépen, helyben: a plugin telepítése és a `doctor` rendben, egy importáló tape 22/22 lépéssel.
@@ -108,11 +109,14 @@ measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 > - Mac és Windows párosítása kulccsal: ellenőrizve, a visszavonással együtt.
 > - Új Windows 10-es gép beállítása a rajta futó Claude-dal, a `docs/setup-target.md` alapján (2026-11-07): a párosítás,
 >   a `doctor` és a `look` rendben. Macen ez az út még nincs kipróbálva.
+> - A telepítő script (`windows/setup-target.ps1`) egy Windows 11-es tesztgépen (2026-11-18): a sor ellenőrzése, a
+>   terv, a kulcs és a vele való belépés rendben; azon a gépen minden más már fent volt, és a UAC ki van kapcsolva.
+>   Macen a script még nincs kipróbálva.
 > - Linux vezérlő gépként: a mérések innen futottak.
 > - **Cowork: még nem teszteltük**, se felhőben, se a saját gépen.
 > - **Linux mint célgép: még nem működik**; Linux csak vezérelhet.
 >
-> **EN, tried so far (2026-11-07):**
+> **EN, tried so far (2026-11-18):**
 > - Windows 11, Claude Desktop: tapes run as a test and as a video, with no AI model; a 22-step import with its
 >   check passed.
 > - Claude Code on the Windows machine, locally: the plugin install and `doctor` work, an import tape ran 22/22.
@@ -120,6 +124,9 @@ measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 > - Pairing a Mac with the Windows machine by key: checked, including taking it back.
 > - A new Windows 10 PC set up by the Claude on it, from `docs/setup-target.md` (2026-11-07): pairing, `doctor` and
 >   `look` passed. Not yet tried on a Mac.
+> - The setup script (`windows/setup-target.ps1`) on a Windows 11 test machine (2026-11-18): the line check, the
+>   plan, the key and a login with it passed; everything else was already installed there, and UAC is off.
+>   Not yet tried on a Mac.
 > - Linux as the controller: the measurements ran from it.
 > - **Cowork: not tested yet**, neither in the cloud nor on the person's own computer.
 > - **Linux as a target: not supported yet**; Linux only drives.

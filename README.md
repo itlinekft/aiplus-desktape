@@ -82,24 +82,27 @@ A desktape saját piactere is működik, ha az ITLine-é nem elérhető: `https:
 
 ### Új célgép bekötése
 
-Ha az új gépen van Claude (Claude Code, vagy a Claude Desktop Code füle), azt kérd meg, hogy állítsa be:
-
 1. A vezérlő gépen: `desktape pair <név> --os windows` (Macnél `--os macos`). Ez a géphez külön kulcsot készít, és
-   kiír egy kérést.
-2. Ezt a kérést másold be az új gép Claude-jának. Ő végigmegy a [beállítási útmutatón](docs/setup-target.md):
-   - SSH-szerver, csak a helyi hálózatról vagy VPN-ről;
-   - a vezérlő kulcsa;
-   - a rögzített verziójú Cua Driver, ellenőrzött hash-sel;
-   - ffmpeg.
+   kiír egy **telepítő parancsot** meg egy kérést az új gép Claude-jának.
+2. A telepítő parancsot másold be az új gépen: Windowson egy sima (nem rendszergazdai) PowerShell ablakba, Macen a
+   Terminálba. Előbb megmutatja a tervet és a kulcs ujjlenyomatát, és csak egy `y` után kezd bele. A parancs ezt
+   teszi:
+   - letölti ennek a desktape-verziónak a telepítő scriptjét;
+   - összeveti a vezérlő saját példányával (SHA-256), és csak egyezés esetén futtatja;
+   - beállítja a gépet: SSH-szerver csak a helyi hálózatról vagy VPN-ről, a vezérlő kulcsa, a rögzített verziójú
+     Cua Driver, ffmpeg.
 
-   Minden lépés előtt megmutatja, mit csinál, és rákérdez. A végén jelentést ad a gép címével.
+   Windowson egyszer kér UAC-jóváhagyást. Macen a Remote Login bekapcsolása és a CuaDriver engedélyei a te
+   kattintásaid, ezekhez a script megnyitja a megfelelő ablakot. A végén jelentést ír a gép címével.
+   Ha az új gépen van Claude, a kérést neki is bemásolhatod: ő futtatja ugyanezt a parancsot, vagy lépésenként
+   végigmegy a [beállítási útmutatón](docs/setup-target.md).
 3. A vezérlőn: `desktape pair <név> --host <user>@<cím>`, utána `desktape pair <név> --check`.
 
-Ha az új gépen nincs Claude, ugyanezt kézzel is végig lehet csinálni: [Windows](docs/windows-setup.md),
+A lépéseket kézzel is végig lehet csinálni: [Windows](docs/windows-setup.md),
 [macOS](docs/macos-setup.md) (angolul).
 
-Windowsra és macOS-re szól, Linux célgépként még nem támogatott. Így állítottunk be egy Windows 10-es gépet
-2026-11-07-én; macOS-en ez az út még nincs kipróbálva ([amit mértünk](docs/MEASURED.md)).
+Windowsra és macOS-re szól, Linux célgépként még nem támogatott. A telepítő scriptet 2026-11-18-án egy Windows 11-es
+tesztgépen (virtuális gép) mértük, az útmutatót 2026-11-07-én egy Windows 10-es gépen; macOS-en még egyiket sem ([amit mértünk](docs/MEASURED.md)).
 
 **Több gép:** egy Team vagy Enterprise Claude-szervezet adminja a szervezet beállításaiban minden tag gépére
 kiteheti a plugint (az Anthropic leírása: [code.claude.com/docs/en/plugins/org](https://code.claude.com/docs/en/plugins/org));
@@ -229,12 +232,17 @@ Every install with its version, admin need and check: [`docs/install.md`](docs/i
 desktape's own marketplace works too: `https://github.com/itlinekft/aiplus-desktape.git`, then
 `aiplus-desktape@aiplus-desktape`.
 
-**A new target.** `desktape pair NAME --os windows` (or `--os macos`) makes a key for it and prints a request to paste
-into the Claude on that machine, which follows [`docs/setup-target.md`](docs/setup-target.md) with the person (SSH
-server limited to the local network or VPN, the controller's key, the pinned Cua Driver with its checksum, ffmpeg)
-and reports the address for `pair NAME --host user@address`, then `pair NAME --check`. Without Claude on the target,
-the same by hand: [`docs/windows-setup.md`](docs/windows-setup.md), [`docs/macos-setup.md`](docs/macos-setup.md).
-Measured on a Windows 10 PC on 2026-11-07; not yet on a Mac. Linux is not a target yet.
+**A new target.** `desktape pair NAME --os windows` (or `--os macos`) makes a key for it and prints **one setup
+command** for that machine. Paste it there, Windows into a normal (not administrator) PowerShell window, a Mac
+into Terminal: it prints the plan and the key's fingerprint and starts only after a `y`. The command downloads this desktape release's setup script, runs it only
+when its SHA-256 matches the controller's own copy, and sets the machine up: the SSH server limited to the local
+network or VPN, the controller's key, the pinned Cua Driver, ffmpeg. Windows asks for one UAC approval; on a Mac,
+Remote Login and the CuaDriver permissions stay the person's clicks. It ends with a report that gives the address
+for `pair NAME --host user@address`, then `pair NAME --check`. `pair` also prints a request for the Claude on that
+machine, which runs the same command or follows [`docs/setup-target.md`](docs/setup-target.md) step by step. By
+hand: [`docs/windows-setup.md`](docs/windows-setup.md), [`docs/macos-setup.md`](docs/macos-setup.md).
+The script was measured on a Windows 11 test VM on 2026-11-18, the guide on a Windows 10 PC on 2026-11-07; neither on
+a Mac yet. Linux is not a target yet.
 
 **Many machines.** A Team or Enterprise Claude organisation's admin can put the plugin on every member's machine
 through managed settings ([code.claude.com/docs/en/plugins/org](https://code.claude.com/docs/en/plugins/org)); not

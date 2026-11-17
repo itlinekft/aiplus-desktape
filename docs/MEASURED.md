@@ -548,6 +548,34 @@ target. desktape at the change's commits. **Change:** `install-cold-read`.
 Not measured: the winget `Links` branch with a real `uv.exe`; a fresh machine through the new README from the start;
 the one-line `claude plugin install … --marketplace …`; the managed-settings route for many machines.
 
+## 2026-11-18: the setup script on a Windows target (`target-installer`)
+
+**Machines:** the Linux controller; the Windows VM (Windows 11 Pro, Hungarian, build 26300, x86_64, an
+administrator account, UAC off) as the target, with OpenSSH Server, Cua Driver 0.34.1 and ffmpeg already in place.
+desktape at the change's working tree. A throwaway ed25519 key made for the test only, removed afterwards.
+
+| What | Result |
+|---|---|
+| `[System.Management.Automation.Language.Parser]::ParseFile` on `windows/setup-target.ps1` (PowerShell 5.1) | first run: a parse error, `"$CuaInstallSha: not run"` read as a drive-qualified variable; fixed with `${CuaInstallSha}`; then 0 errors |
+| `-Pair` holding base64 of `foobar` | `STOP: not a desktape pairing line …`, nothing changed |
+| `-DryRun` with a valid line, `-KeepFirewall` | the fingerprint, then a plan of six lines: five `skip:` (SSH server, firewall, Cua Driver, ffmpeg, screen) and one `[UAC]` (the admin key); "Dry run: nothing was changed" |
+| the elevated part, first version, ACL by name (`Administrators:F`) | `icacls` failed with a mapping error (the group is „Rendszergazdák”), the script still said `ok`; the ACL is now set by SID and a failing `icacls` fails the step |
+| the elevated part, ACL by SID | `ok`, the key added; `icacls`: only `NT AUTHORITY\SYSTEM:(F)` and `BUILTIN\Rendszergazdák:(F)` |
+| the whole script in the desktop session (a one-off scheduled task, interactive) | first: `STOP: this window runs as administrator` — with UAC off every window of an administrator is elevated; the script now runs the elevated part in its own window there; then all steps skipped, the report printed, exit 0 |
+| a login with ONLY the test key (`ssh -F /dev/null -o IdentitiesOnly=yes`), before / after the install / after removing its line | refused / accepted / refused |
+| the same with `from=` naming other addresses than the controller's | refused; sshd's log: "correct key but not from a permitted host" |
+| asked once, no `-Yes`: stdin closed (an SSH command) / the answer `n` / the answer `y`, then `n` to the screen question | first version: with stdin closed it went on and added the key (`$null -notmatch` is not `$true`); fixed: "Not confirmed: nothing was changed", exit 2 / the same / the key added, the screen left as it was |
+| exit codes (`cmd /v:on`, `!errorlevel!`): no answer / a bad line / `-Yes` with everything in place | 2 / 1 / 0 |
+
+**The skill's command form (Linux controller, Claude Code, `--plugin-dir` this tree, a headless Haiku run in an
+empty folder):** the skill's `uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py" doctor --local` arrived as
+`uv run --quiet "<the plugin folder>/desktape.py" doctor --local` and ran (`doctor`'s Linux answer, exit 1).
+
+Not measured: a UAC prompt itself (the VM has UAC off); a first install of OpenSSH, Cua Driver or ffmpeg through the
+script; the firewall change (left alone with `-KeepFirewall`: the VM is reached through a port forward); the
+download from the `v0.7.0` tag before it existed; `macos/setup-target.sh` on a Mac (only `bash -n`); the skill's
+form in PowerShell or Git Bash.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
