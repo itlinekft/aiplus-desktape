@@ -303,9 +303,42 @@ steps:
   `"1 173,23 Ft"` equals `1173.23`. It fails listing every mismatch and every row the grid lacks; a passing
   check goes into the summary's `checks`. Only the rows the grid has loaded can be compared.
 
+### Forms a program draws itself: `settle: off`, anchored points, `click_wait`
+
+Some programs draw their own form fields (a Visual FoxPro program, measured): UI Automation sees the window, its
+buttons and captions, but not the fields. Such a form is filled with Windows' own input (`key` / `type` with
+`os: true`, `into:`), one click into a field and then its keys. Three tape fields make that a plain `desktape run`:
+
+```yaml
+settle: off            # no window reads around acting steps; the window list is still checked
+click_wait: 1.5        # seconds between a click and its keys (default 0.3)
+steps:
+  - key: {key: "{HOME}${datum}", into: "Main window", os: true, at: {window: centre, dx: -232, dy: 448}}
+  - key: {key: "{HOME}{DEL 10}${code}{TAB}", into: "Main window", os: true,
+          at: {from: "@caption.code", dx: 140, dy: 6}, click_wait: 2}
+```
+
+- **`settle: off`** (YAML reads a bare `off` as false; desktape takes both). Around a `click`, `type`, `key` or `hotkey` the
+  runner then does not wait for the window to settle, does not run the effect check and does not read the tape's
+  window. It still reads the window to find what a step names (a click's selector, a `from:` anchor), still waits
+  for an `expect:` the step carries, and still lists the windows after every acting step: a message box the program
+  opens, and the tape does not name, stops the run before the next keys. The cost of skipping the reads: a click
+  that missed goes unnoticed until a later check, so end every write by reading the values back (a `check_table`,
+  an `expect`, or a read tape). Measured on a 12-step form: 5 window reads instead of 80-101, about half the time.
+- **Anchored `at`** on an `os: true` step, in pixels:
+  `{window: centre | left | right, dx, dy}` from the window's horizontal centre or edge, `dy` from its top (from its
+  bottom when negative); `{from: <selector>, dx, dy}` from the top-left corner of an element's frame (a caption
+  beside the field; `@name` comes from the map). desktape computes the screen point from the window's bounds and
+  clicks it only when it falls on that window; a point outside the window fails the step without a click. A
+  program that centres its forms in its window keeps a field at the same `window: centre` offset at any width. The
+  fraction form `at: [fx, dy]` keeps its meaning.
+- **`click_wait:`** (tape, or a step's own) is the wait between the click and the keys of one `os: true` step. A
+  field that fills itself a moment after it gets the focus needs more than the default 0.3 s.
+
 ### Tolerance: patience, toasts, names that change
 
-- After every action the runner waits until the window has settled (two equal reads, at most 5 s), and an element
+- After every action the runner waits until the window has settled (two equal reads, at most 5 s; not with
+  `settle: off`), and an element
   wait lasts the tape's `patience:` (default 30 s) unless the step gives its own `timeout:`.
 - A window with no button but a close control (an install toast, „Plugin removed.”) is logged, not an unplanned
   dialog. A window with any other button (OK included) still stops the run.

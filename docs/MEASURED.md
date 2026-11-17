@@ -501,6 +501,35 @@ The same `record` and load with segments (branch at the `record-segments` commit
 | the same with `requires-python = ">=3.9,<3.15"`, no `--python` | 5 checked, 0 missing (3.13 already in uv's store) |
 | PyPI, PyYAML 6.0.3 files | Windows wheels for cp314 and cp314t, none for cp315 |
 
+## 2026-11-17: a FoxPro form under `desktape run` (`form-replay`)
+
+**Machine:** a Windows VM (Windows build 26300, Hungarian), 1920×1080 at 100 % scale. A Visual FoxPro 9 accounting
+program (demo) with an invented company; its journal entry form has fields UI Automation cannot see. Cua Driver
+0.34.1. Controller: Linux, over SSH. **Record:** `openspec/changes/form-replay/design.md`, "Measured".
+
+```bash
+python3 desktape.py run <supplier-invoice tape>.yaml --target <vm> --var bizszam=… --var megj=… --var netto=…
+```
+
+The tape books one supplier invoice (date, voucher number, text, net amount, cost and supplier accounts; 27 % VAT
+added by the program) with `os: true` keys, points anchored to the window's centre, and three button clicks by
+UI Automation. Every booking was read back from the program's own journal list (voucher number, gross amount), and
+the trial balance's cost, VAT and supplier accounts matched the sum of the bookings at the end.
+
+| What | Result |
+|---|---|
+| reads on (today's runner), 0.3 s click wait | passed, 188 s, 83 window reads; on a just-started program 181 s, 80 reads |
+| reads on, 1.5 s | passed, 184 s, 86 reads |
+| `settle: off`, 0.3 s | passed, 92 s, 5 reads; on a just-started program 86 s, 5 reads |
+| `settle: off`, 1.5 s | passed, 102 s, 5 reads |
+| the earlier tape (separate click, pause and keys steps; window-fraction points; maximised window), reads on | passed, 289 s, 101 reads |
+| `settle: off`, 1.5 s, ten bookings: five on the maximised window, five at 1280 px wide, the same anchored points | 10/10 passed and read back right, 89-121 s each, 5 reads each |
+
+The focus loss seen on 2026-11-16/17 (a field click under `desktape run` did not take the focus, and the next keys
+erased a typed date) did not come back in any variant, so its cause is not isolated. `settle: off` halves the time
+and cuts the window reads to the click steps' own selector reads. Not measured: a display scale other than 100 %,
+and `at: {from: …}` on this program (the selftest covers it).
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

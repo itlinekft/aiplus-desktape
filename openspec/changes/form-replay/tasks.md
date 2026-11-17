@@ -2,7 +2,7 @@
 
 ## 1. Measure first
 
-- [ ] 1.1 On a Windows VM with the Visual FoxPro accounting program (demo), book one supplier invoice through a
+- [x] 1.1 On a Windows VM with the Visual FoxPro accounting program (demo), book one supplier invoice through a
   desktape tape under four variants: today's runner; today's runner with a 1.5 s click-to-keys gap; no reads
   between steps with 0.3 s; no reads with 1.5 s. Read every booking back from the program's own list. Record which
   variants lose the focus, with versions and commands, in `docs/MEASURED.md`
@@ -34,10 +34,14 @@
   window refused; the load-time refusals [REQ: A tape can replay without reading its window between steps]
   [REQ: A click point can be anchored to an element or to the window]
   [REQ: The wait between a click and its keys is a setting]
-- [ ] 3.2 Live: the supplier-invoice tape with `settle: off`, anchored points and the measured `click_wait`, ten
+- [x] 3.2 Live: the supplier-invoice tape with `settle: off`, anchored points and the measured `click_wait`, ten
   bookings under `desktape run` at two window widths, each read back; result in `docs/MEASURED.md`
   [REQ: A tape can replay without reading its window between steps]
   [REQ: A click point can be anchored to an element or to the window]
-- [ ] 3.3 `docs/tape-format.md` (the three fields, when to use them, the risk of skipping reads), `CHANGELOG.md`,
+- [x] 3.3 `docs/tape-format.md` (the three fields, when to use them, the risk of skipping reads), `CHANGELOG.md`,
   the FoxPro section of `knowledge/windows.md` points at `settle: off`
   [REQ: A tape can replay without reading its window between steps]
+
+Notes (2026-11-17): 1.1 found no variant that loses the focus (results in design.md, "Measured", and
+docs/MEASURED.md); `settle: off` stays for speed and read cost, as the proposal allowed. 3.2 used `{window: centre}`
+points; `{from: …}` is covered by the selftest only.

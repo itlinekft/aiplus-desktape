@@ -57,6 +57,10 @@ Könyvelés, …) is drawn by FoxPro and is invisible to UI Automation: open it 
 and navigate with arrows+Enter, or pixel-click it; taking a UIA snapshot closes an open dropdown, so open
 the menu and pick the item on one driver connection.
 
+A tape for such a form: `settle: off`, click points anchored to the window's centre (the program centres its forms),
+and `click_wait:` for a field that fills itself after the focus; see `docs/tape-format.md`, "Forms a program draws
+itself".
+
 Writing a whole entry with SendKeys in the same program (measured 2026-11-17, nine journal entries booked and
 read back):
 

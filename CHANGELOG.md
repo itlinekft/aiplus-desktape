@@ -6,6 +6,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- Forms a program draws itself (a Visual FoxPro program, measured) replay under `desktape run`: `settle: off` skips
+  the window reads around acting steps (the window list is still checked, so a message box stops the run), an
+  `os: true` click point can be anchored to the window's centre or edge or to an element's frame, in pixels, so it
+  survives a width change, and `click_wait:` sets the wait between a click and its keys (`form-replay`).
 - `look` reads a Chrome or Edge window a second time when the first read has no web page in it, and says when the
   page is still missing; `doctor` with a target lists a browser window whose page has no tree (`chrome-page-text`).
   Both name the cause measured on a test PC: with the display off, Chrome draws no page for any window; wake the

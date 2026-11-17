@@ -82,3 +82,24 @@ On a Windows VM with the FoxPro accounting program (demo), one booking: replay t
 form as a desktape tape under (a) today's runner, (b) today's runner with `click_wait: 1.5`, (c) `settle: off` with
 0.3 s, (d) `settle: off` with 1.5 s. Ten bookings each where feasible, and every booking read back from the
 program's own list. Record which variants lose the focus in `docs/MEASURED.md`.
+
+## Measured (task 1.1, 2026-11-17 evening)
+
+Windows VM, the Visual FoxPro accounting program (demo), the supplier-invoice form converted to a desktape tape
+(click and keys of a field in one `os: true` step, points anchored to the window's centre), one booking each, every
+one read back from the program's own journal list by voucher number and amount:
+
+| variant | warm program | just started |
+|---|---|---|
+| (a) reads on, 0.3 s | passed, 188 s, 83 window reads | passed, 181 s, 80 reads |
+| (b) reads on, 1.5 s | passed, 184 s, 86 reads | – |
+| (c) reads off, 0.3 s | passed, 92 s, 5 reads | passed, 86 s, 5 reads |
+| (d) reads off, 1.5 s | passed, 102 s, 5 reads | – |
+| the old tape (separate click / pause / keys steps, window-fraction points, maximised) under `desktape run` | passed, 289 s, 101 reads | – |
+
+The focus loss of 2026-11-16/17 did not come back in any variant, so its cause stays unisolated (that night's
+tape differed: shorter pauses, and a field whose own default arrives about 2 s after the focus, since fixed in the
+tape). What the measurement does show: the reads are not needed for the form to fill correctly, and dropping them
+halves the time and cuts the window reads from 80-101 to 5 (the click steps' own selector reads). `settle: off`
+therefore stays for speed and read cost, as the proposal allowed; `click_wait` stays for fields that fill
+themselves late. Anchored points: one tape filled the form at 1280 px wide and on the maximised window (task 3.2).

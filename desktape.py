@@ -1148,6 +1148,16 @@ def scalars(kind, step, arg):
     return step, arg
 
 
+def settle_off(tape):
+    """form-replay D1: whether the tape says `settle: off`; YAML reads a bare off/on as false/true, so both count."""
+    v = tape.get("settle", "on")
+    if v in ("off", False):
+        return True
+    if v in ("on", True):
+        return False
+    raise ValueError(f"tape: settle is on or off, not {v!r}")
+
+
 def check_form_replay(tape, plan):
     """form-replay D4: `settle`, `click_wait` and anchored `at` are checked before any tool call."""
     def wait_ok(v, where):
@@ -1155,8 +1165,7 @@ def check_form_replay(tape, plan):
             return
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
             raise ValueError(f"{where}: click_wait is a number of seconds, 0 or more, not {v!r}")
-    if tape.get("settle", "on") not in ("on", "off"):
-        raise ValueError(f"tape: settle is on or off, not {tape.get('settle')!r}")
+    settle_off(tape)
     wait_ok(tape.get("click_wait"), "tape")
     for i, (s, _) in enumerate(plan):
         kind, arg = next(iter(s.items()))
@@ -3975,7 +3984,7 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     r.planned = r.expected                            # step-outcome-check D4: the same names, right after a step
     r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
     r.patience = float(tape.get("patience", 30))      # tolerant-replay D2: settle-wait and default element waits
-    r.quiet = tape.get("settle", "on") == "off"         # form-replay D1 (values checked in check_form_replay)
+    r.quiet = settle_off(tape)                           # form-replay D1
     r.click_wait = tape.get("click_wait")               # form-replay D3
     r.cursor, r.glide_ms = tape.get("cursor", "agent"), int(tape.get("cursor_glide_ms", 500))
     bad = (f"tape: cursor is agent or person, not {r.cursor!r}" if r.cursor not in ("agent", "person") else
@@ -8559,6 +8568,7 @@ def selftest_form_replay():
     # D4: refused before any tool call
     ok_plan = [({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "centre", "dx": -120, "dy": 452}}}, None)]
     check_form_replay({"settle": "off", "click_wait": 1.5}, ok_plan)
+    assert settle_off(yaml.safe_load("settle: off")) and not settle_off({}) and not settle_off({"settle": True})
     for tape, plan, want in (
             ({"settle": "sometimes"}, [], "settle is on or off"),
             ({"click_wait": -1}, [], "click_wait is a number"),
