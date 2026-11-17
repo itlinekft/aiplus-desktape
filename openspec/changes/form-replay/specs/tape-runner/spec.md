@@ -2,8 +2,9 @@
 
 ### Requirement: A tape can replay without reading its window between steps
 A tape SHALL be able to set `settle: off`. Then, around each acting step, the runner SHALL NOT settle, SHALL NOT run
-the effect check, and SHALL NOT read the tape's window, except for a step that asks for its outcome (`expect:`) and
-for `expect` / `absent` steps. After each acting step it SHALL still list the windows, and a new titled window of the
+the effect check, and SHALL NOT read the tape's window, except to find the element a step names (a `click`
+selector, an anchored point's `from:`), for a step that asks for its outcome (`expect:`), and for `expect` / `absent`
+steps. After each acting step it SHALL still list the windows, and a new titled window of the
 tape's process that the tape does not name SHALL stop the run as an unexpected dialog. `settle` SHALL default to
 `on`, and a tape without it SHALL replay as before.
 

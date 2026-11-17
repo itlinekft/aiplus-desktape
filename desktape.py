@@ -1112,6 +1112,12 @@ def resolve(step, amap):
     if kind == "redact":
         return {kind: boxes(arg, "step redact")}, None
     step, arg = scalars(kind, step, arg)
+    at = arg.get("at") if kind in ("key", "type") and isinstance(arg, dict) else None
+    if isinstance(at, dict) and isinstance(at.get("from"), str) and at["from"].startswith("@"):   # form-replay D2
+        name = at["from"][1:]
+        if amap is None or name not in amap.get("elements", {}):
+            raise KeyError(f"step {kind}: at.from {at['from']} is not in the tape's map")
+        return {kind: {**arg, "at": {**at, "from": dict(amap["elements"][name])}}}, None
     if kind in MAP_KINDS and isinstance(arg, str) and arg.startswith("@"):   # `type: "@gmail.com"` is text
         name = arg[1:]
         if amap is None:
@@ -1140,6 +1146,39 @@ def scalars(kind, step, arg):
         arg = {**arg, **{k: str(arg[k]) for k in ("label", "text") if num(arg.get(k))}}
         return {kind: arg}, arg
     return step, arg
+
+
+def check_form_replay(tape, plan):
+    """form-replay D4: `settle`, `click_wait` and anchored `at` are checked before any tool call."""
+    def wait_ok(v, where):
+        if v is None:
+            return
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise ValueError(f"{where}: click_wait is a number of seconds, 0 or more, not {v!r}")
+    if tape.get("settle", "on") not in ("on", "off"):
+        raise ValueError(f"tape: settle is on or off, not {tape.get('settle')!r}")
+    wait_ok(tape.get("click_wait"), "tape")
+    for i, (s, _) in enumerate(plan):
+        kind, arg = next(iter(s.items()))
+        if not isinstance(arg, dict):
+            continue
+        where = f"step {i} ({kind})"
+        wait_ok(arg.get("click_wait"), where)
+        at = arg.get("at")
+        if not isinstance(at, dict):
+            continue
+        if kind not in ("key", "type") or not arg.get("os") or not arg.get("into"):
+            raise ValueError(f"{where}: an anchored at needs a key or type step with os: true and into:")
+        if ("window" in at) == ("from" in at):
+            raise ValueError(f"{where}: at names either window: or from:, not {sorted(at)}")
+        if "window" in at and at["window"] not in ("centre", "left", "right"):
+            raise ValueError(f"{where}: at.window is centre, left or right, not {at['window']!r}")
+        for k in ("dx", "dy"):
+            if k in at and (isinstance(at[k], bool) or not isinstance(at[k], (int, float))):
+                raise ValueError(f"{where}: at.{k} is a number of pixels, not {at[k]!r}")
+        extra = set(at) - {"window", "from", "dx", "dy"}
+        if extra:
+            raise ValueError(f"{where}: at has unknown fields {sorted(extra)}")
 
 
 def resolve_all(steps, amap):
@@ -2015,10 +2054,12 @@ def os_click(host, hwnd, x, y, audit=None):
     return out
 
 
-def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hwnd=None, xy=None, clip=None):
+def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hwnd=None, xy=None, clip=None, wait=None):
     """Send keys through Windows itself to the window titled `title` (data-driven-import), for dialogs whose
     UI Automation does not answer: a one-off task in the desktop session activates the window, checks that it
-    is in front, and only then sends. Raises when the window could not be brought to the front."""
+    is in front, and only then sends. Raises when the window could not be brought to the front.
+    `wait`: seconds between a click and the keys (form-replay D3; the script's default is 0.3 s). With `hwnd` and
+    `xy` and keys, the exact-point click is followed by the keys (form-replay D2)."""
     t, remote = Target(host), "desktape"
     t.sh(f'(if not exist "%USERPROFILE%\\{remote}" mkdir "%USERPROFILE%\\{remote}") & '
          f'del /q "%USERPROFILE%\\{remote}\\os-input-out.json" 2>nul')
@@ -2029,7 +2070,8 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
     try:
         with tempfile.TemporaryDirectory() as d:
             req = os.path.join(d, "os-input.json")
-            json.dump({"title": title, "keys": keys, "at": at, "file": file, "hwnd": hwnd, "xy": xy, "clip": clip},
+            json.dump({"title": title, "keys": keys, "at": at, "file": file, "hwnd": hwnd, "xy": xy, "clip": clip,
+                       "wait_ms": None if wait is None else int(round(float(wait) * 1000))},
                       open(req, "w", encoding="utf-8"), ensure_ascii=False)
             t.put(req, f"{remote}/os-input.json")
         t.sh(f'schtasks /create /tn desktape-os-input /tr "{tr}" /sc once /st 23:59 /it /f >nul && schtasks /run /tn desktape-os-input >nul',
@@ -2052,6 +2094,12 @@ def os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hw
         audit.flush()
     if out is None:
         raise RuntimeError("os input: the task did not finish in 20 s")
+    if hwnd and keys:                    # form-replay D2: a click at an exact point, then the keys
+        if not out.get("sent"):
+            raise AssertionError(f"os input into {title!r}: the point {out.get('at')} is not on that window "
+                                 f"(the window in front is {out.get('front')!r}); nothing was sent")
+        logger.info("os input into %r: clicked %s, then sent the keys", title, out.get("at"))
+        return out
     if hwnd or clip is not None:
         return out
     if file:
@@ -2363,6 +2411,8 @@ class Runner:
         self.failure_lines = True  # map `failure_lines: false`: a chat's text is content, only new windows count
         self.baseline = set()    # the process's window ids when the window was focused
         self.dirty = False       # an action happened since the last snapshot
+        self.quiet = False       # form-replay D1: the tape's `settle: off`, no window reads around acting steps
+        self.click_wait = None   # form-replay D3: the tape's `click_wait:` (None: os-input.ps1's own 0.3 s)
         self.typing, self.typing_cps = "fast", 12.0   # file-outcome-and-typing: the tape's typing mode
         self.cursor, self.glide_ms = "agent", 500       # person-cursor: the tape's cursor
         self.front = None        # macOS: the driver's answer to the last bring_to_front (macos-target D8)
@@ -2406,10 +2456,11 @@ class Runner:
         new titled top-level window of the same process."""
         if self.expected is None or self.win is None or getattr(self, "answering", False):
             return                   # map-answers: an answer's steps act on the very prompt it answers
-        if self.dirty:
+        if self.dirty and not self.quiet:
             self.snapshot()
-        found = [(n[2], "dialog") for n in map(parse, self.tree.splitlines())
-                 if n and n[1] == "Window" and n[0] > 0 and n[2]]
+        # form-replay D1: with `settle: off` only the window list is checked, the tape's window is not read
+        found = [] if self.quiet else [(n[2], "dialog") for n in map(parse, self.tree.splitlines())
+                                       if n and n[1] == "Window" and n[0] > 0 and n[2]]
         wins = self.window_list(keep=True)
         found += [(w.get("title"), "window") for w in wins
                   if w.get("pid") == self.win["pid"] and w.get("window_id") != self.win["window_id"]
@@ -3128,6 +3179,51 @@ class Runner:
             raise RuntimeError(f"window frame is {got}, not {want}")
         logger.info("window frame set: %s", want)
 
+    def os_send(self, a, keys, secret=False):
+        """Windows' own input into the window titled `a["into"]`: a fraction `at` as before; an anchored `at` is
+        resolved here and clicked at its exact point (form-replay D2); `click_wait` between click and keys (D3)."""
+        at, wait = a.get("at"), a.get("click_wait", self.click_wait)
+        if isinstance(at, dict):
+            w, x, y = self.anchored_point(a["into"], at)
+            out = os_input(self.cua.host, a["into"], keys or "", self.cua.audit, secret, hwnd=w["window_id"],
+                           xy=[x, y], wait=wait)
+            if not (out or {}).get("sent"):
+                raise AssertionError(f"os input into {a['into']!r}: the point {x},{y} is not on that window "
+                                     f"(the window in front is {(out or {}).get('front')!r}); nothing was clicked")
+            return out
+        return os_input(self.cua.host, a["into"], keys, self.cua.audit, secret, at, wait=wait)
+
+    def anchored_point(self, title, at):
+        """form-replay D2: (window, x, y) of an anchored click point, in screen pixels: `{window: centre|left|right,
+        dx, dy}` from the window's bounds, `{from: selector, dx, dy}` from the element's frame (one read). A point
+        outside the window fails the step without a click."""
+        wins = self.cua.call("list_windows", {})[0].get("windows", [])
+        mine = self.win["window_id"] if self.win else None
+        w = next((x for x in wins if x.get("window_id") == mine and x.get("title") == title), None) or \
+            next((x for x in wins if x.get("title") == title and x.get("is_on_screen", True)), None)
+        if not w or not w.get("bounds"):
+            raise OutcomeFailed(f"at: the window {title!r} is not open")
+        b = w["bounds"]
+        dx, dy = float(at.get("dx", 0)), float(at.get("dy", 0))
+        if "window" in at:
+            x = b["x"] + {"left": 0, "centre": b["width"] / 2, "right": b["width"]}[at["window"]] + dx
+            y = b["y"] + dy if dy >= 0 else b["y"] + b["height"] + dy
+        else:
+            if self.win is None or w.get("window_id") != self.win["window_id"]:
+                raise OutcomeFailed(f"at: from: needs the tape's window to be {title!r}; focus it first")
+            sel = at["from"] if isinstance(at["from"], dict) else {"label": at["from"]}
+            e = self.pick(sel, float(sel.get("timeout", self.wait_default())))
+            f = (e or {}).get("frame")
+            if not f:
+                raise OutcomeFailed(f"at: {sel_name(sel)!r} is not in {title!r}{self.nearest_hint(sel)}")
+            x, y = f["x"] + dx, f["y"] + dy
+        x, y = int(round(x)), int(round(y))
+        if not (b["x"] <= x < b["x"] + b["width"] and b["y"] <= y < b["y"] + b["height"]):
+            raise OutcomeFailed(f"at: the point {x},{y} lies outside the window {title!r} "
+                                f"({b['x']},{b['y']} {b['width']}x{b['height']}); nothing was clicked")
+        logger.info("at %s in %r: screen point %d,%d", json.dumps(at, ensure_ascii=False), title, x, y)
+        return w, x, y
+
     def step(self, s):
         """One step; an action is followed by its outcome check (step-outcome-check)."""
         kind, arg = next(iter(s.items()))
@@ -3144,7 +3240,8 @@ class Runner:
                                 f"({cb.tool} waited {cb.waited:.1f} s)") from None
         self.drop_kept()          # D3: an action outside the driver's calls (an OS key, a file) is not counted
         self.after_action(what, exp, before)
-        self.settle()
+        if not self.quiet or exp:            # form-replay D1: `settle: off` reads only when the step asks
+            self.settle()
 
     def wait_default(self):
         """tolerant-replay D2: an element wait's default is the tape's patience (8 s for bare Runners)."""
@@ -3187,7 +3284,7 @@ class Runner:
         if pid is None and named:
             pid = next((w.get("pid") for w in wins if w.get("title") == named), None)
         lines = None
-        if self.win is not None and not named:
+        if self.win is not None and not named and not self.quiet:     # form-replay D1: no read when quiet
             if self.dirty:
                 self.snapshot()
             lines = set(shape(self.tree).splitlines())
@@ -3448,7 +3545,7 @@ class Runner:
                 self.dirty = True
                 return
             self.dirty = True
-            if a.get("effect") == "none" or e.get("selected") or a.get("expect"):
+            if a.get("effect") == "none" or e.get("selected") or a.get("expect") or self.quiet:
                 # D2: an already selected tab or radio button rightly changes nothing when clicked again
                 logger.debug("%s: no effect check (%s)", what, "effect: none" if a.get("effect") == "none" else "already selected")
             else:
@@ -3500,8 +3597,7 @@ class Runner:
                 self.dirty = True
                 return
             if a.get("into") and a.get("os"):    # the driver cannot type there at all: Windows' own input
-                os_input(self.cua.host, a["into"], sendkeys_text(a["text"]), self.cua.audit, a.get("secret", False),
-                         a.get("at"))
+                self.os_send(a, sendkeys_text(a["text"]), a.get("secret", False))
                 self.dirty = True
                 return
             if a.get("into"):                    # a dialog whose UI Automation does not answer: type to the front
@@ -3515,7 +3611,8 @@ class Runner:
                 raise ValueError(f"type: typing must be fast, human or paste, not {mode!r}")
             if mode == "paste" and a.get("secret"):
                 raise ValueError("type: a secret is never pasted (it would stay on the clipboard); use typing: fast")
-            check = a.get("effect") != "none" and not a.get("secret") and not a.get("expect") and a["text"].strip()
+            check = a.get("effect") != "none" and not a.get("secret") and not a.get("expect") and a["text"].strip() \
+                and not self.quiet                   # form-replay D1
             if check:
                 self.snapshot()
                 before = self.signature(keep=True)      # agent-efficiency D3: read before the action
@@ -3553,8 +3650,7 @@ class Runner:
                 ids = self.check_front(a["into"])
                 self.cua.call("press_key", {**ids, "key": a["key"], "delivery_mode": "foreground"})
             elif a.get("into") and a.get("os"):
-                os_input(self.cua.host, a["into"], SENDKEYS_NAMES.get(a["key"].lower(), a["key"]), self.cua.audit,
-                         at=a.get("at"))
+                self.os_send(a, SENDKEYS_NAMES.get(a["key"].lower(), a["key"]))
             elif a.get("into"):
                 self.check_front(a["into"])
                 self.cua.call("press_key", {"key": a["key"], "scope": "desktop", "delivery_mode": "foreground"})
@@ -3737,6 +3833,7 @@ def cmd_run(a):
     deny = deny_entries(amap)
     check_tape_deny(plan, deny)                      # … and so does a click the map denies
     check_selectors(plan)                            # … and a selector that names nothing
+    check_form_replay(tape, plan)                    # … and a wrong settle / click_wait / anchored at (form-replay)
     answers = tape_answers(tape, amap, values)       # prompt-answers: checked like the steps, before any tool call
     answers = with_map_answers(answers, amap, values, tape.get("map"))   # map-answers: the app's own, after the tape's
     check_tape_deny([st for h in answers for st in h["plan"]], deny)
@@ -3878,6 +3975,8 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
     r.planned = r.expected                            # step-outcome-check D4: the same names, right after a step
     r.typing, r.typing_cps = tape.get("typing", "fast"), float(tape.get("typing_cps", 12))
     r.patience = float(tape.get("patience", 30))      # tolerant-replay D2: settle-wait and default element waits
+    r.quiet = tape.get("settle", "on") == "off"         # form-replay D1 (values checked in check_form_replay)
+    r.click_wait = tape.get("click_wait")               # form-replay D3
     r.cursor, r.glide_ms = tape.get("cursor", "agent"), int(tape.get("cursor_glide_ms", 500))
     bad = (f"tape: cursor is agent or person, not {r.cursor!r}" if r.cursor not in ("agent", "person") else
            "tape: cursor: person is for macOS targets; on Windows the agent cursor is desktape's signature in the "
@@ -8450,7 +8549,112 @@ def selftest():
     selftest_find()
     selftest_agent_efficiency()
     selftest_act_steps()
+    selftest_form_replay()
     print("selftest ok")
+
+
+def selftest_form_replay():
+    """form-replay: `settle: off` reads no window around acting steps but still stops on a new window (D1);
+    anchored click points (D2); `click_wait` (D3); the load-time checks (D4)."""
+    # D4: refused before any tool call
+    ok_plan = [({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "centre", "dx": -120, "dy": 452}}}, None)]
+    check_form_replay({"settle": "off", "click_wait": 1.5}, ok_plan)
+    for tape, plan, want in (
+            ({"settle": "sometimes"}, [], "settle is on or off"),
+            ({"click_wait": -1}, [], "click_wait is a number"),
+            ({}, [({"key": {"key": "x", "into": "Main", "os": True, "click_wait": "slow"}}, None)], "click_wait is a number"),
+            ({}, [({"key": {"key": "x", "into": "Main", "at": {"window": "centre"}}}, None)], "os: true"),
+            ({}, [({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "middle"}}}, None)], "centre, left or right"),
+            ({}, [({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "left", "from": "Ok"}}}, None)], "either window"),
+            ({}, [({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "left", "dx": "a"}}}, None)], "at.dx"),
+            ({}, [({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "left", "dz": 1}}}, None)], "unknown fields")):
+        try:
+            check_form_replay(tape, plan); raise AssertionError(f"expected a refusal: {want}")
+        except ValueError as e:
+            assert want in str(e), (want, e)
+    amap = {"elements": {"cap": {"label": "Bizonylatszám", "role": "Text"}}}
+    st, _ = resolve({"key": {"key": "1", "into": "Main", "os": True, "at": {"from": "@cap", "dx": 140, "dy": 6}}}, amap)
+    assert st["key"]["at"]["from"] == {"label": "Bizonylatszám", "role": "Text"}, st
+    try:
+        resolve({"key": {"key": "1", "into": "Main", "os": True, "at": {"from": "@nope"}}}, amap)
+        raise AssertionError("expected KeyError")
+    except KeyError as e:
+        assert "@nope" in str(e), e
+
+    class Fake:                      # a form window; a test can move it, resize it and add windows
+        host, audit = "user@box", None
+        def __init__(self):
+            self.sent, self.wins = [], []
+            self.bounds = {"x": 640, "y": 0, "width": 1280, "height": 1032}
+        def call(self, tool, args, secret=False, timeout=None):
+            self.sent.append(tool)
+            if tool == "list_windows":
+                return {"windows": [{"title": "Main", "pid": 7, "window_id": 11, "bounds": self.bounds,
+                                     "is_on_screen": True}] + self.wins}, ""
+            if tool == "get_window_state":
+                return {"elements": [{"label": "Bizonylatszám", "role": "Text", "element_token": "c",
+                                      "frame": {"x": 700, "y": 300, "w": 90, "h": 20}}]}, \
+                       '- Window "Main"\n  - [1] Text "Bizonylatszám"'
+            return {}, "ok"
+    sent = []
+    def fake_os_input(host, title, keys, audit=None, secret=False, at=None, file=None, hwnd=None, xy=None,
+                      clip=None, wait=None):
+        sent.append({"title": title, "keys": keys, "at": at, "hwnd": hwnd, "xy": xy, "wait": wait})
+        return {"sent": True, "at": xy}
+    real, level = globals()["os_input"], logger.level
+    globals()["os_input"] = fake_os_input
+    logger.setLevel(logging.ERROR)
+    try:
+        ok = expected_dialogs({}, None, [({"focus": "Main"}, None)])
+        steps = [{"key": {"key": "{HOME}20261112", "into": "Main", "os": True, "at": [0.4, 452]}},
+                 {"key": {"key": "{HOME}PI-1", "into": "Main", "os": True, "at": [0.5, 452]}}]
+        reads = {}
+        for quiet in (False, True):  # D1: the same two steps, with and without `settle: off`
+            f = Fake(); r = Runner(f, "test"); r.expected = r.planned = ok; r.patience = 2.0; r.focus("Main")
+            r.quiet, n = quiet, len(f.sent)
+            for st in steps:
+                r.step(st)
+            reads[quiet] = f.sent[n:].count("get_window_state")
+        assert reads[False] > 0 and reads[True] == 0, reads
+        f.wins = [{"title": "Hibás adat", "pid": 7, "window_id": 12, "is_on_screen": True}]   # the program's message
+        try:
+            r.step(steps[0]); raise AssertionError("expected the new window to stop the run")
+        except (AssertionError, OutcomeFailed) as e:
+            assert "Hibás adat" in str(e), e
+        # D2: a point from the window's centre lands at the same place on the form at two widths
+        f = Fake(); r = Runner(f, "test"); r.focus("Main"); sent.clear()
+        at = {"window": "centre", "dx": -120, "dy": 452}
+        r.step({"key": {"key": "x", "into": "Main", "os": True, "at": at}})
+        f.bounds = {"x": -8, "y": -8, "width": 1936, "height": 1048}
+        r.step({"key": {"key": "x", "into": "Main", "os": True, "at": at}})
+        assert [c["xy"] for c in sent] == [[1160, 452], [840, 444]] and sent[0]["hwnd"] == 11, sent
+        assert r.anchored_point("Main", {"window": "left", "dx": 5, "dy": -20})[1:] == (-3, 1020)
+        assert r.anchored_point("Main", {"window": "right", "dx": -5, "dy": 0})[1:] == (1923, -8)
+        sent.clear()                 # from a caption's frame: one read, then the point beside it
+        r.step({"key": {"key": "PI-1", "into": "Main", "os": True,
+                        "at": {"from": {"label": "Bizonylatszám", "role": "Text"}, "dx": 140, "dy": 6}}})
+        assert sent[-1]["xy"] == [840, 306], sent
+        sent.clear()                 # a point outside the window: refused, nothing sent
+        try:
+            r.step({"key": {"key": "x", "into": "Main", "os": True, "at": {"window": "right", "dx": 50, "dy": 10}}})
+            raise AssertionError("expected a refusal")
+        except OutcomeFailed as e:
+            assert "outside the window" in str(e) and not sent, (e, sent)
+        # D3: the tape's click_wait, a step's own, the fraction form keeps its meaning
+        sent.clear(); r.click_wait = 1.5
+        r.step({"key": {"key": "x", "into": "Main", "os": True, "at": [0.5, 100]}})
+        r.step({"key": {"key": "x", "into": "Main", "os": True, "at": at, "click_wait": 2}})
+        assert [(c["at"], c["wait"]) for c in sent] == [([0.5, 100], 1.5), (None, 2)], sent
+        def missed(*x, **k):
+            return {"sent": False, "front": "Other"}
+        globals()["os_input"] = missed
+        try:
+            r.step({"key": {"key": "x", "into": "Main", "os": True, "at": at}}); raise AssertionError("expected")
+        except AssertionError as e:
+            assert "nothing was clicked" in str(e) and "'Other'" in str(e), e
+    finally:
+        globals()["os_input"] = real
+        logger.setLevel(level)
 
 
 def selftest_act_steps():

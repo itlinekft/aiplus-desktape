@@ -129,7 +129,10 @@ if ($null -ne $req.clip) {
 
 # Click mode, {"hwnd": <window handle>, "xy": [x, y]}: one real click at screen point x,y (physical pixels),
 # only when that point belongs to that exact window (two windows may share a title). For permission prompts
-# that ignore UI Automation clicks.
+# that ignore UI Automation clicks. With "keys" (form-replay D2/D3): wait "wait_ms" (default 300) after the
+# click, check the window is still in front, then send the keys; "sent" is then true only when they went out.
+$waitMs = 300
+if ($null -ne $req.wait_ms) { $waitMs = [int]$req.wait_ms }
 if ($req.hwnd) {
   $h = [IntPtr][int64]$req.hwnd
   $r = @{ sent = $false; front = ''; at = '' }
@@ -141,7 +144,13 @@ if ($req.hwnd) {
     [void][W]::SetCursorPos($pt.X, $pt.Y); Start-Sleep -Milliseconds 150
     [W]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 60
     [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-    $r.sent = $true
+    if ($req.keys) {
+      Start-Sleep -Milliseconds $waitMs
+      if ([W]::GetAncestor([W]::GetForegroundWindow(), 2) -eq $h) {
+        (New-Object -ComObject WScript.Shell).SendKeys($req.keys)
+        $r.sent = $true
+      } else { $r.front = Front }
+    } else { $r.sent = $true }
   } else { $r.hit = [int64]$hit }
   $r | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $out
   exit 0
@@ -160,7 +169,7 @@ if ($front -eq $req.title) {
     $y = if ($req.at[1] -lt 0) { [int]($r.B + $req.at[1]) } else { [int]($r.T + $req.at[1]) }
     [void][W]::SetCursorPos($x, $y); Start-Sleep -Milliseconds 150
     [W]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 60
-    [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 300
+    [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $waitMs
     $clicked = "$x,$y"
   }
   $shell.SendKeys($req.keys)
