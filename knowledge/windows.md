@@ -70,6 +70,12 @@ read back):
 - **Input is applied late.** A screen grab taken right after sending can still show the old value; the keys
   are not lost, they arrive a moment later (a value typed "again" then landed twice). Wait about two seconds
   before judging the screen.
+- **A field that fills in its own default does so about two seconds after it gets the focus** (measured
+  2026-11-17, an account-number field that defaults to the input-VAT account). Keys sent one second after the
+  click cleared the still-empty field, then the default arrived and the typed account was appended to it
+  ("466467", refused as a non-existent account), three times in a row on a freshly started program. Waiting
+  three seconds after the click fixed it. In that state `{END}+{HOME}` followed by the new value, sent
+  separately two seconds apart, did replace the text, unlike the empty-field case above.
 - **The forms answer UI Automation better than the menu does.** Their controls carry the developer's names
   (`bizx`, `megjx`, `DATUM`, `KOD`) and their values, and the program's own list grids expose every cell's
   value: a booked entry can be read back by value, without a screenshot. Buttons (`Mentés`, `Új számlasor`)
