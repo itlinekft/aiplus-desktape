@@ -60,7 +60,7 @@ then ask:
 
 > **HU:** Ezek hiányoznak még: … Mindegyiket a gyártó hivatalos forrásából telepítem (winget, Homebrew vagy a
 > program saját telepítője), egyenként, és mindegyik előtt megkérdezlek. A Cua Driver egy rögzített verzió, amit a
-> vezérelt gép asztali munkamenetében kell telepíteni: ebben végigvezetlek. Kezdhetem?
+> célgép asztali munkamenetében kell telepíteni: ebben végigvezetlek. Kezdhetem?
 >
 > **EN:** These are still missing: … I install each from its maker's official source (winget, Homebrew or the
 > program's own installer), one at a time, and ask you before each. The Cua Driver is a pinned version installed in
@@ -110,7 +110,7 @@ measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 >   a `doctor` és a `look` rendben. Macen ez az út még nincs kipróbálva.
 > - Linux vezérlő gépként: a mérések innen futottak.
 > - **Cowork: még nem teszteltük**, se felhőben, se a saját gépen.
-> - **Linux mint vezérelt gép: még nem működik**; Linux csak vezérelhet.
+> - **Linux mint célgép: még nem működik**; Linux csak vezérelhet.
 >
 > **EN, tried so far (2026-11-07):**
 > - Windows 11, Claude Desktop: tapes run as a test and as a video, with no AI model; a 22-step import with its

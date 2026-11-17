@@ -5,6 +5,14 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-11-18
+
+### Changed
+- The README's Hungarian text calls the driven machine **célgép** (it was „vezérelt gép”, one suffix away from
+  „vezérlő gép”), in the skills' and TROUBLESHOOTING's Hungarian lines too; the code and the English text keep
+  `controller` and `target`. Both READMEs show what goes on which machine in one table, with the SSH client and
+  server named.
+
 ## [0.6.8] - 2026-11-17
 
 ### Changed

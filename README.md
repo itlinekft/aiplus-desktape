@@ -37,8 +37,22 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 
 ### Mielőtt elkezded
 
-**Két szerep, lehet egy gép is.** A **vezérlő gép** az, ahol a Claude és a desktape fut. A **vezérelt gép** az, ahol
-a program fut, amit kezelni kell. Ha a program a saját gépeden van, a kettő ugyanaz, és nem kell SSH.
+**Két szerep, lehet egy gép is.** A **vezérlő gép** az, ahol a Claude-dal beszélsz, és ahol a desktape fut. A
+**célgép** az, ahol a program fut, amit kezelni kell. Ha a program a saját gépeden van, a kettő ugyanaz (helyben),
+és nem kell SSH. Ha másik gépen, a vezérlő gép SSH-n éri el: ott a vezérlő gép a kliens, a célgép a szerver.
+
+| | Vezérlő gép (SSH-kliens) | Célgép (SSH-szerver) |
+|---|---|---|
+| Mi ez | ahol a Claude-dal beszélsz | ahol a kezelendő program fut |
+| Claude és a desktape plugin | kell | nem kell (a beállításnál segít, ha van) |
+| uv (hozza a Pythont) | kell | nem kell |
+| SSH | kliens, a Windows 10+, a macOS és a Linux eleve tudja | SSH-szerver, csak a helyi hálózatról vagy VPN-ről |
+| Cua Driver 0.34.1 | nem kell | kell, a felhasználó asztali munkamenetében |
+| ffmpeg | nem kell | kell |
+| Kulcs | a `desktape pair` itt készíti | a vezérlő gép kulcsa kerül rá |
+| Futás közben | Windows célgépnél egy nyitott RDP-ablak felé | macOS-en a képernyő nem lehet zárolva |
+
+Helyben, egy gépen, a két oszlop egy gépre kerül, SSH nélkül.
 
 - **Claude, fizetős előfizetéssel.** A pluginokhoz Pro vagy magasabb Claude-előfizetés kell. A desktape-nek
   parancsokat kell futtatnia, ezért a **Claude Desktop Code fülén** vagy a **Claude Code**-ban működik. A sima Chat
@@ -46,12 +60,12 @@ a program fut, amit kezelni kell. Ha a program a saját gépeden van, a kettő u
   (Claude Desktop), a Claude Code telepítése: [code.claude.com/docs/en/setup](https://code.claude.com/docs/en/setup).
 - **A vezérlő gép:** Windows, macOS vagy Linux. Egyetlen eszköz kell rá, a [uv](https://docs.astral.sh/uv/), ez hozza
   a Pythont és a többit. Ha hiányzik, a Claude megmondja a telepítő parancsát, és a jóváhagyásod után telepíti.
-- **A vezérelt gép:** Windows 10 vagy 11, vagy macOS. Rá kerül a Cua Driver (rögzített verzió, ellenőrzött hash-sel),
+- **A célgép:** Windows 10 vagy 11, vagy macOS. Rá kerül a Cua Driver (rögzített verzió, ellenőrzött hash-sel),
   az ffmpeg (kötelező: a felvétel és a feliratok ezzel készülnek), és ha másik gépről vezérled, egy SSH-szerver,
   csak a helyi hálózatról vagy VPN-ről elérhetően.
-- **Egyszer egy ember a vezérelt gépnél, rendszergazdai joggal:** az SSH-szerver telepítéséhez (Windows UAC), macOS-en
+- **Egyszer egy ember a célgépnél, rendszergazdai joggal:** az SSH-szerver telepítéséhez (Windows UAC), macOS-en
   a Cua Driver engedélyeihez a Rendszerbeállításokban. Ezt senki nem teheti meg helyetted, a Claude sem.
-- **Futás közben:** Windowson nyitva kell lennie egy RDP-ablaknak a vezérelt gép felé, macOS-en a képernyő nem lehet
+- **Futás közben:** Windowson nyitva kell lennie egy RDP-ablaknak a célgép felé, macOS-en a képernyő nem lehet
   zárolva.
 
 ### Telepítés
@@ -66,7 +80,7 @@ a program fut, amit kezelni kell. Ha a program a saját gépeden van, a kettő u
 
 A desktape saját piactere is működik, ha az ITLine-é nem elérhető: `https://github.com/itlinekft/aiplus-desktape.git`.
 
-### Új vezérelt gép bekötése
+### Új célgép bekötése
 
 Ha az új gépen van Claude (Claude Code, vagy a Claude Desktop Code füle), azt kérd meg, hogy állítsa be:
 
@@ -84,15 +98,15 @@ Ha az új gépen van Claude (Claude Code, vagy a Claude Desktop Code füle), azt
 Ha az új gépen nincs Claude, ugyanezt kézzel is végig lehet csinálni: [Windows](docs/windows-setup.md),
 [macOS](docs/macos-setup.md) (angolul).
 
-Windowsra és macOS-re szól, Linux vezérelt gépként még nem támogatott. Így állítottunk be egy Windows 10-es gépet
+Windowsra és macOS-re szól, Linux célgépként még nem támogatott. Így állítottunk be egy Windows 10-es gépet
 2026-11-07-én; macOS-en ez az út még nincs kipróbálva ([amit mértünk](docs/MEASURED.md)).
 
 **Több gép:** egy Team vagy Enterprise Claude-szervezet adminja a szervezet beállításaiban minden tag gépére
 kiteheti a plugint (az Anthropic leírása: [code.claude.com/docs/en/plugins/org](https://code.claude.com/docs/en/plugins/org));
-desktape-pel ezt még nem mértük. Minden vezérelt gépet külön kell bekötni, saját kulccsal.
+desktape-pel ezt még nem mértük. Minden célgépet külön kell bekötni, saját kulccsal.
 
 **Eltávolítás:** a plugin a Customize › Plugins alatt (vagy `claude plugin uninstall aiplus-desktape`), minden
-vezérelt gépre `desktape unpair <név>`, utána a vezérelt gépen a [visszaállítás lépései](docs/setup-target.md#undo-everything).
+célgépre `desktape unpair <név>`, utána a célgépen a [visszaállítás lépései](docs/setup-target.md#undo-everything).
 
 Részletesen: [használati útmutató](docs/user-guide.md) (angolul), [hibaelhárítás](TROUBLESHOOTING.md) (magyarul és
 angolul), [amit mértünk](docs/MEASURED.md).
@@ -166,8 +180,23 @@ Rule of thumb: make deterministic only what repeats; the rest stays ad hoc with 
 
 ## Before you start
 
-**Two roles, possibly one computer.** The **controller** is where Claude and desktape run. The **target** is where
-the program to drive runs. When the program is on your own computer, the two are the same and no SSH is needed.
+**Two roles, possibly one computer.** The **controller** is where you talk to Claude and where desktape runs. The
+**target** is where the program to drive runs. When the program is on your own computer, the two are the same
+(local) and no SSH is needed. When it is on another one, the controller reaches it over SSH: the controller is the SSH
+client, the target the SSH server.
+
+| | Controller (SSH client) | Target (SSH server) |
+|---|---|---|
+| What it is | where you talk to Claude | where the program to drive runs |
+| Claude and the desktape plugin | yes | no (it helps with the setup when it is there) |
+| uv (brings Python) | yes | no |
+| SSH | the client, built into Windows 10+, macOS and Linux | an SSH server, reachable only from the local network or a VPN |
+| Cua Driver 0.34.1 | no | yes, in the user's desktop session |
+| ffmpeg | no | yes |
+| Key | `desktape pair` makes it here | the controller's key goes here |
+| During a run | an RDP window open to a Windows target | on macOS the screen stays unlocked |
+
+Local, on one computer, both columns go on that computer, with no SSH.
 
 - **Claude, on a paid plan.** Plugins need a Pro or higher Claude plan. desktape runs commands, so it works in
   **Claude Desktop's Code tab** or in **Claude Code**. Plain Chat cannot run commands; Cowork is not tested yet.

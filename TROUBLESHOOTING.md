@@ -14,7 +14,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 | 0 | minden lépés rendben |
 | 1 | egy lépés nem sikerült (`run`), vagy az `act` megállt; a futás mappájában ott a javítási jegyzet (`repair.md`) |
 | 2 | hibás parancs vagy tape: hiányzó cél, ismeretlen térképnév, a térkép által tiltott kattintás, hibás térképbejegyzés |
-| 3 | a vezérelt gépet épp egy másik munkamenet használja |
+| 3 | a célgépet épp egy másik munkamenet használja |
 
 ### „no target: pass --target NAME or --host user@host …”
 
@@ -79,13 +79,13 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 
 ### „no Cua Driver daemon listening … start the daemon by hand”
 
-- **Hol:** bármelyik parancs, ami a vezérelt gépet szólítja meg.
+- **Hol:** bármelyik parancs, ami a célgépet szólítja meg.
 - **Ok:** a Cua Driver háttérfolyamata nem fut (kijelentkezés vagy újraindítás után). A desktape megpróbálja elindítani,
   és ha nem sikerül, ezt írja.
-- **Ellenőrzés:** `desktape.py doctor` a vezérelt gépen, vagy `cua-driver status`.
-- **Javítás:** indítsd el kézzel a vezérelt gép asztali munkamenetében: Windowson `docs/windows-setup.md` 3. rész,
+- **Ellenőrzés:** `desktape.py doctor` a célgépen, vagy `cua-driver status`.
+- **Javítás:** indítsd el kézzel a célgép asztali munkamenetében: Windowson `docs/windows-setup.md` 3. rész,
   macOS-en `docs/macos-setup.md` 2. és 3. lépés.
-- **Ki:** aki a vezérelt gépnél ül. **Óta:** 0.1.0.
+- **Ki:** aki a célgépnél ül. **Óta:** 0.1.0.
 
 ### Windows: „daemon transport error … (os error 233)” SSH-n át
 
@@ -116,41 +116,41 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
   a rendszergazda munkamenete lecsatlakozva).
 - **Ok:** a cső neve gépszintű; a másik fiók háttérfolyamatáé, és az nem enged be más fiókot.
 - **Javítás:** frissíts: a desktape ilyenkor a fiók saját csövén (`\\.\pipe\cua-driver-<8 hex>`) indít saját
-  háttérfolyamatot, és megjegyzi a vezérlőgépen (`pipes.json` a zárak mellett). Kézi indításnál:
+  háttérfolyamatot, és megjegyzi a vezérlő gépen (`pipes.json` a zárak mellett). Kézi indításnál:
   `cua-serve.ps1 -Pipe` a desktape naplójában szereplő csőnévvel.
 - **Ki:** a desktape. **Óta:** Unreleased.
 
 ### A Cua Driver hiányzik (`doctor`: MISSING)
 
 - **Hol:** `desktape.py doctor`.
-- **Ok:** a vezérelt gépen nincs telepítve a Cua Driver.
-- **Ellenőrzés:** `desktape.py doctor --local` a vezérelt gépen.
-- **Javítás:** a rögzített 0.34.1-es verziót a vezérelt gép **asztali munkamenetében** telepítsd, ne SSH-n át: Windowson
+- **Ok:** a célgépen nincs telepítve a Cua Driver.
+- **Ellenőrzés:** `desktape.py doctor --local` a célgépen.
+- **Javítás:** a rögzített 0.34.1-es verziót a célgép **asztali munkamenetében** telepítsd, ne SSH-n át: Windowson
   `docs/windows-setup.md` 2. rész, macOS-en `macos/cua-setup.sh` és `docs/macos-setup.md`.
-- **Ki:** aki a vezérelt gépnél ül; macOS-en rendszergazda. **Óta:** 0.1.0.
+- **Ki:** aki a célgépnél ül; macOS-en rendszergazda. **Óta:** 0.1.0.
 
 ### SSH-belépés nem megy („Permission denied”)
 
 - **Hol:** távoli vezérlés.
 - **Ok:** a desktape csak kulccsal lép be, jelszót nem kér (`BatchMode=yes`).
 - **Ellenőrzés:** `ssh -o BatchMode=yes felhasznalo@gep "echo ok"` kiírja: `ok`.
-- **Javítás:** tedd fel a vezérlő gép kulcsát a vezérelt gépre, vagy használd a párosítást: `desktape.py pair`
+- **Javítás:** tedd fel a vezérlő gép kulcsát a célgépre, vagy használd a párosítást: `desktape.py pair`
   ([`docs/pairing.md`](docs/pairing.md)).
 - **Ki:** aki mindkét gépet kezeli. **Óta:** 0.1.0.
 
 ### Windows: „os error 448” SSH-n át (uv, telepítő)
 
-- **Hol:** Windows vezérelt gép, SSH-munkamenet.
+- **Hol:** Windows célgép, SSH-munkamenet.
 - **Ok:** SSH-ból a Windows nem enged átjárni a felhasználó által létrehozott könyvtár-csomópontokon, és a
   Hitelesítőadat-kezelő sem írható. A `uv` saját Pythonja és a Cua Driver telepítője is ilyen mögött van.
 - **Ellenőrzés:** ugyanaz a parancs az asztali munkamenetben lefut.
 - **Javítás:** futtasd az asztali munkamenetben, egy egyszeri ütemezett feladattal (`schtasks /it`,
   `docs/windows-setup.md`). A `pair --accept` is ott fut.
-- **Ki:** aki a vezérelt gépnél ül. **Óta:** az első Windows-teszt óta (2026-10-23).
+- **Ki:** aki a célgépnél ül. **Óta:** az első Windows-teszt óta (2026-10-23).
 
 ### Windows: üres elemlista, vagy „answers with an empty tree (busy)”
 
-- **Hol:** Windows vezérelt gép, `look` vagy `run`.
+- **Hol:** Windows célgép, `look` vagy `run`.
 - **Ok:** a Windows nem rajzolja ki a kis méretre tett vagy lecsatlakozott munkamenetet; vagy a program épp dolgozik.
 - **Ellenőrzés:** az RDP-ablak nyitva és látható; `desktape.py look` újra.
 - **Javítás:** hagyd nyitva és láthatóan az RDP-ablakot futás közben. Ha a program dolgozik, a desktape még
@@ -169,7 +169,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 
 ### macOS: üres ablaklista, a képernyőkép nem készül el
 
-- **Hol:** macOS vezérelt gép.
+- **Hol:** macOS célgép.
 - **Ok:** a Mac képernyője zárolva van; ilyenkor a macOS minden ablakot elrejt.
 - **Ellenőrzés:** `desktape.py look` üres; a Mac képernyőjén a zárolási kép látszik.
 - **Javítás:** oldd fel a képernyőt futás előtt, és futás közben se zárolódjon.
@@ -177,7 +177,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 
 ### macOS: hiányzó engedély („permissions_pending”, nincs képernyőkép)
 
-- **Hol:** macOS vezérelt gép.
+- **Hol:** macOS célgép.
 - **Ok:** a Cua Driver alkalmazás még nem kapta meg az Akadálymentesítés, a Képernyőfelvétel vagy a közvetlen
   rögzítés engedélyét; vagy az engedély előtt indult, és újra kell indítani.
 - **Ellenőrzés:** `cua-driver permissions status --json` a Macen.
@@ -198,7 +198,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Hol:** távoli vezérlés egy Linuxos gépre.
 - **Ok:** Linuxos gépet a desktape még nem tud vezérelni; Linuxról csak vezérelni lehet.
 - **Ellenőrzés:** nincs mit ellenőrizni.
-- **Javítás:** a vezérelt gép Windows vagy macOS legyen.
+- **Javítás:** a célgép Windows vagy macOS legyen.
 - **Ki:** nem javítható most. **Óta:** 0.2.0 (korábban nem volt külön üzenet).
 
 ### A `uv` telepítés után sem található
