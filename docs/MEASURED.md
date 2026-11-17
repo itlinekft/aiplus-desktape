@@ -577,6 +577,20 @@ Not measured: a UAC prompt itself (the VM has UAC off); a first install of OpenS
 script; the firewall change (left alone with `-KeepFirewall`: the VM is reached through a port forward); `macos/setup-target.sh`
 on a Mac (only `bash -n`); the skill's form in PowerShell or Git Bash.
 
+## 2026-11-18: the live screens' network cost (`panel-bandwidth`)
+
+The Linux controller on Wi-Fi; the Windows 11 test PC and the Windows 11 VM (Cua Driver 0.34.1, ffmpeg 9.0.1 and
+9.0.2 there), two Macs that did not answer. Bytes are the `rchar` of the panel's `ssh` child processes
+(`/proc/<pid>/io`) over the window, so SSH's own framing is included; the local H.264 decoder is not counted.
+
+- Before (driver PNG frames for the grid): frames asked as the grid asks them (`/frame/<target>?fps=1&size=960`
+  once a second for five targets, 15 s; the owner's own page may have asked at the same time): 9.9 Mbit/s in all,
+  the VM about 680 KB/s, the PC about 330 KB/s, a second PC about 200 KB/s. The owner: the Wi-Fi network broke down
+  with the preview on.
+- After (the grid streamed as H.264 on Windows, `-g` at least 60): the owner's page open, 20 s: the PC in the grid at
+  1 frame a second, 960 px: 6 KB/s; the VM zoomed at 10 frames a second, 1920 px, under control: 85 KB/s; its input
+  connections about 1 KB/s; 0.77 Mbit/s in all. The owner: "most tök jó a terhelés".
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

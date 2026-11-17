@@ -5,6 +5,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Changed
+- **The panel's live screens no longer flood the network** (`panel-bandwidth`): a Windows target's grid tile is the
+  H.264 stream too, not a whole PNG every second, and driver frames (macOS, the fallback) come up to 3 s apart while
+  the screen does not change. Measured on Wi-Fi: about 9.9 Mbit/s before, 0.77 Mbit/s after with a zoomed view
+  running.
+
 ## [0.7.1] - 2026-11-18
 
 ### Fixed

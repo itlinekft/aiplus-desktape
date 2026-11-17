@@ -5362,7 +5362,7 @@ REVIVE_EVERY = 180.0          # panel-live D7: a vanished driver daemon is start
 FPS_RANGE, SIZE_RANGE = (0.2, 15.0), (320, 1920)
 DRIVER_FPS_MAX = 5.0           # panel-live D4: a driver frame costs 150 ms to 1 s; more than this is the stream's job
 ASK_WINDOW = 3.0               # seconds a viewer's ask for a rate and size counts (see FrameGrabber.want)
-STREAM_MIN_FPS = 2.0           # panel-live D3: a Windows target's zoomed view, asked above this, is streamed
+DRIVER_IDLE_MAX = 3.0          # panel-bandwidth D2: driver frames of an unchanged screen come at most this far apart
 STREAM_START, STREAM_STALL = 10.0, 5.0   # seconds to the first streamed frame; a stream silent this long is dead
 STREAM_TASK = 30.0             # seconds for the capture task to be made over SSH (12 s measured on a slow PC)
 WIN_HELPERS = {}               # host -> the compiled input helper's path there, for this panel run
@@ -5601,6 +5601,17 @@ def split_jpegs(buf):
         frames.append(buf[i:j + 2]); buf = buf[j + 2:]
 
 
+def stream_fps(fps):
+    """panel-bandwidth D1: the stream's whole-number rate for an asked one: rounded, 1 to 15."""
+    return int(min(max(round(float(fps)), 1), 15))
+
+
+def driver_gap(fps, unchanged):
+    """panel-bandwidth D2: seconds to the next driver frame, doubled for each identical frame in a row, capped."""
+    gap = 1.0 / min(fps, DRIVER_FPS_MAX)
+    return min(gap * 2 ** min(unchanged, 8), max(gap, DRIVER_IDLE_MAX))
+
+
 class LiveStream:
     """panel-live D3: a Windows target's screen as MJPEG. ffmpeg runs in the person's desktop session (an SSH session
     cannot capture), serves one viewer on the loopback, and ends with it; an SSH relay brings the frames here."""
@@ -5824,6 +5835,7 @@ class FrameGrabber:
         self.frame, self.at, self.error, self.ms = None, 0.0, None, None
         self.fps, self.size, self.wanted, self.thread = 1.0, 960, 0.0, None
         self.session, self.cua, self.fresh, self.frame_wh = None, None, False, None
+        self.unchanged = 0                  # panel-bandwidth D2: identical driver frames in a row
         self.mu = threading.Lock()
         self.io = threading.Lock()          # the frame connection
         self.kick = threading.Event()       # an input wants the next frame now
@@ -5878,7 +5890,7 @@ class FrameGrabber:
         return self.native or self.frame_wh
 
     def _stream_wanted(self, now):
-        if self.fps <= STREAM_MIN_FPS or now < self.stream_off_until or self.host == "local":
+        if now < self.stream_off_until or self.host == "local":     # any rate (panel-bandwidth D1)
             return False
         if self.windows is None:
             try:
@@ -5896,7 +5908,7 @@ class FrameGrabber:
         if not self._stream_wanted(now) or self.screen() is None:     # the native size comes from a driver frame
             self._stop_stream(); return False
         s = self.stream
-        if s is not None and (s.fps != int(min(self.fps, 15)) or s.width != self.size):
+        if s is not None and (s.fps != stream_fps(self.fps) or s.width != self.size):
             self._stop_stream(); s = None                      # the page asked for another rate or size
         if s is not None and not s.alive(now):
             why, ran = s.why or "no frame", s.frames
@@ -5913,7 +5925,7 @@ class FrameGrabber:
             return False
         if s is None:
             try:
-                self.stream = s = LiveStream(self.host, min(self.fps, 15), self.size, self._stream_frame,
+                self.stream = s = LiveStream(self.host, stream_fps(self.fps), self.size, self._stream_frame,
                                                  codec=self.codec)
             except Exception as e:
                 self.stream_off_until = now + STREAM_RETRY
@@ -6011,7 +6023,9 @@ class FrameGrabber:
                         img = next((c for c in self.cua.last.get("content", []) if c.get("type") == "image"), None)
                         if not img:
                             raise RuntimeError("the driver returned no screen image")
-                        self.frame, self.at, self.error = base64.b64decode(img["data"]), time.time(), None
+                        new = base64.b64decode(img["data"])
+                        self.unchanged = self.unchanged + 1 if new == self.frame else 0
+                        self.frame, self.at, self.error = new, time.time(), None
                         self.mime = img.get("mimeType") or "image/png"
                         if self.frame[:8] == b"\x89PNG\r\n\x1a\n":
                             self.frame_wh = tuple(int.from_bytes(self.frame[i:i + 4], "big") for i in (16, 20))
@@ -6030,7 +6044,8 @@ class FrameGrabber:
                             self.cua, self.fresh = None, False
                     time.sleep(FRAME_RETRY)
                     continue
-                self.kick.wait(max(0.0, 1.0 / min(self.fps, DRIVER_FPS_MAX) - (time.time() - t0)))
+                if self.kick.wait(max(0.0, driver_gap(self.fps, self.unchanged) - (time.time() - t0))):
+                    self.unchanged = 0           # an input: the asked rate again (panel-bandwidth D2)
                 self.kick.clear()
         finally:
             self._stop_stream()
@@ -6652,8 +6667,19 @@ def selftest_booking_panel():
                 assert g2._stream_step() is False and g2.stream is None
             finally:
                 globals()["LiveStream"] = real
+            # panel-bandwidth D1: the grid's rate is streamed too, at a whole-number rate of at least 1
             g2.stream_off_until, g2.fps = 0, 1.0
-            assert g2._stream_step() is False, "the grid's rate is never streamed"
+            made_streams = []
+            globals()["LiveStream"] = lambda *a, **k: made_streams.append(a) or real(*a, start=False, **k)
+            try:
+                assert g2._stream_step() is False and made_streams and made_streams[0][1] == 1, made_streams
+                g2._stop_stream()
+            finally:
+                globals()["LiveStream"] = real
+            assert [stream_fps(f) for f in (0.2, 0.5, 1, 2.4, 10, 20)] == [1, 1, 1, 2, 10, 15]
+            # panel-bandwidth D2: an unchanged screen's driver frames come less often, capped
+            assert driver_gap(1, 0) == 1.0 and driver_gap(1, 1) == 2.0 and driver_gap(1, 5) == DRIVER_IDLE_MAX
+            assert driver_gap(5, 0) == 0.2 and driver_gap(5, 3) == 1.6 and driver_gap(0.2, 4) == 5.0, "never above the ask"
             # the handler: status JSON, a frame, a refused Host, an unknown target
             from http.server import ThreadingHTTPServer
             import urllib.request, urllib.error
