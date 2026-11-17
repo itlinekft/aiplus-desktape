@@ -44,7 +44,7 @@ scancodes 0x14 0x12 0x1F 0x14 typed "test" into the Copilot pane.
 
 In a Visual FoxPro 9 program (RLB Kettős könyvvitel 26.6.0 demo, measured on a Windows VM, 2026-11-16): a
 textbox accepts `KEYEVENTF_UNICODE` characters from desktape's helper — accented Hungarian text ("Demó Cég
-Kft.") landed, and the DBF behind it holds it correctly. But the same helper's **editing keys are dropped**:
+Kft.") landed, and the program shows it back correctly. But the same helper's **editing keys are dropped**:
 its `keys` path sends VK events with `wScan` 0, and Backspace, Home, End and the arrows do nothing in a
 textbox (characters typed after them keep appending). What works for editing: WScript SendKeys, which sends
 VK **with a scan code** (`{END}{BS 12}2611` cleared and retyped a field) — the same scan-code rule as the
@@ -56,6 +56,24 @@ input may have landed anyway, check the screen before retrying. The program's me
 Könyvelés, …) is drawn by FoxPro and is invisible to UI Automation: open it with Alt+<first letter> (Alt+A)
 and navigate with arrows+Enter, or pixel-click it; taking a UIA snapshot closes an open dropdown, so open
 the menu and pick the item on one driver connection.
+
+Writing a whole entry with SendKeys in the same program (measured 2026-11-17, nine journal entries booked and
+read back):
+
+- **Backspace at a field's start moves to the previous field and goes on deleting there.** `{END}{BS 40}` in
+  an empty voucher-number field erased the date field before it; the program then refused the entry ("only the
+  current bookkeeping year"). Never send more Backspaces than the field holds. Shift-selection does not work
+  either (`{HOME}+{END}` then typing appended to the old text). What clears a field safely: `{HOME}{DEL n}` —
+  Delete at a field's end does nothing.
+- **A click and the keys after it race.** Sent in one `os_input` call, the keys could reach the field that had
+  the focus before the click. Send the click alone, wait about a second, then send the keys.
+- **Input is applied late.** A screen grab taken right after sending can still show the old value; the keys
+  are not lost, they arrive a moment later (a value typed "again" then landed twice). Wait about two seconds
+  before judging the screen.
+- **The forms answer UI Automation better than the menu does.** Their controls carry the developer's names
+  (`bizx`, `megjx`, `DATUM`, `KOD`) and their values, and the program's own list grids expose every cell's
+  value: a booked entry can be read back by value, without a screenshot. Buttons (`Mentés`, `Új számlasor`)
+  take an `act` click by label.
 
 ## Web pages in Edge or Chrome
 
@@ -138,6 +156,15 @@ the menu and pick the item on one driver connection.
   lock for it (Settings › Accounts › Sign-in options), naming the setting and how to undo it.
 - Measured on a Windows 11 VM (Hungarian build), 2026-11-16: locked during an evening run (the cause was not measured);
   the panel's live screen showed the last frame, so check a frame's time before trusting it.
+
+## A one-off task left behind runs again at its start time
+
+- The usual way to start a program in the desktop session from SSH is a one-off scheduled task
+  (`schtasks /create … /sc once /st 23:59 /it` and `schtasks /run`). The `/st` time is not a placeholder: a task
+  that is not deleted afterwards **runs again at that time**. Measured on a Windows 11 VM, 2026-11-16: two
+  installer tasks left from an evening session started both installers again at 23:59, unattended. desktape's
+  own helpers delete their task in a `finally`; delete any task you create by hand the same way
+  (`schtasks /delete /tn <name> /f`), and list what is left with `Get-ScheduledTask | Where TaskPath -eq '\'`.
 
 ## Closing windows
 
