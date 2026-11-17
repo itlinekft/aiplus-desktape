@@ -5087,7 +5087,8 @@ def cmd_status(a):
 # claude-plugin D1: the one command per OS that installs each piece; doctor prints them, it never runs them (D2)
 INSTALL = {
     "uv": {"win32": "winget install --id astral-sh.uv -e", "darwin": "brew install uv",
-           "linux": "curl -LsSf https://astral.sh/uv/install.sh | sh"},
+           "linux": "curl -LsSf -o uv-install.sh https://astral.sh/uv/install.sh, read it, then sh uv-install.sh "
+                    "(or your distribution's uv package)"},
     "pyyaml": {"any": "uv run desktape.py …  (uv brings PyYAML; without uv: python -m pip install --user pyyaml)"},
     "ssh": {"win32": "Settings › System › Optional features › OpenSSH Client", "darwin": "(built in)",
             "linux": "sudo apt install openssh-client  (or your distribution's package)"},
@@ -5152,6 +5153,8 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
     # PATH yet (measured: Claude Code's shell on Windows); found there, it is installed, not missing
     home = [os.path.join(os.path.expanduser("~"), d, "uv" + (".exe" if osname == "win32" else ""))
             for d in (".local/bin", ".cargo/bin")]
+    if osname == "win32":       # install-cold-read: `winget install astral-sh.uv` links it here, new shells only
+        home.append(os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links", "uv.exe"))
     off_path = next((p for p in home if exists(p)), None)
     rows.append((bool(which("uv") or off_path), "uv", "found" if which("uv") else
                  f"{off_path} (not on this shell's PATH: call it by that path, or open a new terminal)" if off_path
@@ -5203,6 +5206,30 @@ def doctor_browsers(host, cua=None):
             cua.close()
 
 
+def driver_hint(mac):
+    """install-cold-read: what to do when a target's driver does not answer."""
+    return ("Next: `desktape pair NAME --check`; to install it: " + ("docs/macos-setup.md step 2, its permissions step 3"
+            if mac else "docs/windows-setup.md §2, in the desktop session") + " (on that machine)")
+
+
+def doctor_target_driver(host, mac=False, cua=None):
+    """install-cold-read: a named target's driver answers (its window list), then the browser rows; a row that is
+    not ok when it does not, so `doctor --target` never says everything is in place without the driver."""
+    run_dir = None
+    try:
+        if cua is None:
+            run_dir = new_run_dir("doctor", "adhoc")
+            cua = Cua(host, os.path.join(run_dir, "audit.jsonl"))
+        n = len(cua.call("list_windows", {})[0].get("windows", []))
+        return [(True, f"Cua Driver on {host}", f"answers ({n} windows)")] + doctor_browsers(host, cua)
+    except (Exception, SystemExit) as e:
+        logger.warning("doctor: the driver on %s did not answer: %s", host, e)
+        return [(False, f"Cua Driver on {host}", f"did not answer: {str(e)[:200]}. " + driver_hint(mac))]
+    finally:
+        if run_dir and cua is not None:
+            cua.close()
+
+
 def doctor_verdict(missing, target_checked):
     """install-cold-read: the last line never says more than was checked, and names the next command."""
     if missing:
@@ -5217,7 +5244,7 @@ def doctor_verdict(missing, target_checked):
 def cmd_doctor(a):
     rows = doctor_report(a.local, a.video)
     if not a.local and (a.host or a.target or host_default()):     # a named target: what it needs, over SSH
-        host = None
+        host, t = None, None
         try:
             host, _ = choose_target(a.host, a.target)
             t = Target(host)
@@ -5229,11 +5256,11 @@ def cmd_doctor(a):
                          "targets` lists the known names; `desktape pair NAME --check` tests the key login; a new "
                          "machine: `desktape pair NAME --os windows` (docs/pairing.md)"))
         if host:
-            rows += doctor_browsers(host)
+            rows += doctor_target_driver(host, mac=bool(t and t.mac))
     for ok, piece, detail in rows:
         print(f"{'ok     ' if ok else 'MISSING'}  {piece}: {detail}")
     missing = [p for ok, p, _ in rows if not ok]
-    target_checked = a.local or any(p.startswith(("ffmpeg on ", "target ")) for _, p, _ in rows)
+    target_checked = a.local or any(p.startswith(("ffmpeg on ", "target ", "Cua Driver on ")) for _, p, _ in rows)
     print(doctor_verdict(missing, target_checked))
     logger.info("doctor: %d checked, %d missing%s", len(rows), len(missing), f" ({', '.join(missing)})" if missing else "")
     return 0 if not missing else 1
@@ -8558,6 +8585,23 @@ def selftest():
     said = doctor_verdict([], False)
     assert "no target was checked" in said and "doctor --target NAME" in said and "pair NAME --os windows" in said, said
     assert doctor_verdict(["uv"], False).startswith("1 missing"), doctor_verdict(["uv"], False)
+    class _NoDriver:
+        def call(self, tool, args, secret=False, timeout=None):
+            raise RuntimeError("no daemon")
+    class _Driver:
+        def call(self, tool, args, secret=False, timeout=None):
+            return ({"windows": []}, "") if tool == "list_windows" else ({}, "")
+    level = logger.level; logger.setLevel(logging.CRITICAL)
+    try:
+        [(ok, piece, said)] = doctor_target_driver("fake", mac=True, cua=_NoDriver())
+        assert not ok and piece == "Cua Driver on fake" and "macos-setup.md" in said and "pair NAME --check" in said, said
+        assert doctor_target_driver("fake", cua=_Driver()) == [(True, "Cua Driver on fake", "answers (0 windows)")]
+    finally:
+        logger.setLevel(level)
+    ok, _, said = doctor_report(which=lambda x: None, exists=lambda p: p.endswith(os.path.join("WinGet", "Links", "uv.exe")),
+                                platform="win32")[2]
+    assert ok and "not on this shell's PATH" in said, said
+    assert "| sh" not in doctor_report(which=lambda x: None, exists=lambda p: False, platform="linux")[2][2]
     _, _, said = doctor_report(local=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: True, platform="linux")[-1]
     assert "without --local" in said and "doctor --target NAME" in said, said
     selftest_macos()

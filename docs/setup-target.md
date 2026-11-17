@@ -11,6 +11,9 @@ controller's line, Cua Driver at the pinned version, and ffmpeg.
 
 ## Rules for you
 
+- **Speak the person's language.** The request they pasted is Hungarian first; answer in Hungarian when they do,
+  this page's commands and file names stay as they are. Say plainly which steps are theirs (UAC, a password, a
+  macOS permission dialog) and where to click.
 - **Show, then ask.** Before each step say what it does, show the exact command and where anything comes from,
   and wait for a yes. Do not chain installs without asking.
 - **Never type a password** or approve an elevation prompt for the person: the UAC prompt, `sudo` and the macOS

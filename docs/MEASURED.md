@@ -530,6 +530,24 @@ erased a typed date) did not come back in any variant, so its cause is not isola
 and cuts the window reads to the click steps' own selector reads. Not measured: a display scale other than 100 %,
 and `at: {from: …}` on this program (the selftest covers it).
 
+## 2026-11-17: install from a cold reader's view (`install-cold-read`)
+
+**Machines:** the Linux controller; the Windows VM (Hungarian Windows, build 26300, an administrator account) as the
+target. desktape at the change's commits. **Change:** `install-cold-read`.
+
+| What | Result |
+|---|---|
+| `doctor` with no target, on the Linux controller | 4 checked, 0 missing; last line "this computer is ready to drive; no target was checked", with the next commands; exit 0 |
+| `doctor --local` on the Linux controller | 1 missing, "Windows or macOS", its line names `doctor` without `--local` and `doctor --target NAME`; exit 1 |
+| `doctor --target` the Windows VM | ffmpeg found (winget's package folder); "Cua Driver on …: answers (8 windows)"; "everything is in place"; exit 0 |
+| `bin/desktape.cmd` on the VM, a fake `uv.cmd` on the PATH that exits 3 | the fake got `run --quiet <plugin>\desktape.py look --x 1`; the launcher exited 3 |
+| `bin/desktape.cmd` on the VM, no uv on the PATH, in `.local\bin` or in winget's `Links` | printed the install line, exit 127 (before: no message) |
+| the Cua Driver release `cua-driver-rs-v0.34.1`, `install.ps1` and `SHA256SUMS` downloaded | `install.ps1` SHA-256 `16eedffc…45c56`, the same as its line in `SHA256SUMS`; `uninstall.ps1` `72bfa26f…f061` |
+| a paper install review of commit `61a90b8` (a cold reader, no install) | GO, 0 blockers, 6 majors; the majors this release fixes: the driver unchecked by `doctor --target`, uv after a winget install, the Linux uv line against the skill's rule, the target guide's language, the stale tested block, the unreleased version |
+
+Not measured: the winget `Links` branch with a real `uv.exe`; a fresh machine through the new README from the start;
+the one-line `claude plugin install … --marketplace …`; the managed-settings route for many machines.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

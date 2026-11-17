@@ -23,7 +23,18 @@
 
 ## 3. Check
 
-- [ ] 3.1 `--selftest`, `openspec validate --all`, `claude plugin validate .`, the leak scan.
+- [x] 3.1 `--selftest`, `openspec validate --all`, `claude plugin validate .`, the leak scan.
   [REQ: prerequisites-checked-and-named]
-- [ ] 3.2 Run the install reviewer again on the new commit; record its verdict in `docs/MEASURED.md` as a paper
+- [x] 3.2 Run the install reviewer again on the new commit; record its verdict in `docs/MEASURED.md` as a paper
   review. [REQ: prerequisites-checked-and-named]
+
+## 4. Review findings (the install review of `61a90b8`: GO, 6 majors)
+
+- [x] 4.1 `doctor --target` checks that the target's driver answers; a line naming the install steps when it does
+  not (`desktape.py` `doctor_target_driver`). [REQ: prerequisites-checked-and-named]
+- [x] 4.2 uv after a winget install: `doctor` and `bin/desktape.cmd` look in winget's `Links` folder; the launcher
+  prints the install line when uv is missing. [REQ: prerequisites-checked-and-named]
+- [x] 4.3 The Linux uv line is download, read, run, as the skill requires. [REQ: prerequisites-checked-and-named]
+- [x] 4.4 `docs/setup-target.md`: speak the person's language; the tested block lists the 2026-11-07 new PC.
+  [REQ: prerequisites-checked-and-named]
+- [x] 4.5 Release 0.6.8. [REQ: prerequisites-checked-and-named]

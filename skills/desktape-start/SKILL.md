@@ -49,7 +49,9 @@ Where `${CLAUDE_PLUGIN_ROOT}` is not set in your shell, find the plugin folder f
 The documents this skill cites (`docs/…`, `TROUBLESHOOTING.md`) are in that folder too.
 
 If `uv` itself is missing, look in `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin\uv.exe`) first; otherwise it
-is the first thing to install (`winget install --id astral-sh.uv -e` or `brew install uv`), with the person's yes.
+is the first thing to install, with the person's yes: `winget install --id astral-sh.uv -e` (Windows; it reaches
+the PATH of new shells only, so `doctor` also looks in winget's `Links` folder, and a restart of Claude puts it on the
+PATH), `brew install uv` (macOS), or on Linux the official script downloaded, read, then run (`doctor` prints it).
 
 ## 3. Where everything comes from, then ask
 
@@ -98,21 +100,27 @@ Automation of System Events, direct capture). Never grant them to SSH, Terminal 
 <!-- desktape:tested: the ONLY place that says what has been tried. Update this block (both languages) when a
 measurement lands in docs/MEASURED.md, and never claim more than that file. -->
 
-> **HU, kipróbálva (2026-10-25):**
+> **HU, kipróbálva (2026-11-07):**
 > - Windows 11, Claude Desktop: a tape-ek tesztként és videóként is lefutnak, AI-modell nélkül; egy 22 lépéses
 >   importálás ellenőrzéssel együtt lefutott.
 > - Claude Code a Windows gépen, helyben: a plugin telepítése és a `doctor` rendben, egy importáló tape 22/22 lépéssel.
 > - macOS (Apple processzoros Mac, macOS 26.4): a Claude Desktop bejáró tape 41/41 lépéssel, tesztként és videóként.
 > - Mac és Windows párosítása kulccsal: ellenőrizve, a visszavonással együtt.
+> - Új Windows 10-es gép beállítása a rajta futó Claude-dal, a `docs/setup-target.md` alapján (2026-11-07): a párosítás,
+>   a `doctor` és a `look` rendben. Macen ez az út még nincs kipróbálva.
+> - Linux vezérlő gépként: a mérések innen futottak.
 > - **Cowork: még nem teszteltük**, se felhőben, se a saját gépen.
 > - **Linux mint vezérelt gép: még nem működik**; Linux csak vezérelhet.
 >
-> **EN, tried so far (2026-10-25):**
+> **EN, tried so far (2026-11-07):**
 > - Windows 11, Claude Desktop: tapes run as a test and as a video, with no AI model; a 22-step import with its
 >   check passed.
 > - Claude Code on the Windows machine, locally: the plugin install and `doctor` work, an import tape ran 22/22.
 > - macOS (Apple Silicon Mac, macOS 26.4): the Claude Desktop tour tape 41/41, as a test and as a video.
 > - Pairing a Mac with the Windows machine by key: checked, including taking it back.
+> - A new Windows 10 PC set up by the Claude on it, from `docs/setup-target.md` (2026-11-07): pairing, `doctor` and
+>   `look` passed. Not yet tried on a Mac.
+> - Linux as the controller: the measurements ran from it.
 > - **Cowork: not tested yet**, neither in the cloud nor on the person's own computer.
 > - **Linux as a target: not supported yet**; Linux only drives.
 

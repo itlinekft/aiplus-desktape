@@ -5,6 +5,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-17
+
 ### Changed
 - Installing, for someone who has never seen desktape (`install-cold-read`, from the AI+ install review of
   2026-11-17): the README (Hungarian and English) opens with "Before you start": the controller and the target in
@@ -14,6 +16,13 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   2026-11-07. The site's "Get started" is the plugin route.
 - `doctor` without a target no longer says "everything is in place": it says the controller is ready, that no target
   was checked, and the command that checks one. `--local` on Linux and an unreachable target name the next step.
+- `doctor --target NAME` checks that the target's Cua Driver answers (its window list), so it no longer says
+  "everything is in place" with only SSH and ffmpeg checked; when the driver does not answer, the line names the
+  install steps for that OS. uv installed by winget is found in winget's `Links` folder before Claude is restarted,
+  and `bin/desktape.cmd` says how to install uv when it finds none (it failed silently). On Linux `doctor` prints the
+  uv script as download, read, then run, never piped into a shell, as the skill requires.
+- `docs/setup-target.md` tells the Claude on the target to speak the person's language; the tested-status block in
+  `desktape-start` lists the new Windows 10 PC set up from that guide (2026-11-07).
 - One Cua Driver procedure on Windows: `docs/windows-setup.md` §2 takes the pinned GitHub release and its SHA-256, as
   `docs/setup-target.md` does (the old cua.ai script and its hash are gone). `docs/windows-setup.md` has an uninstall
   section, and `docs/pairing.md` names both ways a target takes the pairing line.
