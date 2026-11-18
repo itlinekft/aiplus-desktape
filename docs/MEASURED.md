@@ -575,7 +575,30 @@ empty folder):** the skill's `uv run --quiet "${CLAUDE_PLUGIN_ROOT}/desktape.py"
 
 Not measured: a UAC prompt itself (the VM has UAC off); a first install of OpenSSH, Cua Driver or ffmpeg through the
 script; the firewall change (left alone with `-KeepFirewall`: the VM is reached through a port forward); `macos/setup-target.sh`
-on a Mac (only `bash -n`); the skill's form in PowerShell or Git Bash.
+on a Mac (only `bash -n`; its dry run is the next entry); the skill's form in PowerShell or Git Bash.
+
+## 2026-11-18: the setup script on a Mac target, dry run (`target-installer` task 1.6)
+
+**Machines:** the Linux controller; the Mac mini test machine (macOS 26.4, arm64, an administrator account) as the
+target, reached over SSH, with Remote Login, Cua Driver 0.34.1 and Homebrew ffmpeg-full already in place. desktape
+0.7.1. A throwaway ed25519 key made for the test only; its pairing line names a documentation address in `from=`.
+
+The command is `setup_command("macos", line)` (what `pair NAME --os macos` prints), run as one SSH command with
+`--dry-run` appended, stdin closed.
+
+| What | Result |
+|---|---|
+| the download from the `v0.7.1` tag and `shasum -a 256 -c` against the controller's hashes | `setup-target.sh: OK`, `cua-setup.sh: OK` |
+| a line whose comment is not `desktape-pair-<name>@<controller>` | `STOP: not a desktape pairing line …`, exit 1, nothing changed |
+| `--dry-run` with a valid line | the machine, the user (administrator: yes), its addresses, the key's fingerprint, then the plan: add the line; skip Cua Driver, ffmpeg-full, the sleep settings, Remote Login (on); the four CuaDriver permissions left to the person; "Dry run: nothing was changed", exit 0 |
+| no `--dry-run`, no `--yes`, stdin closed | the plan, then "Not confirmed: nothing was changed", exit 2 |
+| `~/.ssh/authorized_keys` after both runs | the same three lines, no line of the test key |
+
+The downloaded `setup-target.sh`, `cua-setup.sh` and `setup-target.log` were removed from `~/desktape` afterwards.
+
+Not measured: a `--yes` run on the Mac (it adds the line and opens the permission dialogs on the shared machine's
+screen); a first install of Cua Driver or ffmpeg-full through the script; whether the plan can tell that the four
+CuaDriver permissions are already granted (it lists them for the person even though this Mac's driver runs).
 
 ## 2026-11-18: the live screens' network cost (`panel-bandwidth`)
 

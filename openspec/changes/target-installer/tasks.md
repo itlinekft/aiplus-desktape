@@ -11,7 +11,7 @@
 - [x] 1.5 Measure on the Windows test VM: parse, a bad line, the dry run, no yes, the elevated part, a full run in the
   desktop session, a login with the installed key and its refusal after removal; into `docs/MEASURED.md`.
   [REQ: a-setup-script-sets-up-a-new-target-in-one-run]
-- [ ] 1.6 Measure `macos/setup-target.sh --dry-run` on the Mac test machine when it is free.
+- [x] 1.6 Measure `macos/setup-target.sh --dry-run` on the Mac test machine when it is free (2026-11-18, `docs/MEASURED.md`).
   [REQ: a-setup-script-sets-up-a-new-target-in-one-run]
 - [x] 1.7 `docs/setup-target.md` (script first), README, CHANGELOG, version 0.7.0, tag `v0.7.0`.
   [REQ: pair-prints-a-checked-setup-command]
