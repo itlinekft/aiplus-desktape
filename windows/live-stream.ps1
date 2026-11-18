@@ -9,10 +9,11 @@ $d = Join-Path $env:USERPROFILE 'desktape'; New-Item -ItemType Directory -Force 
 $vf = "scale='min($Width,iw)':-2"
 # h264 (panel-live D8): only what changed goes out, no B-frames or look-ahead, and a rate ceiling so a busy screen
 # cannot build a backlog on a slow network; the panel decodes it on its own side. A keyframe at most once a
-# minute at a low rate (panel-bandwidth D1): the first frame is one, and the TCP relay loses nothing.
+# minute at a low rate (panel-bandwidth D1): the first frame is one, and the TCP relay loses nothing. NUT around
+# it (D4): each packet carries its size, so nothing waits for the next frame to know where this one ends.
 if ($Codec -eq 'h264') {
     $enc = @('-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-crf', '23',
-             '-maxrate', '4M', '-bufsize', '1M', '-g', [string][Math]::Max($Fps * 10, 60), '-f', 'h264')
+             '-maxrate', '4M', '-bufsize', '1M', '-g', [string][Math]::Max($Fps * 10, 60), '-f', 'nut')
 } else {
     $enc = @('-c:v', 'mjpeg', '-q:v', [string]$Quality, '-f', 'mjpeg')
 }

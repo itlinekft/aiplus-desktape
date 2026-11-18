@@ -613,6 +613,19 @@ The Linux controller on Wi-Fi; the Windows 11 test PC and the Windows 11 VM (Cua
 - After (the grid streamed as H.264 on Windows, `-g` at least 60): the owner's page open, 20 s: the PC in the grid at
   1 frame a second, 960 px: 6 KB/s; the VM zoomed at 10 frames a second, 1920 px, under control: 85 KB/s; its input
   connections about 1 KB/s; 0.77 Mbit/s in all. The owner: "most tök jó a terhelés".
+- The Mac mini kept 196 KB/s in the grid: a small area of its menu bar (about 40×10 px of a 960×540 frame) changes
+  every second, so no two driver frames were byte-equal. With the row comparison (`frame_same`, 12 of 540 rows
+  changed: unchanged; about 2 ms a frame): 62–68 KB/s.
+- Pointer delay (a probe: `move_cursor` with `scope: desktop` on its own driver connection, between two points, eight
+  times; the first panel frame whose crop around the new point changed), the VM zoomed, 1920 px: raw H.264 through
+  the ffmpeg relay, 10 frames a second: 0.42–0.52 s after the call returned (median 0.52 s). `ssh -W` and NUT: 10
+  frames a second 0.22–0.31 s (median 0.30 s), 15 frames a second 0.22–0.34 s (median 0.26 s). The call itself
+  8–40 ms, a few up to 0.3 s.
+- After a panel restart every stream gave 0 frames (H.264 and MJPEG), on both Windows targets: the previous run's
+  capture (its viewer gone) still ran, and no new capture task started. Ending that ffmpeg made the next stream work
+  at once; with `end_captures` at a run's first stream, two restarts in a row each ended one leftover per target and
+  streamed. Then, the grid at 1 frame a second: each Windows tile about 1 KB/s, the Mac mini 62 KB/s, 0.54 Mbit/s
+  in all.
 
 ## Not tested yet
 

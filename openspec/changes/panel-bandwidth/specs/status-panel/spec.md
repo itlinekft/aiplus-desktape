@@ -12,6 +12,11 @@ change or an input.
 - **WHEN** the grid shows a Windows target at 1 frame a second and nothing changes on its screen
 - **THEN** the panel's connection to it carries a few kilobytes a second, not a whole image every second
 
+#### Scenario: the pointer in the zoomed view
+
+- **WHEN** control is on for a Windows target zoomed at 10 frames a second and the pointer moves
+- **THEN** the moved pointer shows in the panel's frame within about a third of a second
+
 #### Scenario: an idle Mac screen
 
 - **WHEN** the grid shows a macOS target whose screen does not change

@@ -18,6 +18,8 @@ second and 1920 px.
   an unchanged screen costs almost nothing. The keyframe interval grows to at least a minute.
 - Driver frames (macOS, and the fallback when a stream cannot run) back off while the screen does not change: the
   wait doubles after each identical frame, up to 3 s, and drops back at the first change or the next input.
+- The stream's delay: the relay becomes sshd's own forward (`ssh -W`), the H.264 travels in NUT so no parser waits
+  for the next frame, and a panel run first ends captures an earlier run left behind (they blocked new ones).
 - The transport stays SSH: a separate channel would need a listening port on the target outside the loopback,
   with authentication and encryption of its own (panel-live D3 keeps the capture on the loopback for that reason).
 

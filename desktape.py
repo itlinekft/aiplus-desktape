@@ -5363,6 +5363,7 @@ FPS_RANGE, SIZE_RANGE = (0.2, 15.0), (320, 1920)
 DRIVER_FPS_MAX = 5.0           # panel-live D4: a driver frame costs 150 ms to 1 s; more than this is the stream's job
 ASK_WINDOW = 3.0               # seconds a viewer's ask for a rate and size counts (see FrameGrabber.want)
 DRIVER_IDLE_MAX = 3.0          # panel-bandwidth D2: driver frames of an unchanged screen come at most this far apart
+DRIVER_SAME_ROWS = 0.03        # D2: a frame whose changed rows are at most this share counts as unchanged (a menu-bar clock)
 STREAM_START, STREAM_STALL = 10.0, 5.0   # seconds to the first streamed frame; a stream silent this long is dead
 STREAM_TASK = 30.0             # seconds for the capture task to be made over SSH (12 s measured on a slow PC)
 WIN_HELPERS = {}               # host -> the compiled input helper's path there, for this panel run
@@ -5376,8 +5377,10 @@ WIN_VK = {"return": 0x0D, "tab": 0x09, "escape": 0x1B, "backspace": 0x08, "delet
 STREAM_RETRY = 60.0            # after a failed stream, driver frames for this long
 STREAM_PORTS = (48650, 48999)  # the target's loopback port is drawn from these, per stream
 LIVE_PS1 = os.path.join(HERE, "windows", "live-stream.ps1")
+FFMPEG_RELAY = set()           # panel-bandwidth D4: hosts whose sshd refuses `ssh -W`; their relay is ffmpeg there
+FORWARD_REFUSED = ("administratively prohibited", "forwarding disabled", "open failed: unknown channel type")
 STREAM_DECODE = ("-hide_banner -loglevel error -flags low_delay -probesize 32 -analyzeduration 0 "
-                 "-threads 1 -f h264 -i pipe:0 -fps_mode passthrough -pix_fmt yuvj420p -c:v mjpeg -q:v 4 -flush_packets 1 -f mjpeg "
+                 "-threads 1 -f nut -i pipe:0 -fps_mode passthrough -pix_fmt yuvj420p -c:v mjpeg -q:v 4 -flush_packets 1 -f mjpeg "
                  "pipe:1")
 CONTROL_IDLE = 120.0          # panel-control D2: control gives the lock back after this long without input
 CONTROL_KEYS = {"return", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "home", "end",
@@ -5606,6 +5609,41 @@ def stream_fps(fps):
     return int(min(max(round(float(fps)), 1), 15))
 
 
+def png_rows(data):
+    """panel-bandwidth D2: a PNG's filtered scanlines (zlib only, no image library), or None for anything else.
+    A changed pixel changes its own row (or the row's filter); comparing rows needs no full decode."""
+    import struct, zlib
+    if not data or data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    try:
+        i, idat, ihdr = 8, [], None
+        while i + 8 <= len(data):
+            n, kind = struct.unpack(">I4s", data[i:i + 8])
+            if kind == b"IHDR":
+                ihdr = struct.unpack(">IIBBBBB", data[i + 8:i + 21])
+            elif kind == b"IDAT":
+                idat.append(data[i + 8:i + 8 + n])
+            elif kind == b"IEND":
+                break
+            i += 12 + n
+        w, h, depth, color, _, _, interlace = ihdr
+        if interlace:
+            return None
+        stride = 1 + (w * {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color] * depth + 7) // 8
+        raw = zlib.decompress(b"".join(idat))
+        return [raw[k:k + stride] for k in range(0, stride * h, stride)]
+    except (TypeError, KeyError, ValueError, struct.error, zlib.error) as e:
+        logger.debug("panel: frame rows not read (%s)", e)
+        return None
+
+
+def frame_same(old_rows, new_rows):
+    """D2: True when at most DRIVER_SAME_ROWS of the rows differ (a ticking clock, a blinking caret)."""
+    if not old_rows or not new_rows or len(old_rows) != len(new_rows):
+        return False
+    return sum(a != b for a, b in zip(old_rows, new_rows)) <= DRIVER_SAME_ROWS * len(new_rows)
+
+
 def driver_gap(fps, unchanged):
     """panel-bandwidth D2: seconds to the next driver frame, doubled for each identical frame in a row, capped."""
     gap = 1.0 / min(fps, DRIVER_FPS_MAX)
@@ -5641,6 +5679,7 @@ class LiveStream:
             raise RuntimeError(f"no ffmpeg on {self.host}")
         self.port = random.SystemRandom().randint(*STREAM_PORTS)
         if self.host not in STREAM_SCRIPT_PUT:          # each SSH round trip to a slow PC costs seconds (measured)
+            end_captures(t)                             # D4: an earlier panel run's capture blocks new ones
             t.mkdir("desktape")
             t.put(LIVE_PS1, "desktape/live-stream.ps1")
             STREAM_SCRIPT_PUT.add(self.host)
@@ -5652,15 +5691,22 @@ class LiveStream:
                  f'&& schtasks /run /tn {tn} >nul & schtasks /delete /tn {tn} /f >nul')
         if r.returncode:
             raise RuntimeError(f"the stream task did not start on {self.host}: {(r.stderr or r.stdout).strip()[-200:]}")
-        nobuf = "" if self.codec == "h264" else "-fflags nobuffer "   # it drops the probed packets: H.264's first keyframe (measured)
-        self.relay = [*("ssh -o BatchMode=yes".split()), *t.opts, self.host,
-                      f'"{ff}" -hide_banner -loglevel error {nobuf}-flags low_delay -probesize 32 -analyzeduration 0 '
-                      f'-f {self.codec} -i tcp://127.0.0.1:{self.port} -c copy -flush_packets 1 -f {self.codec} -']
+        # panel-bandwidth D4: sshd's own forward to the loopback port (`-W`), no process there; ffmpeg as before
+        # where the sshd refuses forwarding. H.264 goes in NUT, which frames each packet with its size.
+        wire = "nut" if self.codec == "h264" else "mjpeg"
+        if self.host in FFMPEG_RELAY:
+            nobuf = "" if self.codec == "h264" else "-fflags nobuffer "   # it drops the probed packets: H.264's first keyframe (measured)
+            self.relay = [*("ssh -o BatchMode=yes".split()), *t.opts, self.host,
+                          f'"{ff}" -hide_banner -loglevel error {nobuf}-flags low_delay -probesize 32 -analyzeduration 0 '
+                          f'-f {wire} -i tcp://127.0.0.1:{self.port} -c copy -flush_packets 1 -f {wire} -']
+        else:
+            self.relay = [*("ssh -o BatchMode=yes".split()), *t.opts, "-W", f"127.0.0.1:{self.port}", self.host]
         logger.info("panel: live stream of %s starting (port %d on its loopback, %d fps, %d px, %s)",
                     self.host, self.port, self.fps, self.width, self.codec)
 
     def _read(self):
-        for attempt in range(5):            # the listener may not be up yet: the relay is refused and ends at once
+        deadline = time.time() + STREAM_START   # the listener may not be up yet: the relay is refused and ends at once
+        while time.time() < deadline:            # (an `ssh -W` in a fraction of a second: retried until the deadline)
             if self.stopped.is_set():
                 return
             time.sleep(0.8)
@@ -5686,6 +5732,10 @@ class LiveStream:
             self.p.wait()
             err.seek(0); self.why = err.read().decode("utf-8", "replace").strip()[-200:] or f"relay ended ({self.p.returncode})"
             if self.frames:
+                break
+            if "-W" in self.relay and any(w in self.why for w in FORWARD_REFUSED):
+                FFMPEG_RELAY.add(self.host)          # D4: the next stream of this host relays through ffmpeg
+                logger.warning("panel: %s refuses `ssh -W` (%s); its streams relay through ffmpeg", self.host, self.why)
                 break
         if not self.stopped.is_set():
             logger.warning("panel: live stream of %s ended after %d frames: %s", self.host, self.frames, self.why)
@@ -5714,15 +5764,25 @@ class LiveStream:
             threading.Thread(target=self._cleanup, daemon=True, name=f"stream-end-{self.host}").start()
 
     def _cleanup(self):
-        ps = ("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg.exe'\" | ? { $_.CommandLine -like "
-              f"'*127.0.0.1:{self.port}*' }} | % {{ Stop-Process -Id $_.ProcessId -Force; 'ended ' + $_.ProcessId }}")
-        try:
-            r = Target(self.host).sh("powershell -NoProfile -EncodedCommand " + base64.b64encode(ps.encode("utf-16-le")).decode())
-            ended = [l for l in (r.stdout or "").splitlines() if l.startswith("ended ")]
-            if ended:
-                logger.info("panel: ended %d leftover ffmpeg of the stream on %s (port %d)", len(ended), self.host, self.port)
-        except Exception as e:
-            logger.warning("panel: cleaning up the stream on %s (port %s): %s", self.host, self.port, e)
+        end_captures(Target(self.host), self.port)
+
+
+def end_captures(t, port=None):
+    """End desktape's live-stream captures on a Windows target: the one on `port`, or with None every one (a panel
+    run's first stream: a capture left by an earlier run, whose viewer went without its ffmpeg noticing, kept new
+    capture tasks from starting; measured 2026-11-18, panel-bandwidth D4). The number ended."""
+    match = f"*tcp://127.0.0.1:{port}?listen=1*" if port else "*tcp://127.0.0.1:*?listen=1*"
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg.exe'\" | ? { $_.CommandLine -like "
+          f"'{match}' }} | % {{ Stop-Process -Id $_.ProcessId -Force; 'ended ' + $_.ProcessId }}")
+    try:
+        r = t.sh("powershell -NoProfile -EncodedCommand " + base64.b64encode(ps.encode("utf-16-le")).decode())
+        ended = [l for l in (r.stdout or "").splitlines() if l.startswith("ended ")]
+        if ended:
+            logger.info("panel: ended %d leftover ffmpeg of a stream on %s (port %s)", len(ended), t.host, port or "any")
+        return len(ended)
+    except Exception as e:
+        logger.warning("panel: cleaning up streams on %s (port %s): %s", t.host, port or "any", e)
+        return 0
 
 
 def input_line(tool, args, mac=False):
@@ -5835,7 +5895,7 @@ class FrameGrabber:
         self.frame, self.at, self.error, self.ms = None, 0.0, None, None
         self.fps, self.size, self.wanted, self.thread = 1.0, 960, 0.0, None
         self.session, self.cua, self.fresh, self.frame_wh = None, None, False, None
-        self.unchanged = 0                  # panel-bandwidth D2: identical driver frames in a row
+        self.unchanged, self.rows = 0, None  # panel-bandwidth D2: unchanged driver frames in a row; the last one's rows
         self.mu = threading.Lock()
         self.io = threading.Lock()          # the frame connection
         self.kick = threading.Event()       # an input wants the next frame now
@@ -6024,7 +6084,9 @@ class FrameGrabber:
                         if not img:
                             raise RuntimeError("the driver returned no screen image")
                         new = base64.b64decode(img["data"])
-                        self.unchanged = self.unchanged + 1 if new == self.frame else 0
+                        rows = png_rows(new)
+                        self.unchanged = self.unchanged + 1 if new == self.frame or frame_same(self.rows, rows) else 0
+                        self.rows = rows
                         self.frame, self.at, self.error = new, time.time(), None
                         self.mime = img.get("mimeType") or "image/png"
                         if self.frame[:8] == b"\x89PNG\r\n\x1a\n":
@@ -6679,6 +6741,19 @@ def selftest_booking_panel():
             assert [stream_fps(f) for f in (0.2, 0.5, 1, 2.4, 10, 20)] == [1, 1, 1, 2, 10, 15]
             # panel-bandwidth D2: an unchanged screen's driver frames come less often, capped
             assert driver_gap(1, 0) == 1.0 and driver_gap(1, 1) == 2.0 and driver_gap(1, 5) == DRIVER_IDLE_MAX
+            import struct, zlib
+            def mkpng(rows, w=4):
+                chunk = lambda k, d: struct.pack(">I", len(d)) + k + d + struct.pack(">I", zlib.crc32(k + d))
+                return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, len(rows), 8, 2, 0, 0, 0))
+                        + chunk(b"IDAT", zlib.compress(b"".join(b"\x00" + r for r in rows))) + chunk(b"IEND", b""))
+            base = [bytes([y]) * 12 for y in range(100)]
+            clock, page = base[:], base[:]
+            clock[2] = clock[3] = b"\xff" * 12
+            for y in range(20, 60):
+                page[y] = b"\x07" * 12
+            assert png_rows(mkpng(base)) == [b"\x00" + r for r in base] and png_rows(b"\xff\xd8jpeg") is None
+            assert frame_same(png_rows(mkpng(base)), png_rows(mkpng(clock))), "a clock in the menu bar is no change"
+            assert not frame_same(png_rows(mkpng(base)), png_rows(mkpng(page))) and not frame_same(None, base)
             assert driver_gap(5, 0) == 0.2 and driver_gap(5, 3) == 1.6 and driver_gap(0.2, 4) == 5.0, "never above the ask"
             # the handler: status JSON, a frame, a refused Host, an unknown target
             from http.server import ThreadingHTTPServer
@@ -7030,6 +7105,23 @@ def selftest_panel_audit():
     s.frames, s.last = 3, s.t0 + 20
     assert s.alive(s.t0 + 22) and not s.alive(s.t0 + 20 + STREAM_STALL + 1), "a silent stream is dead"
     s.stop(); assert not s.alive()
+    # panel-bandwidth D4: the relay is sshd's own forward, ffmpeg there only where the sshd refuses it
+    t0 = Target("user@box"); t0.ffmpeg = lambda: "ffmpeg.exe"; t0.mkdir = t0.put = lambda *a: None
+    t0.sh = lambda c: (sent.append(c), subprocess.CompletedProcess(c, 0, "ended 7\n", ""))[1]
+    sent = []
+    real_target = globals()["Target"]; globals()["Target"] = lambda h: t0
+    STREAM_SCRIPT_PUT.difference_update({"user@box", "user@old"})
+    try:
+        for host, relay in (("user@box", "-W"), ("user@old", "ffmpeg.exe")):
+            if relay != "-W":
+                FFMPEG_RELAY.add(host)
+            s = LiveStream(host, 1, 960, lambda f: None, start=False, codec="h264"); s._start()
+            assert relay in " ".join(s.relay) and ("-f nut" in " ".join(s.relay)) == (relay != "-W"), s.relay
+        assert sum("EncodedCommand" in c for c in sent) == 2, "leftover captures ended once per host and panel run"
+        assert "tcp://127.0.0.1:*?listen=1*" in base64.b64decode(sent[0].split()[-1]).decode("utf-16-le")
+    finally:
+        globals()["Target"] = real_target; FFMPEG_RELAY.discard("user@old")
+        STREAM_SCRIPT_PUT.difference_update({"user@box", "user@old"})
     # panel-live D8: H.264 on the wire, decoded here; an H.264 stream with no frame makes the next one MJPEG
     ps1 = open(LIVE_PS1, encoding="utf-8").read()
     assert ps1.isascii() and "libx264" in ps1 and "zerolatency" in ps1 and "-maxrate" in ps1 and "$Codec" in ps1
@@ -7040,7 +7132,7 @@ def selftest_panel_audit():
     if shutil.which("ffmpeg"):          # the decoder's own flags, on a few frames made here
         src = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10",
                               "-frames:v", "5", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-                              "-f", "h264", "-"], capture_output=True)
+                              "-f", "nut", "-"], capture_output=True)
         if src.returncode == 0 and src.stdout:
             dec = subprocess.run(["ffmpeg", *STREAM_DECODE.split()], input=src.stdout, capture_output=True)
             assert len(split_jpegs(dec.stdout)[0]) == 5, (dec.returncode, dec.stderr[-300:])

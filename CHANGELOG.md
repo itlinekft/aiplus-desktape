@@ -8,8 +8,15 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ### Changed
 - **The panel's live screens no longer flood the network** (`panel-bandwidth`): a Windows target's grid tile is the
   H.264 stream too, not a whole PNG every second, and driver frames (macOS, the fallback) come up to 3 s apart while
-  the screen does not change. Measured on Wi-Fi: about 9.9 Mbit/s before, 0.77 Mbit/s after with a zoomed view
-  running.
+  the screen does not change (a ticking menu-bar clock does not count). Measured on Wi-Fi: about 9.9 Mbit/s
+  before, 0.54 Mbit/s after.
+- **The zoomed view follows the pointer faster**: the stream is relayed by sshd's own forward (`ssh -W`) and travels
+  in NUT, so no parser waits for the next frame; the moved pointer shows in about 0.3 s instead of 0.5 s on the
+  Windows VM.
+
+### Fixed
+- After a panel restart, Windows targets got no live stream at all: the previous run's capture still ran on the
+  target and blocked new ones. A panel run's first stream on a target now ends such leftovers.
 
 ## [0.7.1] - 2026-11-18
 
