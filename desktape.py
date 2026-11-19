@@ -6254,7 +6254,8 @@ def panel_status(rows, grabbers=None, reach=None, now=None, directory=None, aliv
                     "activity": [x for x in acts if x.get("target") == host][-40:][::-1],   # the page folds runs
                     "reach": (reach or {}).get(host),
                     "frame": grabbers[name].info() if grabbers and name in grabbers else None,
-                    "control": {"since": controls[name]["since"]} if controls and name in controls else None})
+                    "control": {"since": controls[name]["since"], "override": controls[name].get("override")}
+                                if controls and name in controls else None})
     return {"now": now, "targets": out, "control_enabled": bool(control_enabled), "started": started}
 
 
@@ -6283,7 +6284,7 @@ class PanelState:
         self.token = "%032x" % random.SystemRandom().getrandbits(128)    # panel-control D3
         self.started = time.time()                                           # panel-live D6
         self.find_at = {}           # host -> when the panel last looked for it on the network (find-moved-target D3)
-        self.controls = {}          # name -> {"lk": BoxLock, "since": t, "last": t}
+        self.controls = {}          # name -> {"lk": BoxLock, "since": t, "last": t, "override": "booked"|"held"?}
         self.audit_dir = os.path.join(os.path.dirname(lock_dir()), "panel")
         self.grabbers, self.reach, self._rows = {}, {}, []
         self.mu, self.stopping = threading.Lock(), threading.Event()
@@ -6313,16 +6314,22 @@ class PanelState:
         if ctl is None:
             lk = BoxLock(g.host)
             lk.holder, lk.label, lk.keeps = f"panel-{os.getpid()}", "panel", True
+            took = None
             other = lk.try_acquire("panel control", take_lease=bool(body.get("takeover")))
             if other:
-                return 409, {"error": f"{g.host} is {describe_block(other)}", "block": block_fields(lk, other)}
-            ctl = {"lk": lk, "since": time.time(), "last": time.time()}
+                blk = block_fields(lk, other)
+                if not body.get("override"):
+                    # panel-override D2: the refusal tells the page there is a way in for a person
+                    return 409, {"error": f"{g.host} is {describe_block(other)}", "block": blk, "override": True}
+                ctl = {"lk": lk, "since": time.time(), "last": time.time(), "override": blk["kind"]}   # D1: no lock
+            else:
+                ctl = {"lk": lk, "since": time.time(), "last": time.time()}
+                took = (lk.read() or {}).get("took_from")
             with self.mu:
                 self.controls[name] = ctl
-            took = (lk.read() or {}).get("took_from")
             if took:
                 lk.log("control-takeover", replaced=took.get("label"), replaced_holder=took.get("holder"))
-            lk.log("control-start")
+            lk.log("control-start", **({"override": ctl["override"]} if ctl.get("override") else {}))
             if getattr(g, "helpers", False):
                 g.helper_ready()                  # panel-live D5: the keyboard helper starts now, not at the first key
             logger.info("panel: control of %s taken%s", g.host, f" over the lease of {took.get('label')}" if took else "")
@@ -6330,14 +6337,16 @@ class PanelState:
                 return 200, {"on": True}
         elif op == "start":
             return 200, {"on": True}
-        # renews the lock; ours unless the file was removed. A move only every 5 s (panel-live D2: many a second)
-        renew = op != "move" or time.time() - ctl.get("renewed", 0) >= 5
-        other = ctl["lk"].try_acquire("panel control") if renew else None
-        if renew and not other:
-            ctl["renewed"] = time.time()
-        if other:
-            self.control_stop(name, "lock lost")
-            return 409, {"error": f"{g.host} is {describe_block(other)}", "block": block_fields(ctl["lk"], other)}
+        # renews the lock; ours unless the file was removed. A move only every 5 s (panel-live D2: many a second).
+        # Overriding holds no lock, so it renews nothing and never takes one (panel-override D1).
+        if not ctl.get("override"):
+            renew = op != "move" or time.time() - ctl.get("renewed", 0) >= 5
+            other = ctl["lk"].try_acquire("panel control") if renew else None
+            if renew and not other:
+                ctl["renewed"] = time.time()
+            if other:
+                self.control_stop(name, "lock lost")
+                return 409, {"error": f"{g.host} is {describe_block(other)}", "block": block_fields(ctl["lk"], other)}
         ctl["last"] = time.time()
         try:
             grabber_act(g, op, body)
@@ -6355,10 +6364,13 @@ class PanelState:
             g = self.grabbers.get(name)
             if g is not None:                     # the helpers and the input connection go with control (D2, D5):
                 g.close_input()                   # its driver session does not outlive it (measured 2026-11-11)
-            why_not = ctl["lk"].unlock()
+            if ctl.get("override"):               # panel-override D1: nothing was held, nothing to unlock
+                logger.info("panel: overriding control of %s ended (%s)", ctl["lk"].host, why)
+            else:
+                why_not = ctl["lk"].unlock()
+                logger.info("panel: control of %s given back (%s)%s", ctl["lk"].host, why,
+                            f": {why_not}" if why_not else "")
             ctl["lk"].log("control-end", why=why, seconds=round(time.time() - ctl["since"], 1))
-            logger.info("panel: control of %s given back (%s)%s", ctl["lk"].host, why,
-                        f": {why_not}" if why_not else "")
 
     def expire_controls(self, now=None):
         now = now or time.time()
@@ -6867,6 +6879,18 @@ def selftest_booking_panel():
             assert BoxLock("user@box").book(time.time(), 600)[0]
             code, out = st.control("box", {"op": "start", "takeover": True})
             assert code == 409 and out["block"]["kind"] == "booked" and out["block"]["label"] == "proj-b", out
+            # panel-override D1: a person steps in during a booking: input flows, no lock is taken or renewed
+            code, out = st.control("box", {"op": "start", "override": True})
+            assert code == 200 and out["on"], (code, out)
+            assert st.controls["box"].get("override") == "booked", st.controls["box"]
+            assert BoxLock("user@box").read() is None, "overriding holds no lock"
+            assert st.control("box", {"op": "click", "x": 5, "y": 6})[0] == 200
+            assert not st.controls["box"].get("renewed"), "override renews nothing"
+            assert [a.get("override") for a in read_activity() if a["event"] == "control-start"][-1] == "booked"
+            st.control("box", {"op": "stop"})
+            assert not st.controls and BoxLock("user@box").read() is None, "the end unlocks nothing it does not hold"
+            code, out = st.control("box", {"op": "start"})
+            assert code == 409 and out["override"] is True and out["block"]["kind"] == "booked", out
             os.remove(BoxLock("user@box").bookings_path)
             os.environ["DESKTAPE_LABEL"] = "proj-a"
             # panel-polish D2: a drag, rescaled like a click

@@ -155,6 +155,9 @@ const HU = {
   release: "Elengedés", viewonly: "Csak nézet (a panel nem ezen a gépen figyel)",
   takeover: "Átveszem", takeoverHint: "az „Átveszem” gomb fent átveszi a lease-t", tookover: "átvéve tőle",
   ctltake: "lease átvétele", heldRun: "{label} parancsa fut ({command})", heldLease: "{label} lease-e {until}-ig",
+  override: "Beavatkozás", ctlOverride: "Beavatkozás: az input a gépre megy, a futó munka folytatódik",
+  overrideAsk: "A gép most foglalt ({why}). Beavatkozol? A futó munka tovább fut, az inputjaid is a gépre mennek, és semmi nem lesz elengedve.",
+  overrideHint: "a Beavatkozás gombbal be tudsz kattintani", ctloverride: "beavatkozás (a gép foglalva volt)",
   bookedBy: "{label} foglalta {until}-ig", cmds: "parancs", kEsc: "Esc", kStart: "Start", kAltTab: "Alt+Tab",
   hold: "használja", now: "most", badCount: "gépen gond van"
 };
@@ -173,6 +176,9 @@ const EN = {
   release: "Release", viewonly: "View only (the panel does not listen on this machine)",
   takeover: "Take over", takeoverHint: "the \u201cTake over\u201d button above takes the lease", tookover: "taken over from",
   ctltake: "lease taken over", heldRun: "{label} is running a command ({command})", heldLease: "{label} keeps a lease until {until}",
+  override: "Override", ctlOverride: "Overriding: input goes to the machine, the running work continues",
+  overrideAsk: "The machine is blocked right now ({why}). Override? The running work continues, your input goes to the machine too, and nothing is released.",
+  overrideHint: "the Override button lets you click in anyway", ctloverride: "override (the machine was blocked)",
   bookedBy: "booked by {label} until {until}", cmds: "commands", kEsc: "Esc", kStart: "Start", kAltTab: "Alt+Tab",
   hold: "holds it", now: "now", badCount: "machines need a look"
 };
@@ -206,7 +212,7 @@ let data = null, serverDown = false;
 
 function badge(t) {
   const L = t.lock;
-  if (t.control) return `<span class="badge ctl">${T.control}</span>`;
+  if (t.control) return `<span class="badge ctl">${t.control.override ? T.override : T.control}</span>`;
   if (L && L.running) return `<span class="badge busy">${T.running}: ${esc(L.label)}</span>`;
   if (t.booked_now) return `<span class="badge booked">${T.booked}: ${esc(t.booked_now.label)}</span>`;
   if (L && L.held) return `<span class="badge lease">${T.lease}: ${esc(L.label)} → ${hm(L.until)}</span>`;
@@ -223,7 +229,7 @@ function actLine(a, now) {
     (a.state ? ` · ${esc(a.state)}` : "") + (a.error ? ` · <span class="err" title="${esc(a.error)}">${esc(short(a.error, 160))}</span>` : "")
     : a.event === "book" ? `${T.book} ${day(a.at)}–${hm(a.until)}${a.note ? " · " + esc(a.note) : ""}`
     : a.event === "unbook" ? `${T.unbook} (${esc(a.id)})`
-    : a.event === "control-start" ? T.ctlstart
+    : a.event === "control-start" ? (a.override ? `${T.ctlstart} — ${T.ctloverride}` : T.ctlstart)
     : a.event === "control-takeover" ? `${T.ctltake} (${T.tookover} ${esc(a.replaced)})`
     : a.event === "control-end" ? `${T.ctlend} (${esc(a.why)})` : esc(a.event);
   return `<li><span class="muted small">${ago(a.at, now)} ${T.ago}</span> · <b>${esc(a.label)}</b> · ${what}</li>`;
@@ -451,17 +457,30 @@ function canTakeOver(t) {
   return !!(L && L.held && !L.running && !t.control && L.label !== "panel" &&
             !(t.booked_now && t.booked_now.label !== "panel"));
 }
+/* panel-override D2: offered while another project's booking is active or a live run holds the target. */
+function canOverride(t) {
+  return !!(data.control_enabled && !t.control &&
+            ((t.booked_now && t.booked_now.label !== "panel") ||
+             (t.lock && t.lock.held && t.lock.running && t.lock.label !== "panel")));
+}
+function whyBlocked(t) {
+  if (t.booked_now && t.booked_now.label !== "panel")
+    return wordBlock({kind: "booked", label: t.booked_now.label, until: t.booked_now.until});
+  return wordBlock({kind: "held", label: t.lock && t.lock.label, until: t.lock && t.lock.until, running: true});
+}
 /* The zoomed view's bar (D1): Back, state, the keys a browser keeps, Take over. */
 function soloBar(t) {
   const bar = $("solobar"), n = t.name;
-  const state = !data.control_enabled ? T.viewonly : control.on === n ? T.ctlon
+  const state = !data.control_enabled ? T.viewonly
+    : control.on === n ? (control.ovr === n ? T.ctlOverride : T.ctlon)
     : canTakeOver(t) ? wordBlock({kind: "held", label: t.lock.label, until: t.lock.until}) : T.ctloff;
-  const key = `${n}|${state}|${canTakeOver(t)}|${data.control_enabled}|${badge(t)}|${t.reach && t.reach.ok}`;
+  const key = `${n}|${state}|${canTakeOver(t)}|${canOverride(t)}|${data.control_enabled}|${badge(t)}|${t.reach && t.reach.ok}`;
   if (bar.dataset.key === key) return;
   bar.dataset.key = key;
   bar.innerHTML = `<button data-a="back">${T.back}</button>${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
     `<span class="state">${esc(state)}</span><span class="spacer"></span>` +
     (canTakeOver(t) && data.control_enabled ? `<button class="take" data-a="take">${T.takeover}</button>` : "") +
+    (canOverride(t) ? `<button class="take" data-a="override" title="${esc(whyBlocked(t))}">${T.override}</button>` : "") +
 
     (data.control_enabled ? `<button data-a="esc">${T.kEsc}</button><button data-a="start">${T.kStart}</button>` +
       `<button data-a="alttab">${T.kAltTab}</button>` : "");
@@ -470,6 +489,10 @@ function soloBar(t) {
     const a = b.dataset.a;
     if (a === "back") return leaveSolo();
     if (a === "take") return control.send(n, {op: "start", takeover: true});
+    if (a === "override") {
+      if (!confirm(fill(T.overrideAsk, {why: whyBlocked(t)}))) return;
+      return control.send(n, {op: "start", override: true});
+    }
     control.flush(n);
     control.send(n, a === "esc" ? {op: "key", key: "escape"} : a === "start" ? {op: "hotkey", keys: ["ctrl", "escape"]}
                                 : {op: "hotkey", keys: ["alt", "tab"]});
@@ -531,19 +554,20 @@ const KEYMAP = {Enter: "return", Tab: "tab", Escape: "escape", Backspace: "backs
   PageUp: "pageup", PageDown: "pagedown"};
 for (let i = 1; i <= 12; i++) KEYMAP["F" + i] = "f" + i;
 const control = {
-  on: null, queue: Promise.resolve(), text: "", textTimer: null, wheelAcc: 0, wheelTimer: null,
+  on: null, ovr: null, queue: Promise.resolve(), text: "", textTimer: null, wheelAcc: 0, wheelTimer: null,
   send(n, body) {                       // one queue keeps the order of clicks and keys
     this.queue = this.queue.then(async () => {
       try {
         const r = await fetch(`control/${encodeURIComponent(n)}`, {method: "POST",
           headers: {"Content-Type": "application/json", "X-Panel-Token": TOKEN}, body: JSON.stringify(body)});
         const out = await r.json().catch(() => ({}));
-        if (r.ok) { this.on = out.on ? n : null; }
+        if (r.ok) { this.on = out.on ? n : null; this.ovr = this.on && body.override ? n : null; }
         else {
-          if (r.status === 409) this.on = null;
+          if (r.status === 409) { this.on = null; this.ovr = null; }
           const why = wordBlock(out.block) || out.error || r.status;
-          toast(n, `${r.status === 409 ? T.ctlrefused : T.error}: ${why}` +
-                   (out.block && out.block.takeover ? ` — ${T.takeoverHint}` : ""), 6000);
+          const hint = out.block && out.block.takeover ? ` — ${T.takeoverHint}`
+                     : out.override ? ` — ${T.overrideHint}` : "";
+          toast(n, `${r.status === 409 ? T.ctlrefused : T.error}: ${why}${hint}`, 6000);
         }
       } catch (e) { toast(n, T.noserver); }
       overlays();
@@ -662,7 +686,7 @@ const control = {
   stop() {
     const n = this.on;
     if (n) { this.flush(n); this.send(n, {op: "stop"}); }
-    this.on = null;
+    this.on = null; this.ovr = null;
   }
 };
 
@@ -717,7 +741,7 @@ async function poll() {
     document.title = (bad ? `⚠ ${bad} · ` : "") + "desktape panel";
     if (control.on) {                         // the server let go (idle, or the lock was lost)
       const t = data.targets.find(x => x.name === control.on);
-      if (t && !t.control) control.on = null;
+      if (t && !t.control) { control.on = null; control.ovr = null; }
     }
   } catch (e) {
     serverDown = true;

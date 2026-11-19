@@ -1,0 +1,77 @@
+## MODIFIED Requirements
+
+### Requirement: A person controls a target from the panel
+
+A click on a tile SHALL show that target alone, full screen, at a higher frame rate set in the page. In that view,
+the first click or key press SHALL take control, and while control is on, a click, right click, wheel turn or key
+press on the frame SHALL be sent to that target's screen at the matching point, through the driver, with no remote
+desktop. Viewing alone SHALL NOT take the target. Taking control SHALL take the target's lock as the panel's own
+session and SHALL be refused, naming the holder, while another session holds the target or another project's
+booking is active. Leaving the view, two minutes without input, or stopping the panel SHALL give the lock back. Control SHALL
+be possible only when the panel listens on this machine, and only with the token of the page the panel served.
+Typed text SHALL be redacted in the audit.
+
+While a target is blocked — another project's booking is active or a live run holds it — the page SHALL offer an
+override control start, behind a confirm that names the blocker. Overriding control SHALL send the person's clicks,
+right clicks, wheel turns, drags and keys to the machine without taking the lock: the booking and the run stay
+untouched, the panel renews nothing and unlocks nothing, and the mode never turns itself into ordinary exclusive
+control. Overriding control SHALL be visible as such on the tile and in the zoomed bar, and the start SHALL be
+recorded in the activity with the block kind. Overriding control SHALL be offered under the same gates as ordinary
+control (this machine, the page's token).
+
+#### Scenario: clicking a button on the frame
+
+- **WHEN** control is on for a target and the person clicks a button seen on the frame
+- **THEN** the driver clicks the same point of the target's screen, and the next frame shows the result
+
+#### Scenario: an agent holds the target
+
+- **WHEN** an agent's session holds the target and the person clicks on its zoomed frame
+- **THEN** nothing is sent to the start of a normal control, the refusal names the agent's project and command, and the page offers the override button
+
+#### Scenario: an agent while the person controls
+
+- **WHEN** control is on and an agent calls `look` on that target
+- **THEN** the agent waits and stops with exit code 3, naming the panel as the holder
+
+#### Scenario: a request without the token
+
+- **WHEN** a request to a control endpoint lacks the page's token, or comes with a foreign Origin
+- **THEN** it is refused with 403 and nothing is sent to the driver
+
+#### Scenario: stepping in during a booking
+
+- **WHEN** another project's booking is active, the person confirms the override in the zoomed view and clicks a button on the frame
+- **THEN** the click reaches the machine, the booking stays until its end, and the panel holds no lock on the target
+
+#### Scenario: a UAC prompt during an automated run
+
+- **WHEN** an automated run holds the target and a UAC prompt needs a person, the person overrides and clicks the prompt's button
+- **THEN** the click reaches the machine, the run's lock is untouched, and the run's next step sees the prompt answered
+
+#### Scenario: the override ends quietly
+
+- **WHEN** overriding control is on and the person leaves the zoomed view, or two minutes pass without input
+- **THEN** control ends, nothing is unlocked, the run and the booking go on, and the tile badge is back to the blocked target's own
+
+#### Scenario: the blocker clears mid-session
+
+- **WHEN** overriding control is on and the booking ends while the person keeps working
+- **THEN** the person's clicks keep reaching the machine, no lock is taken, and the control stays override until it ends
+
+### Requirement: A person takes over a lease
+
+When a target is held only by another session's lease, with no running command and no active booking of another
+project, the zoomed view SHALL offer to take it over. Taking over SHALL take the lock for the panel, and giving the
+lock back SHALL restore the replaced session's lock with a fresh lease and its session state. A running command and
+another project's booking SHALL NOT be taken over.
+
+#### Scenario: an agent between steps
+
+- **WHEN** an agent's lease holds the target, the person takes it over, works, then leaves the zoomed view
+- **THEN** the agent's lock is back with a fresh lease and its session state, and its next command runs
+
+#### Scenario: a running command
+
+- **WHEN** an agent's command is running on the target
+- **THEN** take over is not offered and a control request is refused naming the agent, with the override offered instead

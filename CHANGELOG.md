@@ -5,6 +5,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- **The panel can step in over a booking** (`panel-override`): when another project's booking is active or a live
+  run holds a target, the zoomed view offers Override — after a confirm, the person's clicks, drags and keys reach
+  the machine while the booking and the run continue; the panel takes no lock, renews nothing and unlocks nothing,
+  and the tile badges it as "Beavatkozás". A refused control start tells the page the override exists.
+
 ### Changed
 - **The panel's live screens no longer flood the network** (`panel-bandwidth`): a Windows target's grid tile is the
   H.264 stream too, not a whole PNG every second, and driver frames (macOS, the fallback) come up to 3 s apart while
