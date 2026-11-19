@@ -69,6 +69,14 @@ booking is active. Leaving the view, two minutes without input, or stopping the 
 be possible only when the panel listens on this machine, and only with the token of the page the panel served.
 Typed text SHALL be redacted in the audit.
 
+While a target is blocked — another project's booking is active or a live run holds it — the page SHALL offer an
+override control start, behind a confirm that names the blocker. Overriding control SHALL send the person's clicks,
+right clicks, wheel turns, drags and keys to the machine without taking the lock: the booking and the run stay
+untouched, the panel renews nothing and unlocks nothing, and the mode never turns itself into ordinary exclusive
+control. Overriding control SHALL be visible as such on the tile and in the zoomed bar, and the start SHALL be
+recorded in the activity with the block kind. Overriding control SHALL be offered under the same gates as ordinary
+control (this machine, the page's token).
+
 #### Scenario: clicking a button on the frame
 
 - **WHEN** control is on for a target and the person clicks a button seen on the frame
@@ -77,7 +85,7 @@ Typed text SHALL be redacted in the audit.
 #### Scenario: an agent holds the target
 
 - **WHEN** an agent's session holds the target and the person clicks on its zoomed frame
-- **THEN** nothing is sent to the target, control stays off, and the page names the agent's project and command
+- **THEN** nothing is sent to the start of a normal control, the refusal names the agent's project and command, and the page offers the override button
 
 #### Scenario: an agent while the person controls
 
@@ -88,6 +96,26 @@ Typed text SHALL be redacted in the audit.
 
 - **WHEN** a request to a control endpoint lacks the page's token, or comes with a foreign Origin
 - **THEN** it is refused with 403 and nothing is sent to the driver
+
+#### Scenario: stepping in during a booking
+
+- **WHEN** another project's booking is active, the person confirms the override in the zoomed view and clicks a button on the frame
+- **THEN** the click reaches the machine, the booking stays until its end, and the panel holds no lock on the target
+
+#### Scenario: a UAC prompt during an automated run
+
+- **WHEN** an automated run holds the target and a UAC prompt needs a person, the person overrides and clicks the prompt's button
+- **THEN** the click reaches the machine, the run's lock is untouched, and the run's next step sees the prompt answered
+
+#### Scenario: the override ends quietly
+
+- **WHEN** overriding control is on and the person leaves the zoomed view, or two minutes pass without input
+- **THEN** control ends, nothing is unlocked, the run and the booking go on, and the tile badge is back to the blocked target's own
+
+#### Scenario: the blocker clears mid-session
+
+- **WHEN** overriding control is on and the booking ends while the person keeps working
+- **THEN** the person's clicks keep reaching the machine, no lock is taken, and the control stays override until it ends
 
 ### Requirement: The zoomed view keeps its controls off the target's screen
 
@@ -121,7 +149,7 @@ another project's booking SHALL NOT be taken over.
 #### Scenario: a running command
 
 - **WHEN** an agent's command is running on the target
-- **THEN** take over is not offered and a control request is refused naming the agent
+- **THEN** take over is not offered and a control request is refused naming the agent, with the override offered instead
 
 ### Requirement: The status page reads at a glance
 
