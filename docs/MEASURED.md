@@ -627,6 +627,32 @@ The Linux controller on Wi-Fi; the Windows 11 test PC and the Windows 11 VM (Cua
   streamed. Then, the grid at 1 frame a second: each Windows tile about 1 KB/s, the Mac mini 62 KB/s, 0.54 Mbit/s
   in all.
 
+## 2026-11-19: a person steps in over a booking (`panel-override`)
+
+The Windows 11 test PC (the panel's own target, over SSH, Cua Driver 0.34.1 there), the panel running locally on the
+Linux controller (`desktape.py panel`), driving its HTTP API the way the page does (the token from the served page,
+`POST /control/box1`). The blocker was made for the measurement: a real `run --mode video` holding the lock
+(`DESKTAPE_LABEL=proj-b`, 4/4 steps, 71.2 s, exit 0), then a booking by the same other label
+(`desktape.py book --for 10m`, booking 567166).
+
+| Step | Result |
+|---|---|
+| normal start while the run holds the lock | 409 in 1.0 ms, `block.kind=held`, `running=true`, `takeover=false`, `override=true` |
+| override start (`{"op":"start","override":true}`) | 200 in 1.1 ms; the run's lock untouched (holder, pid, lease all unchanged) |
+| `move` while the run holds the lock | 200 in 0.37 s (driver accepted it) |
+| clicks with a wrong frame size sent | 502 with the target driver's own error (`No window under screen point (2400,600)`); the run went on and finished ok — an input reaches the driver, and a person's mistake does not stop the run |
+| override stop while the run holds the lock | 200; the run's lock still there (nothing unlocked); the run ended 0 later |
+| normal start under the active booking | 409 in 1.0 ms, `block.kind=booked`, `takeover=false`, `override=true` |
+| override start under the booking | 200 in 1.2 ms; no lock file exists during override (the `lock` output shows only the booking) |
+| a click on a window title bar under the booking | 200 in 0.52 s (the driver clicked it) |
+| override stop under the booking | the booking stays until its end and no lock appears |
+| the activity log | `control-start` carries `override: held` and `override: booked`; the run phase's start also shows the old takeover path intact: after the run ended, a start got `takeover=true` for the dead lease |
+| after the run ended, a start against the dead lease | 409 with `running=false`, `takeover=true` and `override=true`: takeover is offered as before, override as well |
+
+Not measured here: the page's own button and confirm (the API is what the page calls; the page changes are in the
+change's selftest), and an intervention on a UAC prompt during a real automated run — the mechanism is the same
+click path as the title-bar click above.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
