@@ -3477,7 +3477,10 @@ class Runner:
             raise OutcomeFailed(f"{what} could not be delivered: {self.describe_front(before)} "
                                 f"({cb.tool} waited {cb.waited:.1f} s)") from None
         self.drop_kept()          # D3: an action outside the driver's calls (an OS key, a file) is not counted
-        self.after_action(what, exp, before)
+        a = arg if isinstance(arg, dict) else {}
+        typed = arg if kind == "type" and isinstance(arg, str) else a.get("text") if kind == "type" else \
+            a.get("value") if kind == "set" else None
+        self.after_action(what, exp, before, typed=typed if isinstance(typed, str) and typed.strip() else None)
         if not self.quiet or exp:            # form-replay D1: `settle: off` reads only when the step asks
             self.settle()
 
@@ -3591,12 +3594,13 @@ class Runner:
                 logger.warning("OCR of %r failed: %s", w.get("title"), e)
         return text, words
 
-    def after_action(self, what, exp, before):
+    def after_action(self, what, exp, before, typed=None):
         """Wait for the step's outcome (D1), failing at once on the program's own failure (D2) or on a window
         nobody planned (D4); without `expect:` it looks once."""
         exp = exp or {}
         end = time.time() + float(exp.get("timeout", OUTCOME_WAIT if exp else 0))
         read, opens = {}, exp.get("opens")
+        own_text = list(self.failure_ignore or ()) + ([typed] if typed else [])   # typed-text-not-failure D1
         while True:
             sc, _ = self.cua.call("list_windows", {})
             every = sc.get("windows", [])
@@ -3642,7 +3646,7 @@ class Runner:
                         continue
                     n = parse(line)
                     if n and failure_word(n[2] + " " + (VALUE.search(line).group(1) if VALUE.search(line) else ""),
-                                          self.failure_words, self.failure_ignore):
+                                          self.failure_words, own_text):
                         raise ProgramFailure(f"after {what}: {self.title!r} now shows: {line.strip()[:200]}")
             # a named window counts in any process: Electron shows its file picker from another one (measured)
             named = [w for w in every if w.get("title") in (exp.get("opens"), exp.get("closes"))
@@ -8900,6 +8904,18 @@ def selftest():
                                                         '\n    - [6] MenuItem "Másolás" [actions=[invoke]]'))
     r = Runner(Prog(shown, {"Import": menu}), "test"); r.focus("Main")
     r.step({"click": {"label": "Import", "effect": "none"}})
+    # typed-text-not-failure: the text a step typed is not a failure line; a real new failure line still is
+    r = Runner(Prog(main), "test"); r.focus("Main")
+    before = r.before_action({})
+    r.cua.wins[1] = ("Main", main.replace('Edit "Import fájl" [actions', 'Edit "Import fájl" [value="Ezt nem lehet visszavonni" actions'))
+    r.dirty = True
+    r.after_action("typing 'Ezt nem lehet visszavonni'", None, before, typed="Ezt nem lehet visszavonni")
+    r.cua.wins[1] = ("Main", r.cua.wins[1][1] + '\n  - Text "Hiba: érvénytelen érték"')
+    try:
+        r.after_action("typing 'Ezt nem lehet visszavonni'", None, before, typed="Ezt nem lehet visszavonni")
+        raise AssertionError("expected ProgramFailure")
+    except ProgramFailure as e:
+        assert "érvénytelen" in str(e), e
     result = lambda p: p.wins.__setitem__(8, ("Információ", '- Window "Információ"\n  - Text "Az importálás sikeresen befejeződött"'))
     e, _ = run({"Import": result}, {"click": {"label": "Import", "expect": {"shows": "sikeresen befejeződött"}}})
     assert e is None, e                                       # the result box carries the outcome: planned by it

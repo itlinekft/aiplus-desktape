@@ -763,8 +763,14 @@ is on). On screen: a Code session whose chat says "nem lehet" and a built-in bro
 | the banner line in `look --full --text` before / with the menu open | the same text, 26 / 22 spaces of indentation: the menu moved it, it is not new |
 | the same step with 0.8.1 (6dcb3d8), twice | ok both times |
 
-Seen on the way, not fixed: a `type` step whose own text holds a failure word (typing "Ezt nem lehet
-visszavonni" into the prompt) fails on the field's new value.
+Seen on the way: a `type` step whose own text holds a failure word (typing "Ezt nem lehet visszavonni" into the
+prompt) failed on the field's new value; fixed by `typed-text-not-failure`, below.
+
+## 2026-11-22: a step's own text is not a failure line (`typed-text-not-failure`)
+
+The Windows 11 VM, Claude Desktop's new chat, no map. `act '{type: "Ezt nem lehet visszavonni"}'` into the
+prompt: FAILED on 0.8.1 ("now shows: - Edit … value=…nem lehet…"); ok twice with the fix (the prompt cleared after
+each). A real new failure line after typing is covered by the selftest only (no failing program on that machine).
 
 ## Not tested yet
 

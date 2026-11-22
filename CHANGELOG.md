@@ -5,6 +5,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Fixed
+- **A step's own text no longer fails it** (`typed-text-not-failure`): after a `type` or `set` step the failure-word
+  check leaves out the text the step wrote, so typing "Ezt nem lehet visszavonni" into a field is not a failure;
+  anything else on a new line is checked as before.
+
 ## [0.8.1] - 2026-11-22
 
 ### Fixed
