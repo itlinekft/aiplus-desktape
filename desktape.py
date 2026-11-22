@@ -51,7 +51,9 @@ def default_runs(env=os.environ, cwd=None):
 
 
 RUNS = default_runs()
-EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
+EXE_AT = r"%USERPROFILE%\.cua-driver\packages\releases\{}-x86_64-pc-windows-msvc\cua-driver.exe"
+EXE = EXE_AT.format("0.34.1")
+TARGET_DRIVER = {}    # host string -> a profile's `driver:` version (driver-054 D4: one target at a time)
 # agent-efficiency D3: the driver tools that only read; any other call may change the screen
 READ_TOOLS = {"list_windows", "get_window_state", "get_recording_state", "get_desktop_state", "get_screen_size",
               "screenshot"}
@@ -74,7 +76,7 @@ def host_default():
 
 SSH_OPTS = {}         # host string -> extra ssh/scp options, from the target's profile (an identity file)
 HOMES = {}            # host string -> the target user's home folder, asked once
-TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os", "paired"}
+TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os", "paired", "driver"}
 
 
 def targets_path():
@@ -103,6 +105,10 @@ def load_targets(path=None):
             raise ValueError(f"{path}: target {name!r} has unknown fields {sorted(extra)}; known: {sorted(TARGET_FIELDS)}")
         if t.get("os") is not None and t["os"] not in OSES:
             raise ValueError(f"{path}: target {name!r} has os {t['os']!r}; known: {', '.join(OSES)}")
+        if t.get("driver") is not None:          # driver-054 D4: this target runs another Cua Driver than the pin
+            if not re.fullmatch(r"\d+\.\d+\.\d+", str(t["driver"])):
+                raise ValueError(f"{path}: target {name!r} has driver {t['driver']!r}; write a version like 0.55.0")
+            TARGET_DRIVER[ssh_host(t)] = str(t["driver"])
     if doc.get("default") and doc["default"] not in targets:
         raise ValueError(f"{path}: default {doc['default']!r} is not a target; known: {sorted(targets)}")
     return {"default": doc.get("default"), "targets": targets, "path": path}
@@ -292,10 +298,10 @@ class Target:
             sets = "".join(f"{k}={v} " for k, v in DRIVER_ENV.items())
             return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f"{MAC_DRIVER} mcp"], None
         if self.local:
-            return [os.path.expandvars(EXE), "mcp", "--socket", PIPE], {**os.environ, **DRIVER_ENV}
+            return [os.path.expandvars(win_exe(self.host)), "mcp", "--socket", PIPE], {**os.environ, **DRIVER_ENV}
         sets = "".join(f"set {k}={v}&& " for k, v in DRIVER_ENV.items())
         pipe = PIPES.get(self.host, PIPE)
-        return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f'"{EXE}" mcp --socket {pipe}'], None
+        return ["ssh", "-o", "BatchMode=yes", *self.opts, self.host, sets + f'"{win_exe(self.host)}" mcp --socket {pipe}'], None
 
     def sh(self, cmd, check=False, input=None):
         kw = dict(check=check, capture_output=True, text=True, encoding="utf-8", errors="replace", input=input)
@@ -425,11 +431,22 @@ def start_daemon(host):
     tr = HIDDEN + "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \\\"%USERPROFILE%\\desktape\\cua-serve.ps1\\\""
     if host in PIPES:
         tr += " -Pipe " + PIPES[host]
+    tr += " -Version " + driver_pin(host)     # driver-054 D4: the daemon and the client are the same release
     t.sh(f'schtasks /create /tn desktape-cua /tr "{tr}" /sc once /st 23:59 /it{rl_flag(t)} /f >nul '
          f'&& schtasks /run /tn desktape-cua >nul',
          check=True)
     time.sleep(4)
     t.sh("schtasks /delete /tn desktape-cua /f >nul")
+
+
+def driver_pin(host):
+    """driver-054 D4: the Cua Driver version this target runs: its profile's `driver:`, else the pinned one."""
+    return TARGET_DRIVER.get(host, DRIVER_VERSION)
+
+
+def win_exe(host):
+    """The Windows driver executable of that version, as the target's cmd expands it."""
+    return EXE_AT.format(driver_pin(host))
 
 
 TREE_MAX = 5000        # driver-054 D2: a full walk, as 0.34.1 gave; 0.35.0 and later cap the tree at 250 by default
@@ -8640,6 +8657,18 @@ def selftest():
         except ValueError as e:
             assert "port" in str(e), e
         assert choose_target(None, None, {}, load_targets(os.path.join(d, "none.yaml"))) == (DEFAULT_HOST, None)
+        # driver-054 D4: one target on another driver; its client and its daemon use that release
+        open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, os: windows, driver: 0.55.0}\n  b: {host: u@old}\n")
+        load_targets(f); TARGET_OS.update({"u@new": "windows", "u@old": "windows"})     # no ssh to ask
+        assert driver_pin("u@new") == "0.55.0" and driver_pin("u@old") == DRIVER_VERSION
+        assert "0.55.0-x86_64-pc-windows-msvc" in Target("u@new").mcp()[0][-1], Target("u@new").mcp()
+        assert f"{DRIVER_VERSION}-x86_64-pc-windows-msvc" in Target("u@old").mcp()[0][-1]
+        TARGET_DRIVER.clear(); TARGET_OS.pop("u@new", None); TARGET_OS.pop("u@old", None)
+        open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, driver: latest}\n")
+        try:
+            load_targets(f); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "like 0.55.0" in str(e), e
     # data-driven-import: variables, uploads, `into`, tables from a tree and from files, the comparison.
     vals, ups = parse_vars(["month=2026-11", f"f=@{os.path.abspath(__file__)}"])
     v = tape_values({"month": {"default": "x"}, "who": "me", "f": {"description": "file"}}, vals, ups)

@@ -34,8 +34,12 @@ today's calls. `doctor` reports the version found and names the pinned one.
 ### D4. Side by side, back by the pin
 
 The release folder carries the version (`.cua-driver\packages\releases\<ver>-x86_64-pc-windows-msvc`), so the new
-driver installs beside 0.34.1. `cua-serve.ps1` and `EXE` follow the pin; going back is a pin change and a daemon
-restart, and the old folder is removed only after the measurement holds.
+driver installs beside 0.34.1. A target profile may say `driver: 0.55.0`: that target's
+client (`mcp`) and daemon (`cua-serve.ps1 -Version`) use that release, the rest the pin. So one target moves first,
+and going back is removing the line (or a pin change) and a daemon restart; the old folder is removed only after
+the measurement holds. The installer runs with `-NoConnect` (it would otherwise connect Claude Code, Codex and
+Cursor to the driver), `-NoAutoStart`, `-NoPathUpdate`, and `CUA_DRIVER_RS_KEEP_VERSIONS=0` (it would otherwise
+prune all but the five newest releases).
 
 ### D5. The password flag
 
