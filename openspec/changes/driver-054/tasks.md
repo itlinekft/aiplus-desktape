@@ -19,4 +19,4 @@
 ## 3. Release
 
 - [x] 3.1 Setup docs, README, TROUBLESHOOTING, `knowledge/`, maps' recorded-with lines, the CHANGELOG [REQ: the-pinned-cua-driver-reports-password-fields]
-- [ ] 3.2 Tell the projects that drive targets (the `desktape` room) what to install, and that 0.34.1 targets keep working until then [REQ: the-pinned-cua-driver-reports-password-fields]
+- [x] 3.2 Tell the projects that drive targets (the `desktape` room) what to install, and that 0.34.1 targets keep working until then [REQ: the-pinned-cua-driver-reports-password-fields]
