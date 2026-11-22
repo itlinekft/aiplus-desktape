@@ -2996,10 +2996,12 @@ class Runner:
         while True:
             sc, _ = self.cua.call("list_windows", {})
             title = want
-            if isinstance(want, dict):           # {title: "Accounting", prefix: true}: the rest of the title varies
+            if isinstance(want, dict) and want.get("prefix"):   # {title: "Accounting", prefix: true}: the rest varies
                 pre = want["title"]
                 title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
                               and w.get("is_on_screen", True) and ours(w)), pre)
+            elif isinstance(want, dict):         # focus-app: without `prefix: true` the title is exact, as a string's
+                title = want["title"]
             wins = [w for w in sc.get("windows", []) if w.get("title") == title and ours(w)]
             wins.sort(key=lambda w: not w.get("on_current_space", True))      # macOS: this Space's window first
             w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
@@ -8324,6 +8326,15 @@ def selftest():
             return super().call(tool, args, secret, timeout)
     r = Runner(TwoWins(base), "test")
     r.focus({"title": "Claude", "app": "claude"}); assert r.win == {"pid": 6, "window_id": 3} and r.app == "Claude.exe", r.win
+    class Prefixed(Screen):              # a dict focus is exact unless `prefix: true` (devauth review, 2026-11-22)
+        def call(self, tool, args, secret=False, timeout=None):
+            if tool == "list_windows":
+                return {"windows": [{"title": "Claude Code", "app_name": "Claude.exe", "pid": 4, "window_id": 1},
+                                    {"title": "Claude", "app_name": "Claude.exe", "pid": 6, "window_id": 3}]}, ""
+            return super().call(tool, args, secret, timeout)
+    rp = Runner(Prefixed(base), "test")
+    rp.focus({"title": "Claude", "app": "claude"}); assert rp.title == "Claude" and rp.win["pid"] == 6, rp.title
+    rp.focus({"title": "Claude", "prefix": True}); assert rp.title == "Claude Code" and rp.win["pid"] == 4, rp.title
     r.focus("Claude"); assert r.win["pid"] == 5, r.win                    # no app: the first, as before
     try:
         r.focus({"title": "Claude", "app": "msedge", "timeout": 0.3}); raise AssertionError("expected RuntimeError")

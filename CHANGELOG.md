@@ -19,7 +19,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   matches, instead of taking the first in tree order; nothing is sent.
 - **`focus` can name the program** (`focus-app`): `focus: {title: Claude, app: claude}` takes only a window of that
   program, so a browser tab with the same title is not picked; when none has it, the focus fails and names the
-  programs that do show the title.
+  programs that do show the title. A `focus` given as `{title: …}` now matches the title exactly unless it says
+  `prefix: true`, as a plain string does (before, the dict form always matched the start of the title).
 - **The panel can step in over a booking** (`panel-override`): when another project's booking is active or a live
   run holds a target, the zoomed view offers Override — after a confirm, the person's clicks, drags and keys reach
   the machine while the booking and the run continue; the panel takes no lock, renews nothing and unlocks nothing,

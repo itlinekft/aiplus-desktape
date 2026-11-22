@@ -30,7 +30,7 @@ steps:
 
 | Step | Argument | What it does |
 |---|---|---|
-| `focus` | window title, `"@window"` from the map, or `{title, prefix, app, timeout}` | brings that window to the front, restoring it if it is minimised; every later step acts on it. `app:` also requires the window's program (`claude`, `chrome`; case and `.exe` ignored), for a title that several programs show |
+| `focus` | window title, `"@window"` from the map, or `{title, prefix, app, timeout}` | brings that window to the front, restoring it if it is minimised; every later step acts on it. The title is exact unless `prefix: true`; `app:` also requires the window's program (`claude`, `chrome`; case and `.exe` ignored), for a title that several programs show |
 | `click` | label, or `{label, role, prefix, nth, action}` | waits for an enabled element (up to 8 s), then clicks it through UI Automation; `action` picks e.g. `expand` or `select` |
 | `expect` | label, or `{label, role, prefix, nth, timeout}` | waits for the element; fails the run if it does not appear |
 | `absent` | label, or `{label, role, prefix, nth, timeout}` | waits until no such element is left; fails if one still is |
