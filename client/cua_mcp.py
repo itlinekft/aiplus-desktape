@@ -7,7 +7,7 @@ Prints text content; saves image content as PNG files in DIR (default: next to t
 import base64, json, os, subprocess, sys
 
 HOST = os.environ["DESKTAPE_HOST"]  # user@host of the Windows machine
-EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
+EXE = r"%USERPROFILE%\.cua-driver\packages\releases\0.55.0-x86_64-pc-windows-msvc\cua-driver.exe"
 here = os.path.dirname(os.path.abspath(__file__))
 tool, args = sys.argv[1], json.loads(sys.argv[2] if len(sys.argv) > 2 else "{}")
 outdir = sys.argv[sys.argv.index("--images") + 1] if "--images" in sys.argv else here

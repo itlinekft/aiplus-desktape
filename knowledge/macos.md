@@ -114,6 +114,20 @@ Measured: 2026-10-25, macOS 26.4, Claude Desktop.
 
 Measured: 2026-10-25, macOS 26.4, Cua Driver 0.34.1.
 
+## Cua Driver 0.55.0 on macOS
+
+- **A dropdown button is not opened in the background.** 0.55.0 refuses a click on an `AXPopUpButton` it takes
+  for a web `<select>` (Claude Desktop's model picker, its "Add" menus): "Not opened: … In the background, opening
+  its menu brings the browser window above the user's window, so nothing was sent." The same click with
+  `foreground: true` opens it. The Mac map gives every PopUpButton `foreground: true`. Measured 2026-11-22.
+- **The menu bar's closed menus are not in the tree.** 0.34.1 listed every item of every menu-bar menu (about 220
+  lines for Claude Desktop, hidden by desktape); 0.55.0 lists only the menu-bar items themselves. Opening one with
+  a click did not show its items in the next `look` (not looked into further; no map uses the menu bar).
+  Measured 2026-11-22.
+- **The upgrade replaces the app and keeps the permissions.** The installer stops the old daemon, swaps
+  `/Applications/CuaDriver.app` in place (no side-by-side release on macOS), and Accessibility and Screen Recording
+  stayed granted: no person was needed at the screen. Measured 2026-11-22, 0.34.1 to 0.55.0.
+
 ## Closing and hiding programs
 
 - Cmd+Q quits a program with all its windows. When some of its windows must stay, minimise the others

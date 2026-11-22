@@ -5,7 +5,8 @@ follows [`setup-target.md`](setup-target.md), which does sections 1, 2 and 4 bel
 stays the reference.
 
 What desktape expects on the machine it drives, and how the reference target was set up. Tested on
-Windows 11 with a standard (non-admin) user and Cua Driver 0.34.1.
+Windows 11 with a standard (non-admin) user and Cua Driver 0.34.1, and with Cua Driver 0.55.0 (an administrator's
+account; `docs/MEASURED.md`, 2026-11-22).
 Every install on both machines, with versions, admin needs and checks, is listed in [`install.md`](install.md),
 including prerequisites of the programs a tape drives.
 
@@ -21,15 +22,16 @@ ssh -o BatchMode=yes user@windows-host "echo ok"
 
 ## 2. Cua Driver, pinned
 
-Download the installer from the pinned release, `https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.1/install.ps1`,
-to `%USERPROFILE%\desktape\cua-install.ps1`, and read it before running it. Its SHA-256 must be
-`16eedffc982de6d4b8fa71e7395e4617023394eb050ab23a8fd0930121f45c56`, the line for `install.ps1` in that release's
-`SHA256SUMS` (re-checked 2026-11-17). This is the same download as step 3 of [`setup-target.md`](setup-target.md),
-which also has the PowerShell lines; a different hash is a stop, not a retry.
-[`spike/windows-setup/cua-setup.ps1`](../spike/windows-setup/cua-setup.ps1), copied next to it, runs it with
-the version pinned (`CUA_DRIVER_RS_VERSION=0.34.1`) and `-NoAutoStart -NoPathUpdate`, then turns telemetry,
-the update check and the script runner off, and writes `cua-setup.log` with the binary's Authenticode
-signature.
+Download the installer from the pinned release, `https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.55.0/install.ps1`,
+and its helper `_install-common.psm1` from the release's git tag, into one folder
+(`%USERPROFILE%\desktape\cua-install\`), and read them before running them. Their SHA-256 must be
+`8cdb0bffbe73e421fe81ecaf87d4fefeddcc0a36836d412dac5a78d0d797f2c4` (the line for `install.ps1` in that release's
+`SHA256SUMS`) and `99f34a84ceab04d4b488b1db4d71536c7a7ac7e645ac2ec295b4fd85244085b6` (the helper, which is not a
+release asset: without it beside the installer, the installer fetches the live one from cua.ai, unchecked). This is
+the same download as step 3 of [`setup-target.md`](setup-target.md), which also has the PowerShell lines; a
+different hash is a stop, not a retry. [`windows/setup-target.ps1`](../windows/setup-target.ps1) does all of it:
+the checks, stopping a running older driver first, the install with `-NoAutoStart -NoPathUpdate -NoConnect
+-NoTest` and older releases kept, and telemetry off.
 
 Run the installer **in the interactive session**, not over SSH: from an SSH session Windows refuses to
 follow the junctions the installer creates (os error 448), and the Credential Manager is not writable.
@@ -42,8 +44,10 @@ schtasks /delete /tn desktape-setup /f
 ```
 
 `desktape.py` calls the driver by its real directory,
-`%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe` (the `EXE`
-constant); a different version needs that constant changed.
+`%USERPROFILE%\.cua-driver\packages\releases\0.55.0-x86_64-pc-windows-msvc\cua-driver.exe` (the `EXE`
+constant, from `DRIVER_VERSION`). A target that runs another release says so in its profile (`driver: 0.34.1`):
+desktape then uses that release's client and starts that release's daemon. The client and the daemon on one machine
+must be the same release (a 0.34.1 client is refused by a 0.55.0 daemon).
 
 ## 3. The driver daemon in the interactive session
 
@@ -57,8 +61,8 @@ start-at-logon task is installed.
 If the automatic start fails, desktape stops and points here: copy the script and start it by hand with
 the `/it` task pattern above.
 
-The daemon runs with the SSH session's token: an administrator's key login is elevated, and Cua Driver 0.34.1
-refuses a pipe client whose elevation differs from the daemon's (os error 233). desktape reads `whoami /groups`
+The daemon runs with the SSH session's token: an administrator's key login is elevated, and Cua Driver (measured
+on 0.34.1) refuses a pipe client whose elevation differs from the daemon's (os error 233). desktape reads `whoami /groups`
 once per host and adds `/rl highest` only when the session is elevated (it lists `S-1-16-12288`, High Mandatory
 Level); a standard account cannot create a `/rl highest` task at all ("Access denied"). When you start it by hand,
 add `/rl highest` for an administrator and leave it out for a standard account; a daemon that refuses desktape is
@@ -124,7 +128,7 @@ In reverse order, each undoing only what this page made:
 1. On the controller: `desktape unpair <name>` removes the controller's line from the target's `authorized_keys` over
    SSH (or prints it to remove by hand), then the key and the profile.
 2. Cua Driver: the release's `uninstall.ps1`, checked the same way (SHA-256
-   `72bfa26fad3b3635c03c67bce5e0663cb019e7d7ac43bdf0f9fb23a519aff061`), in the desktop session; then delete
+   `1bde1d55e0220fda853c262b5732ecd9b9bd9b181c7db3ee4013ca4be70a93ce` for 0.55.0), in the desktop session; then delete
    `%USERPROFILE%\desktape`.
 3. ffmpeg: `winget uninstall --id Gyan.FFmpeg -e`.
 4. The SSH server, when nothing else uses it (administrator): `Stop-Service sshd; Set-Service sshd -StartupType

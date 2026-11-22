@@ -47,7 +47,7 @@ keresztül kattint, lépésről lépésre, ahogy a tape előírja.
 | Claude és a desktape plugin | kell | nem kell (a beállításnál segít, ha van) |
 | uv (hozza a Pythont) | kell | nem kell |
 | SSH | kliens, a Windows 10+, a macOS és a Linux eleve tudja | SSH-szerver, csak a helyi hálózatról vagy VPN-ről |
-| Cua Driver 0.34.1 | nem kell | kell, a felhasználó asztali munkamenetében |
+| Cua Driver 0.55.0 | nem kell | kell, a felhasználó asztali munkamenetében |
 | ffmpeg | nem kell | kell |
 | Kulcs | a `desktape pair` itt készíti | a vezérlő gép kulcsa kerül rá |
 | Futás közben | Windows célgépnél egy nyitott RDP-ablak felé | macOS-en a képernyő nem lehet zárolva |
@@ -196,7 +196,7 @@ client, the target the SSH server.
 | Claude and the desktape plugin | yes | no (it helps with the setup when it is there) |
 | uv (brings Python) | yes | no |
 | SSH | the client, built into Windows 10+, macOS and Linux | an SSH server, reachable only from the local network or a VPN |
-| Cua Driver 0.34.1 | no | yes, in the user's desktop session |
+| Cua Driver 0.55.0 | no | yes, in the user's desktop session |
 | ffmpeg | no | yes |
 | Key | `desktape pair` makes it here | the controller's key goes here |
 | During a run | an RDP window open to a Windows target | on macOS the screen stays unlocked |
@@ -210,8 +210,8 @@ Local, on one computer, both columns go on that computer, with no SSH.
 - **The controller:** Windows, macOS or Linux. The one tool it needs is [uv](https://docs.astral.sh/uv/), which brings
   Python and PyYAML (`uv run desktape.py`). When it is missing, Claude names its install command and runs it after
   your yes. Without uv: Python 3.9+ and `pip install --user -r requirements.txt`.
-- **The target:** Windows 10 or 11, or macOS (tested on macOS 26.4, Apple Silicon). It gets Cua Driver 0.34.1 (pinned,
-  checksum checked), an ffmpeg full build (required: the driver records video through it), and, when another
+- **The target:** Windows 10 or 11, or macOS (tested on macOS 26.4, Apple Silicon). It gets Cua Driver 0.55.0 (pinned,
+  checksums checked), an ffmpeg full build (required: the driver records video through it), and, when another
   computer drives it, an SSH server reachable only from the local network or a VPN.
 - **Once, a person at the target with an administrator account:** for the SSH server (Windows UAC), and on macOS for
   Cua Driver's permissions in System Settings. Nobody can do this for you, Claude included.

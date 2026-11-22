@@ -5,6 +5,22 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-22
+
+### Changed
+- **Cua Driver 0.55.0 is the pinned release** (`driver-054`; it was 0.34.1). The setup scripts install it beside the
+  old one, with nothing connected to other AI tools and older releases kept; `doctor` names the version a target's
+  driver reports and whether it is that target's pin. A target that stays on 0.34.1 says `driver: 0.34.1` in its
+  profile.
+
+### Security
+- **The driver installer's helper is checked too** (`driver-054` D7): the release's installers load a helper
+  (`_install-common.psm1`, `_install-common.sh`) that is not a release asset; without it beside them they fetch the
+  live copy from cua.ai, unchecked (on 2026-11-22 the live macOS one already differed from the release's). The setup
+  scripts now take it from the release's git tag and check its SHA-256 first. The Windows script also stops a running
+  old driver before the installer, and stops with the command to run when an elevated one survives, instead of the
+  installer waiting on a hidden question.
+
 ### Added
 - **`set` takes a secret from the controller** (`secret-set`): `set: {label: …, env: NAME, secret: true}` (or
   `file:`) reads the value on the controller when the step runs, like `type`, and sets it on the named element, so a

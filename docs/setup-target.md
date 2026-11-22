@@ -136,39 +136,48 @@ ssh-keygen -lf <file holding the line>        # SHA256:… desktape-pair-<name>@
 Pairing again (the controller's addresses changed): replace the earlier line with the same last field
 (`desktape-pair-<name>@<controller>`), do not add a second. Undo: remove that one line.
 
-### 3. Cua Driver 0.34.1, pinned
+### 3. Cua Driver 0.55.0, pinned
 
 Run this in the person's own desktop session, **not elevated** and not over SSH (from SSH Windows refuses the
-installer's junctions). The version must stay 0.34.1: desktape calls
-`%USERPROFILE%\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe`.
+installer's junctions). desktape calls
+`%USERPROFILE%\.cua-driver\packages\releases\0.55.0-x86_64-pc-windows-msvc\cua-driver.exe`; an older release
+stays beside it, and a target profile's `driver:` line can keep a machine on it.
+
+The installer loads a helper module, `_install-common.psm1`, from its own folder, or else from cua.ai at whatever
+version is live, unchecked; it is not in the release's `SHA256SUMS`. So both files are downloaded and checked:
 
 ```powershell
-$d = "$env:USERPROFILE\desktape"; New-Item -ItemType Directory -Force $d | Out-Null
-$r = "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.1"
-Invoke-WebRequest "$r/install.ps1" -OutFile "$d\cua-install.ps1"
-Invoke-WebRequest "$r/SHA256SUMS" -OutFile "$d\SHA256SUMS"
-(Get-FileHash "$d\cua-install.ps1" -Algorithm SHA256).Hash.ToLower()
+$d = "$env:USERPROFILE\desktape\cua-install"; New-Item -ItemType Directory -Force $d | Out-Null
+$r = "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.55.0"
+$t = "https://raw.githubusercontent.com/trycua/cua/cua-driver-rs-v0.55.0/libs/cua-driver/scripts"
+Invoke-WebRequest "$r/install.ps1" -OutFile "$d\install.ps1" -UseBasicParsing
+Invoke-WebRequest "$t/_install-common.psm1" -OutFile "$d\_install-common.psm1" -UseBasicParsing
+(Get-FileHash "$d\install.ps1" -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash "$d\_install-common.psm1" -Algorithm SHA256).Hash.ToLower()
 ```
 
-The hash must be `16eedffc982de6d4b8fa71e7395e4617023394eb050ab23a8fd0930121f45c56` (the line for `install.ps1`
-in that release's `SHA256SUMS`). Read the script and tell the person in two sentences what it does, then run it
-pinned, with telemetry, the update check and the script runner off:
+The hashes must be `8cdb0bffbe73e421fe81ecaf87d4fefeddcc0a36836d412dac5a78d0d797f2c4` (`install.ps1`, its line in
+the release's `SHA256SUMS`) and `99f34a84ceab04d4b488b1db4d71536c7a7ac7e645ac2ec295b4fd85244085b6`
+(`_install-common.psm1` at the release's tag). Read the script and tell the person in two sentences what it does.
+If a `cua-driver` process runs, stop it first: an elevated one the installer cannot stop makes it ask on the
+console (`Get-Process cua-driver*`; if `Stop-Process` is refused, an administrator runs
+`taskkill /im cua-driver.exe /f`). Then run it pinned, with telemetry off and nothing connected to other AI tools:
 
 ```powershell
-$env:CUA_DRIVER_RS_VERSION = '0.34.1'; $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = 'false'
-$env:DO_NOT_TRACK = '1'; $env:CUA_DRIVER_RS_UPDATE_CHECK = 'false'
-powershell -NoProfile -ExecutionPolicy Bypass -File "$d\cua-install.ps1" -NoAutoStart -NoPathUpdate
-$exe = "$env:USERPROFILE\.cua-driver\packages\releases\0.34.1-x86_64-pc-windows-msvc\cua-driver.exe"
-& $exe --version                                   # cua-driver 0.34.1
+$env:CUA_DRIVER_RS_VERSION = '0.55.0'; $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = 'false'
+$env:DO_NOT_TRACK = '1'; $env:CUA_DRIVER_RS_UPDATE_CHECK = 'false'; $env:CUA_DRIVER_RS_KEEP_VERSIONS = '0'
+powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -NoAutoStart -NoPathUpdate -NoConnect -NoTest
+$exe = "$env:USERPROFILE\.cua-driver\packages\releases\0.55.0-x86_64-pc-windows-msvc\cua-driver.exe"
+& $exe --version                                   # cua-driver 0.55.0
 & $exe telemetry disable
-& $exe config set update_check_enabled false
-& $exe config set disable_run_script true
 Get-AuthenticodeSignature $exe | Format-List Status,SignerCertificate
 ```
 
-Do **not** start the driver daemon: the controller starts it in this session when it first connects.
-On an ARM PC the folder is `0.34.1-aarch64-pc-windows-msvc`; tell the person, desktape is measured on x86_64 only.
-Undo: the release's `uninstall.ps1` (same checksum check: `72bfa26fad3b3635c03c67bce5e0663cb019e7d7ac43bdf0f9fb23a519aff061`).
+0.55.0 has no `config set` keys for the update check and the script runner; desktape passes both as environment
+variables whenever it starts the driver. Do **not** start the driver daemon: the controller starts it in this
+session when it first connects. On an ARM PC the folder is `0.55.0-aarch64-pc-windows-msvc`; tell the person,
+desktape is measured on x86_64 only. Undo: the release's `uninstall.ps1` (same checksum check:
+`1bde1d55e0220fda853c262b5732ecd9b9bd9b181c7db3ee4013ca4be70a93ce`).
 
 ### 4. ffmpeg (video recording and captions)
 
@@ -198,8 +207,9 @@ The full steps, with checks, are in [`macos-setup.md`](macos-setup.md); in short
 1. **Remote Login** for this user: System Settings › General › Sharing › Remote Login, "Only these users".
 2. **The line** (same shape check as on Windows) into `~/.ssh/authorized_keys` (mode 600, `~/.ssh` 700);
    fingerprint: `ssh-keygen -lf <file>`.
-3. **Cua Driver 0.34.1:** [`macos/cua-setup.sh`](../macos/cua-setup.sh) from this repository (it checks the
-   release's `install.sh` and `_install-rust.sh` against `SHA256SUMS`, then installs pinned with telemetry off).
+3. **Cua Driver 0.55.0:** [`macos/cua-setup.sh`](../macos/cua-setup.sh) from this repository (it checks the
+   release's `install.sh` and `_install-rust.sh` against `SHA256SUMS` and the helper `_install-common.sh` from the
+   release's tag against a pinned SHA-256, then installs pinned with telemetry off and nothing connected).
    Read it first and show it.
 4. **The four permissions** for CuaDriver: run `~/.local/bin/cua-driver permissions grant`; the person approves
    Accessibility, Screen Recording, Automation of System Events and direct screen capture in the dialogs (you
@@ -239,7 +249,7 @@ desktape target ready: <computer name>
   user:          <user>  (administrator: yes/no)
   LAN address:   <192.168.…>      VPN address: <100.… or none>
   key accepted:  SHA256:…  desktape-pair-<name>@<controller>  in <file>
-  Cua Driver:    0.34.1  (signature: Valid / …)     ffmpeg: <version>
+  Cua Driver:    0.55.0  (signature: Valid / …)     ffmpeg: <version>
   screen:        own monitor, sleep off | RDP | left as it was
   skipped:       <steps not done, and why>
 ```

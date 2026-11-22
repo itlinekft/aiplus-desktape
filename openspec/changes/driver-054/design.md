@@ -56,6 +56,22 @@ take with captions, the panel's live screens and control, typing a 200-character
 (the typing pace), and `password: true` on a real password field and on a plain one. Results go to
 `docs/MEASURED.md` with versions and commands; the public copy claims no more.
 
+### D7. The installer's helpers are pinned too, and the old daemon is stopped first
+
+The release's `install.ps1` (0.55.0) loads `_install-common.psm1`, and `_install-rust.sh` (macOS) sources
+`_install-common.sh`: from the installer's own folder when the file is there, otherwise from `cua.ai` at whatever
+version is live, with no checksum. Neither file is a release asset or in `SHA256SUMS`, so checking `install.ps1`
+alone does not cover the code that runs. Measured 2026-11-22: the live `_install-common.sh` already differs from the
+0.55.0 tag's. The setup scripts therefore download each helper from the release's git tag
+(`raw.githubusercontent.com/trycua/cua/cua-driver-rs-v<ver>/libs/cua-driver/scripts/…`), check it against a
+SHA-256 written in the script, and put it beside the installer, so the installer never fetches it.
+
+The installer stops running `cua-driver` processes. When the old daemon runs elevated (an administrator's SSH key
+login started it) and the installer does not, it cannot stop it, calls it stale and asks on the console whether
+to elevate: hidden, it waits for ever (measured on the Windows 11 test PC). The Windows setup script stops the old
+daemon before the installer; when one survives, it stops with a message naming the process and the command that
+ends it (`taskkill /im cua-driver.exe /f` as administrator), instead of running the installer into the question.
+
 ## Risks
 
 - A behaviour change the changelog does not name. Mitigation: D6 runs every tape, and D4 keeps the way back.

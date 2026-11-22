@@ -705,6 +705,26 @@ accepted; a standard account's daemon is measured on 0.34.1 only, 2026-11-14), t
 `password: true` field (measured on the VM), and the Mac (task 2.3). The test PC keeps 0.55.0 through its
 profile's `driver: 0.55.0` on this controller.
 
+## 2026-11-22: Cua Driver 0.55.0 on the Mac (`driver-054` task 2.3)
+
+The Mac mini (macOS 26.4, Apple Silicon), the desktop user logged in and the screen unlocked, reached over SSH;
+Claude Desktop on it; the controller on Linux.
+
+| what | result |
+|---|---|
+| `macos/cua-setup.sh` (this change's version) over SSH | 34 s: `install.sh`, `_install-rust.sh` checked against the release's `SHA256SUMS`, `_install-common.sh` from the release's git tag against the script's SHA-256 (all `OK`); the archive checked by the installer; the 0.34.1 daemon stopped by the installer; `/Applications/CuaDriver.app` replaced, code signature team `YCK386LBJ7`; telemetry off; nothing connected to other AI tools. `config set update_check_enabled` / `disable_run_script` refused by 0.55.0 and logged as notes, not fatal |
+| the permissions after the upgrade | Accessibility and Screen Recording still on; nobody at the Mac's screen |
+| `look --full` of Claude Desktop | 156 lines on 0.55.0, 194 on 0.34.1: fewer nested `Text` children and a `Group "Sidebar"`; the buttons and labels the map uses are the same. The menu bar's closed menus (about 220 hidden lines) are gone from the tree |
+| `tapes/claude-desktop-tour-mac.yaml`, test mode | first 8 of 42: the model picker click was refused in the background ("a web dropdown"). With `foreground: true` on the map's PopUpButtons and `mode.chat` matching "Chat and Cowork" (an app change, as on Windows): 42 of 42 in 31.3 s |
+| the same, video mode | 42 of 42, 84.3 s; the recording 82.0 s with no gap, captions and `.srt` written, a frame checked by eye |
+| typing 200 characters (accents, a URL, no line break) into Claude Desktop's prompt | 3 of 3 read back whole, 2.3 s per `act`; cleared, nothing sent |
+| a menu-bar menu | a click on `MenuBarItem "Claude"` (foreground) changed nothing `look` could see within 3 s; not used by any map |
+
+The tour's first step, `tidy: {keep: [Claude], minimize: [Terminal]}`, quits every other program. On this Mac,
+which a person also uses, that quit programs of theirs before it stopped at a Chrome quit confirmation; the
+measurement then ran a copy whose `tidy` only minimised the other programs. Not measured here: a `password: true`
+field (macOS reports none).
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

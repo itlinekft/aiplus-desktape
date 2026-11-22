@@ -91,7 +91,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 
 - **Hol:** bármelyik parancs, ami Windows-gépet szólít meg SSH-n.
 - **Ok:** a háttérfolyamat fut, de **más jogosultsággal**, mint az SSH-munkamenet. Egy rendszergazda fiók
-  kulcsos SSH-belépése emelt jogú, a kézzel indított háttérfolyamat nem; a Cua Driver 0.34.1 ilyenkor bontja a
+  kulcsos SSH-belépése emelt jogú, a kézzel indított háttérfolyamat nem; a Cua Driver (0.34.1-en mérve) ilyenkor bontja a
   kapcsolatot (a naplóban: „service named-pipe connection rejected before request parsing”).
 - **Ellenőrzés:** `cua-driver status` SSH-n át „endpoint exists but is not reachable”-t ír, az asztalon futtatva
   „running”-ot.
@@ -125,9 +125,20 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Hol:** `desktape.py doctor`.
 - **Ok:** a célgépen nincs telepítve a Cua Driver.
 - **Ellenőrzés:** `desktape.py doctor --local` a célgépen.
-- **Javítás:** a rögzített 0.34.1-es verziót a célgép **asztali munkamenetében** telepítsd, ne SSH-n át: Windowson
+- **Javítás:** a rögzített 0.55.0-s verziót a célgép **asztali munkamenetében** telepítsd, ne SSH-n át: Windowson
   `docs/windows-setup.md` 2. rész, macOS-en `macos/cua-setup.sh` és `docs/macos-setup.md`.
 - **Ki:** aki a célgépnél ül; macOS-en rendszergazda. **Óta:** 0.1.0.
+
+### „incompatible daemon: contract version … does not match SDK …”
+
+- **Hol:** bármelyik parancs egy Windows-gépen, egy Cua Driver-frissítés után.
+- **Ok:** a gépen futó driver-háttérfolyamat és a desktape által hívott kliens más verzió (például 0.55.0-s
+  háttérfolyamat, 0.34.1-es kliens). A desktape a gép profiljának `driver:` sorából, vagy a rögzített verzióból
+  választja mindkettőt.
+- **Ellenőrzés:** `desktape.py doctor --target NÉV` kiírja a talált verziót és a gépre rögzítettet.
+- **Javítás:** a profil `driver:` sora legyen az, ami a gépen fut (vagy töröld, ha a rögzített fut); egy régóta
+  futó panel a fájl változását a következő kapcsolódáskor látja.
+- **Ki:** aki a vezérlőt beállítja. **Óta:** 0.8.0.
 
 ### SSH-belépés nem megy („Permission denied”)
 
@@ -293,7 +304,7 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 
 - **Where:** any command that reaches a Windows target over SSH.
 - **Cause:** the daemon runs, but with a different elevation than the SSH session. An administrator's key login over
-  SSH is elevated; a daemon started by hand is not, and Cua Driver 0.34.1 then closes the connection (its log:
+  SSH is elevated; a daemon started by hand is not, and Cua Driver (measured on 0.34.1) then closes the connection (its log:
   "service named-pipe connection rejected before request parsing").
 - **Check:** `cua-driver status` over SSH says "endpoint exists but is not reachable"; run on the desktop it says
   "running".
@@ -306,9 +317,19 @@ What has been measured: [`docs/MEASURED.md`](docs/MEASURED.md). The setup guides
 - **Where:** `desktape.py doctor`.
 - **Cause:** the Cua Driver is not installed on the target.
 - **Check:** `desktape.py doctor --local` on the target.
-- **Fix:** install the pinned 0.34.1 in the target's **desktop session**, not over SSH: Windows
+- **Fix:** install the pinned 0.55.0 in the target's **desktop session**, not over SSH: Windows
   `docs/windows-setup.md` section 2, macOS `macos/cua-setup.sh` and `docs/macos-setup.md`.
 - **Who:** the person at the target; an administrator on macOS. **Since:** 0.1.0.
+
+### "incompatible daemon: contract version … does not match SDK …"
+
+- **Where:** any command on a Windows target, after a Cua Driver upgrade.
+- **Cause:** the driver daemon running on the machine and the client desktape calls are different releases (a
+  0.55.0 daemon, a 0.34.1 client, say). desktape picks both from the target profile's `driver:` line, or the pin.
+- **Check:** `desktape.py doctor --target NAME` names the version found and the target's pin.
+- **Fix:** make the profile's `driver:` line say what the machine runs (or remove it when that is the pin); a
+  long-running panel sees the edited file at its next connection.
+- **Who:** whoever sets up the controller. **Since:** 0.8.0.
 
 ### SSH login fails ("Permission denied")
 

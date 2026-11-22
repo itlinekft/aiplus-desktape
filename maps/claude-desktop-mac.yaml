@@ -1,6 +1,7 @@
 # Claude Desktop on macOS: named selectors for tapes (`click: "@sidebar.search"`).
 # Mapped 2026-10-25 on macOS 26.4 with Cua Driver 0.34.1, with `look --new` on every main screen and menu
-# (docs/spike-2026-10-25-macos.md). desktape already reads the macOS tree in the Windows vocabulary (roles
+# (docs/spike-2026-10-25-macos.md). Re-checked 2026-11-22 with Cua Driver 0.55.0: every PopUpButton needs
+# `foreground: true` there, and the mode switch reads "Chat and Cowork". desktape already reads the macOS tree in the Windows vocabulary (roles
 # without `AX`, a description as the label; macos-target D3), so most labels match the Windows map. The
 # differences: an expander is a PopUpButton (Windows: a Button with action expand), tabs are RadioButtons, and a
 # click is AXPress (no `action:` needed). Only fixed UI is named here: never a user's chats, projects,
@@ -26,26 +27,26 @@ ignore:
 
 elements:
   # --- mode switch (top of the sidebar)
-  mode.chat:                  { label: "Claude", role: RadioButton }
+  mode.chat:                  { label: "Chat", role: RadioButton, prefix: true }   # "Chat and Cowork" since late 2026-11
   mode.code:                  { label: "Code", role: RadioButton }
 
   # --- sidebar, fixed navigation
   sidebar.new:                { label: "New", role: Button }
   sidebar.search:             { label: "Search", role: Button }
   sidebar.projects:           { label: "Projects", role: Button, prefix: true }   # "Projects" / "Projects New" / "Projects Beta"
-  sidebar.create_project:     { label: "Create project", role: PopUpButton }
+  sidebar.create_project:     { label: "Create project", role: PopUpButton, foreground: true }
   sidebar.artifacts:          { label: "Artifacts", role: Button }
-  sidebar.new_from_template:  { label: "New from a template", role: PopUpButton }
+  sidebar.new_from_template:  { label: "New from a template", role: PopUpButton, foreground: true }
   sidebar.scheduled:          { label: "Scheduled", role: Button }        # Chat mode
-  sidebar.new_task:           { label: "New task", role: PopUpButton }    # Chat mode
+  sidebar.new_task:           { label: "New task", role: PopUpButton, foreground: true }    # Chat mode
   sidebar.design:             { label: "Design", role: Button }           # Chat mode
   sidebar.customize:          { label: "Customize", role: Button }
-  sidebar.more:               { label: "More navigation items", role: PopUpButton }
+  sidebar.more:               { label: "More navigation items", role: PopUpButton, foreground: true }
   sidebar.hide:               { label: "Hide sidebar", role: Button }
 
   # --- new chat (Chat mode)
   chat.prompt:                { label: "Write your prompt to Claude", role: Edit }
-  chat.add:                   { label: "Add files, connectors, and more", role: PopUpButton }
+  chat.add:                   { label: "Add files, connectors, and more", role: PopUpButton, foreground: true }
   chat.add.upload:            { label: "Upload or add files", role: MenuItem }   # an in-app picker, not the macOS panel
   upload.from_computer:       { label: "Upload from computer", role: Text }        # in that picker: the macOS file panel (unmeasured)
   upload.close:               { label: "Close", role: Button }
@@ -54,10 +55,10 @@ elements:
   chat.add.connectors:        { label: "Connectors", role: MenuItem }
   chat.add.plugins:           { label: "Plugins", role: MenuItem }
   chat.add.research:          { label: "Research", role: MenuItem }
-  chat.project_or_folder:     { label: "Project or folder", role: PopUpButton }
+  chat.project_or_folder:     { label: "Project or folder", role: PopUpButton, foreground: true }
   folder.search:              { label: "Search or create a project", role: ComboBox }
   folder.add:                 { label: "Add folder", role: Text }   # opens macOS's folder dialog, which desktape cannot drive
-  chat.permission_mode:       { label: "Auto", role: PopUpButton }        # label is the current mode
+  chat.permission_mode:       { label: "Auto", role: PopUpButton, foreground: true }        # label is the current mode
   chat.incognito:             { label: "Use incognito", role: Button }
   chat.browser:               { label: "Browser", role: CheckBox }
   chat.dictate:               { label: "Dictate", role: Button }
@@ -68,7 +69,7 @@ elements:
   chat.stop:                  { label: "Stop response", role: Button }    # only while Claude is answering
 
   # --- model picker (both modes); its label carries the current model ("Model: Opus 5.5 Medium")
-  model.picker:               { label: "Model:", role: PopUpButton, prefix: true }
+  model.picker:               { label: "Model:", role: PopUpButton, prefix: true, foreground: true }
   model.fable:                { label: "Fable", role: MenuItem, prefix: true }
   model.opus:                 { label: "Opus", role: MenuItem, prefix: true }
   model.sonnet:               { label: "Sonnet", role: MenuItem, prefix: true }
@@ -94,7 +95,7 @@ elements:
   artifacts.tab.yours:        { label: "Yours", role: RadioButton }
   artifacts.tab.shared:       { label: "Shared with you", role: RadioButton }
   artifacts.search:           { label: "Search your artifacts", role: Button }
-  artifacts.new:              { label: "New", role: PopUpButton }
+  artifacts.new:              { label: "New", role: PopUpButton, foreground: true }
 
   # --- Scheduled page
   scheduled.templates_tab:    { label: "Templates", role: RadioButton }
@@ -109,9 +110,9 @@ elements:
   customize.connectors_tab:   { label: "Connectors", role: RadioButton }
   customize.plugins_tab:      { label: "Plugins", role: RadioButton }
   customize.discover_tab:     { label: "Discover", role: RadioButton }
-  skills.add_skill:           { label: "Add skill", role: PopUpButton }
-  connectors.add_connector:   { label: "Add connector", role: PopUpButton }
-  plugins.add_plugin:         { label: "Add plugin", role: PopUpButton }
+  skills.add_skill:           { label: "Add skill", role: PopUpButton, foreground: true }
+  connectors.add_connector:   { label: "Add connector", role: PopUpButton, foreground: true }
+  plugins.add_plugin:         { label: "Add plugin", role: PopUpButton, foreground: true }
   plugins.add_marketplace:    { label: "Add marketplace", role: MenuItem }
   plugins.manage_marketplaces: { label: "Manage marketplaces", role: MenuItem }
   marketplace.from_repository: { label: "Add from a repository", role: Button, prefix: true }
@@ -121,12 +122,12 @@ elements:
 
   # --- new session (Code mode)
   code.prompt:                { label: "Prompt", role: Edit }
-  code.add:                   { label: "Add", role: PopUpButton }
+  code.add:                   { label: "Add", role: PopUpButton, foreground: true }
   code.terminal:              { label: "Terminal", role: CheckBox }
   code.browser:               { label: "Browser", role: CheckBox }
-  code.environment:           { label: "Environment:", role: PopUpButton, prefix: true }
-  code.folder:                { label: "Folder:", role: PopUpButton, prefix: true }
-  code.permissions:           { label: "Permissions:", role: PopUpButton, prefix: true }
+  code.environment:           { label: "Environment:", role: PopUpButton, prefix: true, foreground: true }
+  code.folder:                { label: "Folder:", role: PopUpButton, prefix: true, foreground: true }
+  code.permissions:           { label: "Permissions:", role: PopUpButton, prefix: true, foreground: true }
   code.open_folder:           { label: "Open folder…", role: MenuItem }      # in the Folder menu: macOS's "Select folder" dialog
   code.send:                  { label: "Send", role: Button }                # appears once the prompt has text
-  usage.indicator:            { label: "Usage:", role: PopUpButton, prefix: true }
+  usage.indicator:            { label: "Usage:", role: PopUpButton, prefix: true, foreground: true }

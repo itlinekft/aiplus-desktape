@@ -52,7 +52,8 @@ def default_runs(env=os.environ, cwd=None):
 
 RUNS = default_runs()
 EXE_AT = r"%USERPROFILE%\.cua-driver\packages\releases\{}-x86_64-pc-windows-msvc\cua-driver.exe"
-EXE = EXE_AT.format("0.34.1")
+DRIVER_VERSION = "0.55.0"   # the pinned Cua Driver (driver-054: 0.34.1 before; `driver:` in a profile overrides it)
+EXE = EXE_AT.format(DRIVER_VERSION)
 TARGET_DRIVER = {}    # host string -> a profile's `driver:` version (driver-054 D4: one target at a time)
 DRIVER_PINS_READ = [None]   # the targets file's mtime when TARGET_DRIVER was filled
 # agent-efficiency D3: the driver tools that only read; any other call may change the screen
@@ -5390,7 +5391,6 @@ INSTALL = {
     "ffmpeg": {"win32": "winget install --id Gyan.FFmpeg -e", "darwin": "brew install ffmpeg-full"},
 }
 MAC_APP = "/Applications/CuaDriver.app"
-DRIVER_VERSION = "0.34.1"
 
 
 def mac_permissions(driver=MAC_DRIVER):
@@ -5458,8 +5458,11 @@ def doctor_report(local=False, video=False, which=shutil.which, exists=os.path.e
                          "can drive another one: run `desktape doctor` without --local, then `desktape doctor --target "
                          "NAME` for the Windows or macOS machine"))
         else:
-            rows.append((exists(os.path.expandvars(EXE)), "Cua Driver 0.34.1", os.path.expandvars(EXE)
-                         if exists(os.path.expandvars(EXE)) else how("driver")))
+            exe = os.path.expandvars(EXE)
+            others = sorted(os.path.basename(os.path.dirname(p)).split("-")[0] for p in glob.glob(
+                os.path.join(os.path.dirname(os.path.dirname(exe)), "*", "cua-driver.exe")) if p != exe and exists(p))
+            rows.append((exists(exe), f"Cua Driver {DRIVER_VERSION}", exe if exists(exe) else
+                         (f"found {', '.join(others)}, not {DRIVER_VERSION}: " if others else "") + how("driver")))
             ff = find_ffmpeg_win(exists, which, glob_=lambda pattern: [p for p in glob.glob(pattern) if exists(p)])
             rows.append((bool(ff), "ffmpeg", ff or how("ffmpeg")))          # required: the driver records through it
     else:
@@ -5511,7 +5514,13 @@ def doctor_target_driver(host, mac=False, cua=None):
             run_dir = new_run_dir("doctor", "adhoc")
             cua = Cua(host, os.path.join(run_dir, "audit.jsonl"))
         n = len(cua.call("list_windows", {})[0].get("windows", []))
-        return [(True, f"Cua Driver on {host}", f"answers ({n} windows)")] + doctor_browsers(host, cua)
+        said = f"answers ({n} windows)"
+        v = getattr(cua, "version", None)
+        if v:       # driver-054 1.4: the version found, and whether it is this target's pin
+            found, pin = ".".join(map(str, v)), driver_pin(host)
+            said += f", version {found}" + ("" if found == pin else
+                                             f", not the pinned {pin}: " + driver_hint(mac).replace("Next: ", "", 1))
+        return [(True, f"Cua Driver on {host}", said)] + doctor_browsers(host, cua)
     except (Exception, SystemExit) as e:
         logger.warning("doctor: the driver on %s did not answer: %s", host, e)
         return [(False, f"Cua Driver on {host}", f"did not answer: {str(e)[:200]}. " + driver_hint(mac))]
@@ -7980,7 +7989,7 @@ def selftest_macos():
     rows = doctor_report(local=True, which=lambda x: None, exists=lambda p: False, platform="darwin",
                          perms=perms, version=lambda: None)
     bad = {p: d for ok, p, d in rows if not ok}
-    assert "macos/cua-setup.sh" in bad["Cua Driver 0.34.1"] and "driver daemon" in bad and "swiftc (OCR)" in bad, bad
+    assert "macos/cua-setup.sh" in bad[f"Cua Driver {DRIVER_VERSION}"] and "driver daemon" in bad and "swiftc (OCR)" in bad, bad
     assert "SFNS.ttf" in video_filters([(0.0, "a")], [], 2.0, FONT["macos"])
 
 
@@ -9185,8 +9194,8 @@ def selftest():
     # claude-plugin: doctor names what is missing with the command for this OS, and installs nothing
     rows = doctor_report(local=True, video=True, which=lambda x: None, exists=lambda p: False, platform="win32")
     bad = {p: d for ok, p, d in rows if not ok}
-    assert set(bad) == {"uv", "Cua Driver 0.34.1", "ffmpeg"}, bad
-    assert bad["uv"].startswith("winget install --id astral-sh.uv") and "windows-setup.md" in bad["Cua Driver 0.34.1"]
+    assert set(bad) == {"uv", f"Cua Driver {DRIVER_VERSION}", "ffmpeg"}, bad
+    assert bad["uv"].startswith("winget install --id astral-sh.uv") and "windows-setup.md" in bad[f"Cua Driver {DRIVER_VERSION}"]
     rows = doctor_report(local=True, which=lambda x: "/usr/bin/" + x, exists=lambda p: True, platform="linux")
     assert [p for ok, p, _ in rows if not ok] == ["Windows or macOS"], rows
     rows = doctor_report(which=lambda x: "/bin/" + x, platform="darwin")
@@ -9211,6 +9220,12 @@ def selftest():
         [(ok, piece, said)] = doctor_target_driver("fake", mac=True, cua=_NoDriver())
         assert not ok and piece == "Cua Driver on fake" and "macos-setup.md" in said and "pair NAME --check" in said, said
         assert doctor_target_driver("fake", cua=_Driver()) == [(True, "Cua Driver on fake", "answers (0 windows)")]
+        _Driver.version = driver_version(DRIVER_VERSION)          # driver-054 1.4: the version found is named
+        assert doctor_target_driver("fake", cua=_Driver()) == [
+            (True, "Cua Driver on fake", f"answers (0 windows), version {DRIVER_VERSION}")]
+        _Driver.version = (0, 34, 1)
+        [(ok, _, said)] = doctor_target_driver("fake", mac=True, cua=_Driver())
+        assert ok and f"version 0.34.1, not the pinned {DRIVER_VERSION}" in said and "macos-setup.md" in said, said
     finally:
         logger.setLevel(level)
     ok, _, said = doctor_report(which=lambda x: None, exists=lambda p: p.endswith(os.path.join("WinGet", "Links", "uv.exe")),

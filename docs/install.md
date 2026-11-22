@@ -28,7 +28,7 @@ uv is the one thing a controller needs installed; the Python and PyYAML rows bel
 | What | Needed for | Measured | Admin | Source | Check |
 |---|---|---|---|---|---|
 | OpenSSH Server | remote mode only | OpenSSH_9.5p2 for Windows | **yes**: adding the optional feature and starting `sshd` | Settings › Optional features › "OpenSSH Server", or `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0` | key login works from the controller (above) |
-| Cua Driver 0.34.1 | always | 0.34.1 | **no**: installs into `%USERPROFILE%\.cua-driver` (measured with a standard user) | the pinned GitHub release `cua-driver-rs-v0.34.1`, `install.ps1` checked against its SHA-256; [`windows-setup.md`](windows-setup.md) §2 | `desktape.py look --window "<title>"` lists elements |
+| Cua Driver 0.55.0 | always | 0.55.0 (0.34.1 before 2026-11-22) | **no**: installs into `%USERPROFILE%\.cua-driver` (measured with a standard user on 0.34.1) | the pinned GitHub release `cua-driver-rs-v0.55.0`, `install.ps1` and its helper `_install-common.psm1` checked against their SHA-256; [`windows-setup.md`](windows-setup.md) §2 | `desktape.py look --window "<title>"` lists elements |
 | Python 3.9+ and PyYAML | local mode only (desktape on the target) | CPython 3.14.8 from `uv`, per user | no | [python.org](https://www.python.org/downloads/windows/) or `uv python install` | `python -c "import yaml"`; the `WindowsApps\python.exe` alias is not a Python |
 | ffmpeg, full build | required (the driver records video through it) | 9.0.1 and 9.0.2 full_build (gyan.dev) | not needed for the measured per-user package in `%LOCALAPPDATA%\Microsoft\WinGet\Packages`; whether winget asked for UAC was not recorded | `winget install --id Gyan.FFmpeg -e` | `desktape doctor --target <name>` (or `--local`) says `ok ffmpeg` |
 | Windows OCR | `look --ocr` only | built in | no install | Windows | `look --ocr` prints lines |
@@ -40,7 +40,7 @@ Measured on 2026-10-25 on macOS 26.4, Apple Silicon; step by step in [`macos-set
 | What | Needed for | Measured | Admin | Source | Check |
 |---|---|---|---|---|---|
 | Remote Login (SSH) | remote mode only | macOS's own sshd | **yes**: System Settings › General › Sharing | built in | key login works from the controller |
-| Cua Driver 0.34.1 | always | 0.34.1 (`darwin-universal`) | **yes**: installs `/Applications/CuaDriver.app` | `macos/cua-setup.sh` (the official installer, version pinned, telemetry off) | `cua-driver status`; `desktape.py doctor --local` on the Mac |
+| Cua Driver 0.55.0 | always | 0.55.0 (`darwin-universal`; 0.34.1 before 2026-11-22) | **yes**: installs `/Applications/CuaDriver.app` | `macos/cua-setup.sh` (the official installer, version pinned, telemetry off) | `cua-driver status`; `desktape.py doctor --local` on the Mac |
 | CuaDriver's permissions | always | Accessibility, Screen Recording, direct capture | a **person** at the screen, once | `cua-driver permissions grant` | `cua-driver permissions status --json`: `"attribution": "driver-daemon"` |
 | Xcode or the Command Line Tools | `look --ocr` and unreadable windows | Xcode, `swiftc` | yes (the installer) | `xcode-select --install` | `which swiftc` |
 | ffmpeg-full | required | 9.0.2, keg-only | no (Homebrew) | `brew install ffmpeg-full` | `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg -filters` lists `drawtext` |

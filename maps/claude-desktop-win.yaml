@@ -1,4 +1,5 @@
 # Claude Desktop on Windows: named selectors for tapes (`click: "@plugins.add_plugin"`).
+# Re-checked 2026-11-22 with Cua Driver 0.55.0 (the tour, 42 of 42, on two Windows 11 machines).
 # Mapped 2026-10-23 with `look --new` on every main screen, menu and dialog; the first entries come from the
 # spike tape (docs/spike-2026-10-23.md §4). Only fixed UI is named here: never a user's chats, projects,
 # artifacts or account. Keep one-off selectors inline in a tape.

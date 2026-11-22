@@ -12,8 +12,8 @@
 #
 # What it does, each step skipped when it is already in place:
 #   1. the controller's one line into ~/.ssh/authorized_keys (700/600)
-#   2. Cua Driver 0.34.1: cua-setup.sh from the same folder (it checks the driver's own installer against the
-#      release's SHA256SUMS, installs it pinned, telemetry off)
+#   2. Cua Driver 0.55.0: cua-setup.sh from the same folder (it checks the driver's own installer against the
+#      release's SHA256SUMS and its helper against a pinned SHA-256, installs it pinned, telemetry off)
 #   3. ffmpeg-full through Homebrew
 #   4. only with --keep-awake: sudo pmset -c sleep 0 displaysleep 0 (the old values go into the report)
 # Two steps stay the person's, and the script opens the right place for each:
@@ -22,7 +22,7 @@
 # It ends with the report the person passes back to the controller. Log: ~/desktape/setup-target.log.
 set -uo pipefail
 
-CUA_VERSION="0.34.1"
+CUA_VERSION="0.55.0"
 CUA_SETUP="$(cd "$(dirname "$0")" && pwd)/cua-setup.sh"
 PAIR_OPTS="no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty"
 WORK="$HOME/desktape"

@@ -1,4 +1,4 @@
-param([string]$Pipe = '\\.\pipe\cua-driver', [string]$Version = '0.34.1')
+param([string]$Pipe = '\\.\pipe\cua-driver', [string]$Version = '0.55.0')
 $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = 'false'; $env:DO_NOT_TRACK = '1'; $env:CUA_DRIVER_RS_UPDATE_CHECK = 'false'; $env:CUA_DRIVER_DISABLE_RUN_SCRIPT = '1'
 $ff = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select -First 1
 if ($ff) { $env:PATH = $ff.DirectoryName + ';' + $env:PATH }

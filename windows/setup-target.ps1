@@ -19,8 +19,9 @@
 #      the controller's own addresses from the line   [elevated]
 #   2. the controller's one line: the user's authorized_keys, or administrators_authorized_keys for an
 #      administrator   [elevated for an administrator]
-#   3. Cua Driver 0.34.1 from the pinned GitHub release, its install.ps1 checked against the SHA-256 below,
-#      telemetry, update check and script runner off   [this session, not elevated]
+#   3. Cua Driver 0.55.0 from the pinned GitHub release: its install.ps1 and the helper module it loads
+#      (_install-common.psm1, from the release's git tag) checked against the SHA-256s below; a running older
+#      driver daemon stopped first; telemetry off, nothing connected to other AI tools   [this session, not elevated]
 #   4. ffmpeg (Gyan.FFmpeg) through winget, in this user's account
 #   5. only with -KeepAwake: sleep and monitor timeouts on mains power
 # It ends with the report the person passes back to the controller. Log: %USERPROFILE%\desktape\setup-target.log.
@@ -36,9 +37,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$CuaVersion = '0.34.1'
+$CuaVersion = '0.55.0'
 $CuaRelease = "https://github.com/trycua/cua/releases/download/cua-driver-rs-v$CuaVersion"
-$CuaInstallSha = '16eedffc982de6d4b8fa71e7395e4617023394eb050ab23a8fd0930121f45c56'
+$CuaInstallSha = '8cdb0bffbe73e421fe81ecaf87d4fefeddcc0a36836d412dac5a78d0d797f2c4'
+# install.ps1 loads this module from its own folder, else from cua.ai unpinned: it is not a release asset (driver-054 D7)
+$CuaCommonUrl = "https://raw.githubusercontent.com/trycua/cua/cua-driver-rs-v$CuaVersion/libs/cua-driver/scripts/_install-common.psm1"
+$CuaCommonSha = '99f34a84ceab04d4b488b1db4d71536c7a7ac7e645ac2ec295b4fd85244085b6'
 $PairOpts = 'no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty'
 $AdminKeys = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
 $ElevatedLog = Join-Path $env:ProgramData 'desktape\setup-target-elevated.log'
@@ -230,6 +234,7 @@ $keyFile = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
 if ($admin) { $keyFile = $AdminKeys }
 $keyThere = Test-KeyIn $keyFile $info.Comment
 $cua = Get-CuaState
+$oldCua = @(Get-Process -Name 'cua-driver', 'cua-driver-uia' -ErrorAction SilentlyContinue)
 $ff = Find-Ffmpeg
 $winget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
 $arm = ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64')
@@ -254,7 +259,10 @@ elseif ($admin) { $plan += "  [UAC] add the controller's line to $keyFile and se
 else { $plan += "  add the controller's line to $keyFile" }
 if ($arm) { $plan += '  skip: Cua Driver (an ARM PC; desktape is measured on x86_64 only)' }
 elseif ($cua) { $plan += "  skip: Cua Driver $CuaVersion is installed" }
-else { $plan += "  download Cua Driver $CuaVersion install.ps1 from github.com/trycua/cua (pinned release), check SHA-256 $CuaInstallSha, run it with telemetry, update check and script runner off" }
+else {
+    if ($oldCua.Count -gt 0) { $plan += "  stop the running Cua Driver (pid $(($oldCua | ForEach-Object { $_.Id }) -join ', ')); desktape starts the new one" }
+    $plan += "  download Cua Driver $CuaVersion install.ps1 from github.com/trycua/cua (pinned release), check SHA-256 $CuaInstallSha, and its helper _install-common.psm1 from the release's tag, check SHA-256 $CuaCommonSha; run it with telemetry off, nothing connected"
+}
 if ($ff) { $plan += "  skip: ffmpeg found ($ff)" }
 elseif ($winget) { $plan += '  winget install Gyan.FFmpeg (accepts winget''s source and package agreements)' }
 else { $plan += '  skip: ffmpeg, winget is missing (install App Installer from the Microsoft Store, then run this again)' }
@@ -289,18 +297,38 @@ if (-not $admin -and -not $keyThere) {
 # Cua Driver, in this session, not elevated
 if (-not $arm -and -not $cua) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $inst = Join-Path $work 'cua-install.ps1'
+    $cuaDir = Join-Path $work 'cua-install'
+    New-Item -ItemType Directory -Force $cuaDir | Out-Null
+    $inst = Join-Path $cuaDir 'install.ps1'
+    $common = Join-Path $cuaDir '_install-common.psm1'
     Invoke-WebRequest "$CuaRelease/install.ps1" -OutFile $inst -UseBasicParsing
     $h = (Get-FileHash $inst -Algorithm SHA256).Hash.ToLower()
     if ($h -ne $CuaInstallSha) { Fail "Cua Driver install.ps1 has SHA-256 $h, not ${CuaInstallSha}: not run" }
+    Invoke-WebRequest $CuaCommonUrl -OutFile $common -UseBasicParsing
+    $h = (Get-FileHash $common -Algorithm SHA256).Hash.ToLower()
+    if ($h -ne $CuaCommonSha) { Fail "Cua Driver _install-common.psm1 has SHA-256 $h, not ${CuaCommonSha}: not run" }
+    # The installer stops a running driver too, but an elevated one it cannot stop makes it ask on the console,
+    # which nobody sees here (driver-054 D7): stop it first, and stop this script when it survives.
+    $oldCua = @(Get-Process -Name 'cua-driver', 'cua-driver-uia' -ErrorAction SilentlyContinue)
+    foreach ($p in $oldCua) {
+        try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; Log "stopped the running Cua Driver (pid $($p.Id))" }
+        catch { Log "could not stop Cua Driver pid $($p.Id): $($_.Exception.Message)" }
+    }
+    Start-Sleep -Seconds 1
+    $left = @(Get-Process -Name 'cua-driver', 'cua-driver-uia' -ErrorAction SilentlyContinue)
+    if ($left.Count -gt 0) {
+        Fail ("a Cua Driver runs elevated (pid $(($left | ForEach-Object { $_.Id }) -join ', ')) and this window cannot stop it; " +
+              "as administrator run: taskkill /im cua-driver.exe /f   (or from the controller over SSH), then run this again")
+    }
     $env:CUA_DRIVER_RS_VERSION = $CuaVersion; $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = 'false'
     $env:DO_NOT_TRACK = '1'; $env:CUA_DRIVER_RS_UPDATE_CHECK = 'false'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $inst -NoAutoStart -NoPathUpdate | ForEach-Object { Add-Content -Path $log -Value "$_" -Encoding ASCII }
+    $env:CUA_DRIVER_RS_KEEP_VERSIONS = '0'          # keep older releases: going back is the profile's `driver:` line
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $inst -NoAutoStart -NoPathUpdate -NoConnect -NoTest | ForEach-Object { Add-Content -Path $log -Value "$_" -Encoding ASCII }
     $exe = Get-CuaExe
     if (-not (Test-Path $exe)) { Fail "the Cua Driver installer ran, but $exe is not there (see $log)" }
     & $exe telemetry disable | Out-Null
-    & $exe config set update_check_enabled false | Out-Null
-    & $exe config set disable_run_script true | Out-Null
+    # 0.55.0 has no `config set` keys for the update check and the script runner: desktape passes both as
+    # environment variables whenever it starts the driver (DRIVER_ENV)
     $cua = Get-CuaState
     $done.Add("Cua Driver: $CuaVersion installed")
 }

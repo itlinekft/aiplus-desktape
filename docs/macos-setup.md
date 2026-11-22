@@ -1,7 +1,8 @@
 # Setting up a macOS target
 
 What desktape needs on a Mac it drives, step by step, with a check after each step. Measured on 2026-10-25 on
-a Mac mini (Apple Silicon, macOS 26.4 Tahoe) with Cua Driver 0.34.1, the version pinned for Windows too.
+a Mac mini (Apple Silicon, macOS 26.4 Tahoe) with Cua Driver 0.34.1; the upgrade to 0.55.0, the pinned version
+now, was measured on the same Mac on 2026-11-22 (`MEASURED.md`).
 The raw measurements behind this page: [`spike-2026-10-25-macos.md`](spike-2026-10-25-macos.md).
 
 **Who can do this.** Every step except step 3 works from a Terminal on the Mac or over SSH, so a person can
@@ -44,10 +45,13 @@ bash macos/cua-setup.sh
 
 What it does, so you can do it by hand instead:
 
-1. downloads `install.sh`, `_install-rust.sh` and `SHA256SUMS` of the release `cua-driver-rs-v0.34.1` from
-   GitHub and checks both scripts against `SHA256SUMS` (read them; they are short enough);
-2. runs the official installer with the version pinned and telemetry off:
-   `CUA_DRIVER_RS_VERSION=0.34.1 CUA_DRIVER_RS_TELEMETRY_ENABLED=false bash install.sh --no-modify-path`.
+1. downloads `install.sh`, `_install-rust.sh` and `SHA256SUMS` of the release `cua-driver-rs-v0.55.0` from
+   GitHub and checks both scripts against `SHA256SUMS`, and the helper `_install-common.sh` from the release's
+   git tag against the SHA-256 in the script (it is not a release asset; without it beside the installer, the
+   installer fetches the live one from cua.ai, unchecked);
+2. runs the official installer with the version pinned, telemetry off, nothing connected to other AI tools and
+   older versions kept: `CUA_DRIVER_RS_VERSION=0.55.0 CUA_DRIVER_RS_TELEMETRY_ENABLED=false CUA_DRIVER_NO_CONNECT=1
+   CUA_DRIVER_RS_KEEP_VERSIONS=0 bash install.sh --no-modify-path`. It stops a running older driver first.
    The installer checks the archive against `SHA256SUMS` and the app's code signature, installs
    `/Applications/CuaDriver.app` (bundle id `com.trycua.driver`) and links `~/.local/bin/cua-driver` to it;
 3. `cua-driver telemetry disable` (persisted in `~/.cua-driver/config.json`);
@@ -57,13 +61,13 @@ What it does, so you can do it by hand instead:
 The log is `~/desktape/cua-setup.log`. Check:
 
 ```bash
-~/.local/bin/cua-driver --version        # cua-driver 0.34.1
+~/.local/bin/cua-driver --version        # cua-driver 0.55.0
 ~/.local/bin/cua-driver status           # Cua Driver daemon is running, with its socket and pid
 codesign -dv /Applications/CuaDriver.app 2>&1 | grep -E 'Identifier|TeamIdentifier'
 ```
 
-On Windows the script runner and the update check are switched off with `config set`; macOS 0.34.1 has no
-such keys (its `config` knows only cursor, image size and picture-in-picture settings). desktape passes the
+Neither 0.34.1 on macOS nor 0.55.0 on either system has `config set` keys for the script runner and the update
+check (the script tries them and logs a note). desktape passes the
 environment switches (`CUA_DRIVER_RS_UPDATE_CHECK=false`, `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`) on every
 connection instead, and never puts `run_script` or `check_for_update` on its tool allowlist.
 
