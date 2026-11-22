@@ -3636,8 +3636,9 @@ class Runner:
                     alive = False            # it was closing while the window list still showed it (measured)
                     logger.info("%s: the window %r closed", what, self.title)
             if before["lines"] is not None and alive and self.failure_lines:
+                had = {l.strip() for l in before["lines"]}     # failure-lines-moved: content, not depth
                 for line in shape(tree).splitlines():
-                    if line in before["lines"]:
+                    if line.strip() in had:
                         continue
                     n = parse(line)
                     if n and failure_word(n[2] + " " + (VALUE.search(line).group(1) if VALUE.search(line) else ""),
@@ -8893,6 +8894,12 @@ def selftest():
     assert e is None, e                                       # the old "Hibajelentés" menu item is not a failure
     e, _ = run({"Import": with_line("Hiba: a 3. sor érvénytelen")}, {"click": {"label": "Import", "effect": "none"}})
     assert isinstance(e, ProgramFailure) and "now shows" in str(e) and "érvénytelen" in str(e), e
+    # failure-lines-moved: text already on screen that a menu moves one level deeper is not a new failure line
+    shown = main + '\n  - Text "Ezt nem lehet visszavonni"'
+    menu = lambda p: p.wins.__setitem__(1, ("Main", main + '\n  - Group "Menu"\n    - Text "Ezt nem lehet visszavonni"'
+                                                        '\n    - [6] MenuItem "Másolás" [actions=[invoke]]'))
+    r = Runner(Prog(shown, {"Import": menu}), "test"); r.focus("Main")
+    r.step({"click": {"label": "Import", "effect": "none"}})
     result = lambda p: p.wins.__setitem__(8, ("Információ", '- Window "Információ"\n  - Text "Az importálás sikeresen befejeződött"'))
     e, _ = run({"Import": result}, {"click": {"label": "Import", "expect": {"shows": "sikeresen befejeződött"}}})
     assert e is None, e                                       # the result box carries the outcome: planned by it

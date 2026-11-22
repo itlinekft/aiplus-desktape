@@ -5,6 +5,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Fixed
+- **Text that only moved no longer fails a step** (`failure-lines-moved`): after a step desktape fails on a new line
+  of the window carrying a failure word; lines were compared with their indentation, so a menu that wrapped the page
+  one level deeper made text already on screen (an open chat, a banner saying "nem lehet") count as new, and a
+  correct click failed. Lines are now compared by content; a genuinely new failure line still fails at once.
+
 ### Added
 - **`act --exclusive`, `run --exclusive`** (`exclusive-act`): while such a command runs, the same session's other
   commands on that target wait as for another session's (the wait line says `exclusive`), and it waits for the
