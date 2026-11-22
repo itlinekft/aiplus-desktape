@@ -683,6 +683,27 @@ python3 desktape.py --target VM act "focus: {title: 'desktape pw test - Google C
 python3 desktape.py --target VM run tapes/claude-desktop-tour.yaml [--mode video]
 ```
 
+## 2026-11-22: Cua Driver 0.55.0 on the Windows 11 test PC (`driver-054` task 2.2, in part)
+
+The Windows 11 test PC (Hungarian, UAC on, the desktop user reached over SSH; that user is in the Administrators
+group, so its SSH logon runs elevated), Claude Desktop (Store build); the controller on Linux, the panel there.
+
+| what | result |
+|---|---|
+| the release's `install.ps1` | the same file and SHA-256 as on the VM, run the same way (a one-off `/it` task in the desktop session, `-NoAutoStart -NoPathUpdate -NoConnect -NoTest`, `CUA_DRIVER_RS_KEEP_VERSIONS=0`): zip checked against `SHA256SUMS`, Authenticode checked, 0.55.0 installed beside 0.34.1 |
+| the installer and the running daemon | **it hung**: the 0.34.1 daemon ran elevated, the installer (not elevated) could not stop it, called it STALE and waited hidden for a consent nobody saw (3 min, then stopped by hand). The release was already in place and verified; the old daemon was then stopped over SSH and `telemetry disable` run by hand. Written into `knowledge/windows.md` |
+| the daemon | started by desktape over SSH (`cua-serve.ps1 -Version 0.55.0`): the first `look` connected in 7.4 s including the start |
+| `look --full` of Claude Desktop | 194 tree lines on both versions (the first read after a quiet spell gave 7 on 0.34.1, as before); the only difference: Back and Forward indexed with `enabled=false` |
+| `tapes/claude-desktop-tour.yaml`, test mode | 42 of 42 in 35.2 s, after one tape fix: right after the mode switch the "New" click can change nothing (a new chat already shows), so that step says `effect: none` |
+| the same, video mode | 42 of 42, 85.9 s; the recording 84.8 s with no gap, captions and `.srt` written, a frame checked by eye |
+| typing 200 characters (accents, a URL) into Claude Desktop's prompt | 3 of 3 read back whole, 2.8–3.3 s per `act`; cleared, nothing sent |
+| the panel's live screen | frames on 0.34.1 and on 0.55.0 |
+| the panel's control (`POST /control/<target>`, override over desktape's own booking) | **first 502 on every input**: the panel had read the targets file before the target got `driver: 0.55.0` and talked to the new daemon with the 0.34.1 client ("contract version 0.9.0 does not match SDK 0.8.0"). Fixed: the pin is re-read when the targets file changes. After the panel's restart: start 200, a move 200 in 0.34 s, a click on the title bar 200 in 0.06 s, stop 200 |
+
+Not measured here: a standard account's daemon (the test PC's desktop user is now an administrator), the
+`password: true` field (measured on the VM), and the Mac (task 2.3). The test PC keeps 0.55.0 through its
+profile's `driver: 0.55.0` on this controller.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

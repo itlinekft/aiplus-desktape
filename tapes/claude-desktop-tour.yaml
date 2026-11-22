@@ -8,7 +8,7 @@ dialogs: ["Search"]                  # the command palette, opened on purpose; a
 steps:
   - focus: "@window"
   - click: "@mode.chat"
-  - click: "@sidebar.new"
+  - click: { label: "New", role: Button, effect: none }   # @sidebar.new; the mode switch may already show a new chat
   - expect: "@chat.prompt"
   - caption: "Claude Desktop, mapped for desktape: every main screen by role and label"
   - click: "@model.picker"

@@ -12,7 +12,7 @@
 ## 2. Measured (D6)
 
 - [x] 2.1 The Windows 11 VM: install beside 0.34.1 in the desktop session, daemon over SSH (administrator), `doctor`, every repository tape, `password: true` on a real and a plain field [REQ: a-selector-can-require-a-password-field]
-- [ ] 2.2 The Windows 11 test PC: the same, plus a standard account's daemon, a recorded take with captions, the panel's live screens and control, a 200-character text typed into an Electron field [REQ: the-pinned-cua-driver-reports-password-fields]
+- [ ] 2.2 The Windows 11 test PC: the same, plus a standard account's daemon, a recorded take with captions, the panel's live screens and control, a 200-character text typed into an Electron field [REQ: the-pinned-cua-driver-reports-password-fields] (2026-11-22: all but the standard account, whose desktop user is now an administrator)
 - [ ] 2.3 The Mac: install, `look` on Claude Desktop (menus, `type` with no line breaks), a recorded take [REQ: the-pinned-cua-driver-reports-password-fields]
 - [ ] 2.4 `docs/MEASURED.md`; 0.54.0 instead if 0.55.0 fails where 0.54.0 does not (D1) [REQ: the-pinned-cua-driver-reports-password-fields]
 

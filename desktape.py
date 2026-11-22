@@ -54,6 +54,7 @@ RUNS = default_runs()
 EXE_AT = r"%USERPROFILE%\.cua-driver\packages\releases\{}-x86_64-pc-windows-msvc\cua-driver.exe"
 EXE = EXE_AT.format("0.34.1")
 TARGET_DRIVER = {}    # host string -> a profile's `driver:` version (driver-054 D4: one target at a time)
+DRIVER_PINS_READ = [None]   # the targets file's mtime when TARGET_DRIVER was filled
 # agent-efficiency D3: the driver tools that only read; any other call may change the screen
 READ_TOOLS = {"list_windows", "get_window_state", "get_recording_state", "get_desktop_state", "get_screen_size",
               "screenshot"}
@@ -97,6 +98,9 @@ def load_targets(path=None):
     except yaml.YAMLError as e:
         raise ValueError(f"{path} is not valid YAML: {e}") from None
     targets = doc.get("targets") or {}
+    if os.path.abspath(path) == os.path.abspath(targets_path()):
+        TARGET_DRIVER.clear()                   # driver-054 D4: a `driver:` line removed from the file is gone too
+        DRIVER_PINS_READ[0] = os.path.getmtime(path)
     for name, t in targets.items():
         if not isinstance(t, dict) or not t.get("host"):
             raise ValueError(f"{path}: target {name!r} needs a host (an address, user@address, or local)")
@@ -440,7 +444,14 @@ def start_daemon(host):
 
 
 def driver_pin(host):
-    """driver-054 D4: the Cua Driver version this target runs: its profile's `driver:`, else the pinned one."""
+    """driver-054 D4: the Cua Driver version this target runs: its profile's `driver:`, else the pinned one. A
+    long-running process (the panel) sees an edited targets file at its next connection."""
+    path = targets_path()
+    try:        # only a file this process read before: a test's own pins stay
+        if DRIVER_PINS_READ[0] is not None and os.path.exists(path) and os.path.getmtime(path) != DRIVER_PINS_READ[0]:
+            load_targets(path)
+    except (OSError, ValueError) as e:
+        logger.warning("driver pins: %s not re-read (%s); keeping the last ones", path, e)
     return TARGET_DRIVER.get(host, DRIVER_VERSION)
 
 
@@ -8677,6 +8688,24 @@ def selftest():
         assert "0.55.0-x86_64-pc-windows-msvc" in Target("u@new").mcp()[0][-1], Target("u@new").mcp()
         assert f"{DRIVER_VERSION}-x86_64-pc-windows-msvc" in Target("u@old").mcp()[0][-1]
         TARGET_DRIVER.clear(); TARGET_OS.pop("u@new", None); TARGET_OS.pop("u@old", None)
+        # a long-running panel sees an edited targets file: a pin added later, a pin removed later
+        old_env, old_read = os.environ.get("DESKTAPE_TARGETS"), DRIVER_PINS_READ[0]
+        os.environ["DESKTAPE_TARGETS"] = f
+        try:
+            open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new}\n")
+            load_targets(); assert driver_pin("u@new") == DRIVER_VERSION
+            open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, driver: 0.55.0}\n")
+            os.utime(f, (time.time() + 5, time.time() + 5))
+            assert driver_pin("u@new") == "0.55.0", "a pin added after the start is seen"
+            open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new}\n")
+            os.utime(f, (time.time() + 10, time.time() + 10))
+            assert driver_pin("u@new") == DRIVER_VERSION, "a removed pin is gone"
+        finally:
+            if old_env is None:
+                os.environ.pop("DESKTAPE_TARGETS", None)
+            else:
+                os.environ["DESKTAPE_TARGETS"] = old_env
+            TARGET_DRIVER.clear(); DRIVER_PINS_READ[0] = old_read
         open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, driver: latest}\n")
         try:
             load_targets(f); raise AssertionError("expected ValueError")

@@ -288,6 +288,21 @@ Measured on the Hungarian build 26300 VM while writing `windows/setup-target.ps1
   label carries the shortcut number, „Allow once 2”, on some cards), and the absence of „Working” / „Stop” (the
   task is idle). Same VM, same day.
 
+## Upgrading Cua Driver
+
+- **The release installer hangs when the running daemon is elevated and UAC is on.** Its "stopping any previous
+  cua-driver processes" step finds the old daemon (started by desktape's elevated task), cannot stop it from a
+  normal desktop-session process, calls it STALE and asks for consent to self-elevate. Run hidden, nobody sees the
+  question and the installer waits for ever. Stop the old daemon first as the administrator over SSH
+  (`taskkill /im cua-driver.exe /f`), then run the installer; or stop it after the files are in place, as here. The
+  new release is installed and verified before that step, so a stopped installer leaves a usable release. With UAC
+  off (every window elevated) the same step stopped the daemon by itself. Measured 2026-11-22, Cua Driver 0.55.0,
+  the Windows 11 test PC (UAC on) and the Windows 11 VM (UAC off).
+- **An old client against a new daemon is refused.** A 0.34.1 `cua-driver mcp` talking to a 0.55.0 daemon fails every
+  call with "incompatible daemon: contract version 0.9.0 does not match SDK 0.8.0". The client and the daemon on one
+  machine must be the same release; desktape picks both from the target's `driver:` (a long-running panel re-reads
+  the targets file when it changes). Measured 2026-11-22.
+
 ## Still to write
 
 The session that drives the Windows test box fills this page from its measurements: permission prompts,
