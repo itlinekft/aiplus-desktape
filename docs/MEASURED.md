@@ -751,6 +751,21 @@ minimised), Finder and Xcode running.
 | `desktape.py --target <mac> tidy --keep Claude --minimize Terminal` | closed nothing; the Messages and Chrome windows minimised, each logged with "the target's profile says tidy: minimize"; the Terminal windows left (already minimised) |
 | the running programs before and after (System Events, non-background) | the same six |
 
+## 2026-11-22: text that only moved no longer fails a step (`failure-lines-moved`, 0.8.1)
+
+The Windows 11 VM (Hungarian, build 26300), Claude Desktop, Cua Driver 0.55.0, no map (so the failure-line check
+is on). On screen: a Code session whose chat says "nem lehet" and a built-in browser page whose demo banner says
+"nem lehet".
+
+| what | result |
+|---|---|
+| `act '{click: {label: "View options"}}'` with 0.8.0 (`git archive v0.8.0`), twice | FAILED both times: "now shows: - Text \"…Itt nem lehet rendelni…\"" |
+| the banner line in `look --full --text` before / with the menu open | the same text, 26 / 22 spaces of indentation: the menu moved it, it is not new |
+| the same step with 0.8.1 (6dcb3d8), twice | ok both times |
+
+Seen on the way, not fixed: a `type` step whose own text holds a failure word (typing "Ezt nem lehet
+visszavonni" into the prompt) fails on the field's new value.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
