@@ -1640,6 +1640,12 @@ def check_selectors(plan):
             raise ValueError(f"step {i}: {kind} needs a label, id, field or role to find its element")
         if kind == "set" and not isinstance(arg, dict):
             raise ValueError(f"step {i}: set needs {{label|id|field, value}}")
+        if kind == "set":                    # secret-set: exactly one value source; env/file only as a secret
+            given = [k for k in ("value", "env", "file") if k in arg]
+            if len(given) != 1:
+                raise ValueError(f"step {i}: set needs exactly one of value, env or file (got {', '.join(given) or 'none'})")
+            if given[0] != "value" and not arg.get("secret"):
+                raise ValueError(f"step {i}: set: a value from `env` or `file` must also say `secret: true`")
 
 
 # ---- tables: a grid on screen, a file on disk (data-driven-import) --------------------------------------
@@ -1982,18 +1988,19 @@ def describe_step(kind, arg):
     return f"{kind} {arg}"
 
 
-def secret_text(a):
-    """`type: {env: NAME, secret: true}` or `{file: PATH, secret: true}` (data-driven-import): the text is read
-    on the controller when the step runs, so it is never in the tape, the audit, a report or a caption."""
+def secret_text(a, kind="type"):
+    """`type: {env: NAME, secret: true}` or `{file: PATH, secret: true}` (data-driven-import), and the same on `set`
+    (secret-set): the text is read on the controller when the step runs, so it is never in the tape, the audit, a
+    report or a caption."""
     if not a.get("secret"):
-        raise ValueError("type: text from `env` or `file` must also say `secret: true`")
+        raise ValueError(f"{kind}: text from `env` or `file` must also say `secret: true`")
     if "env" in a:
         if a["env"] not in os.environ:
-            raise ValueError(f"type: the environment variable {a['env']!r} is not set on the controller")
+            raise ValueError(f"{kind}: the environment variable {a['env']!r} is not set on the controller")
         return os.environ[a["env"]]
     path = os.path.expanduser(a["file"])
     if not os.path.isfile(path):
-        raise ValueError(f"type: no such file {path} on the controller")
+        raise ValueError(f"{kind}: no such file {path} on the controller")
     return open(path, encoding="utf-8").read().rstrip("\r\n")
 
 
@@ -3668,10 +3675,16 @@ class Runner:
         elif kind == "set":
             # a control's value through UI Automation (data-driven-import D1): a DevExpress combo whose items only
             # exist while its drop-down is open, and the drop-down ignores background clicks (measured)
+            if "env" in arg or "file" in arg:    # secret-set: read now, on the controller; the step keeps the name
+                value = secret_text(arg, "set")
+            elif "value" in arg:
+                value = str(arg["value"])
+            else:
+                raise ValueError("set: needs `value`, or `env`/`file` with `secret: true`")
             e = self.pick(arg, enabled_only=True, reuse=True)
             if not e:
                 raise RuntimeError(f"set: {sel_name(arg)!r} not found (enabled){self.nearest_hint(arg)}")
-            self.cua.call("set_value", {**self.win, "element_token": e["element_token"], "value": str(arg["value"])},
+            self.cua.call("set_value", {**self.win, "element_token": e["element_token"], "value": value},
                           secret=arg.get("secret", False))
         elif kind == "open_file" and self.mac:
             self.mac_open_file(arg)
@@ -8104,6 +8117,27 @@ def selftest():
         r.step({"type": {"env": "DESKTAPE_SELFTEST_PW"}}); raise AssertionError("expected ValueError")
     except ValueError as e:
         assert "secret: true" in str(e)
+    # secret-set: a set value from the controller's environment reaches set_value, never the step or the audit line
+    got = []
+    sc = Screen(base); real_call = sc.call
+    sc.call = lambda tool, args, secret=False, timeout=None: (got.append((tool, args, secret)), real_call(tool, args))[1]
+    r = Runner(sc, "test"); r.focus("Main")
+    r.step({"set": {"label": "Path", "role": "Edit", "env": "DESKTAPE_SELFTEST_PW", "secret": True}})
+    sv = [(a, sec) for t, a, sec in got if t == "set_value"]
+    assert sv == [({"pid": 7, "window_id": 1, "element_token": "Path", "value": "hunter3"}, True)], sv
+    assert hide_secret({"set": {"label": "Path", "value": "hunter3", "secret": True}})["set"]["value"] == "<redacted>"
+    for bad, word in (({"label": "Path", "env": "DESKTAPE_SELFTEST_PW"}, "secret: true"),
+                      ({"label": "Path", "env": "DESKTAPE_SELFTEST_PW", "value": "x", "secret": True}, "exactly one"),
+                      ({"label": "Path", "secret": True}, "exactly one")):
+        try:
+            check_selectors([({"set": bad}, None)]); raise AssertionError(f"accepted {bad}")
+        except ValueError as e:
+            assert word in str(e), e
+    try:
+        r.step({"set": {"label": "Path", "env": "DESKTAPE_SELFTEST_NOPE", "secret": True}})
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert str(e).startswith("set: ") and "not set" in str(e), e
     # type-verify-whole: a keystroke lost after the 40th character is caught, retyped in chunks, or the step fails
     url = "https://host.example/a/long/path/to/the/api/studio/mcp/"
     for drops, ok in ((1, True), (99, False)):

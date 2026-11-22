@@ -35,6 +35,7 @@ steps:
 | `expect` | label, or `{label, role, prefix, nth, timeout}` | waits for the element; fails the run if it does not appear |
 | `absent` | label, or `{label, role, prefix, nth, timeout}` | waits until no such element is left; fails if one still is |
 | `type` | text, or `{text, secret, typing, chunk}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
+| `set` | `{label\|id\|field, role, value}`, or `env`/`file` with `secret: true` instead of `value` | sets the element's value through UI Automation, not through the keyboard focus |
 | `key` | a key name, as Cua Driver's `press_key` takes it | presses one key |
 | `hotkey` | a list of key names, as Cua Driver's `hotkey` takes them | presses a key combination |
 | `caption` | text | in video mode, shown from this step until the next caption, and written to the `.srt`; `""` ends the previous caption |
@@ -295,8 +296,10 @@ steps:
   named window, takes the driver's verdict that it is in front (or the system's own window list, which skips the
   driver's agent cursor window), and sends through the driver's foreground delivery. With `os: true` the
   keys are a keyboard's instead, for a window whose input the driver cannot reach, such as a file dialog.
-- **`env` / `file`** on `type` read the text on the controller when the step runs. `secret: true` is required,
-  so a password is never in the tape, the audit, a report or a caption.
+- **`env` / `file`** on `type` and `set` read the text on the controller when the step runs. `secret: true` is
+  required, so a password is never in the tape, the audit, a report or a caption. A `set` step takes exactly one of
+  `value`, `env` or `file`. For a password field, `set` is the safer form: the value goes to the named element,
+  while `type` goes to whichever control has the focus.
 - **`check_table`** reads a grid's headers and rows (each cell by its column's name) and compares the named
   columns with an `.xlsx` or `.csv` file, row by row, matched by `key` (`file_key:` when the file names it
   differently; `columns:` as a mapping `grid column: file column`). Numbers compare as numbers, so

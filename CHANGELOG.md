@@ -6,6 +6,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- **`set` takes a secret from the controller** (`secret-set`): `set: {label: …, env: NAME, secret: true}` (or
+  `file:`) reads the value on the controller when the step runs, like `type`, and sets it on the named element, so a
+  password field can be filled by element without the password on desktape's command line. A `set` step needs
+  exactly one of `value`, `env` or `file`, and `env`/`file` need `secret: true`; both are checked before any tool call.
 - **The panel can step in over a booking** (`panel-override`): when another project's booking is active or a live
   run holds a target, the zoomed view offers Override — after a confirm, the person's clicks, drags and keys reach
   the machine while the booking and the run continue; the panel takes no lock, renews nothing and unlocks nothing,
