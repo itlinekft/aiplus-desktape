@@ -175,7 +175,13 @@ never over another project's booking. During it, every other project's `run`, `l
 then stops with exit code 3, naming the booking; your project's sessions take turns as usual, and get the machine
 even over another project's 180 s lease. A running command is never cut off when a booking starts. Booking again
 right after your own booking extends it. `desktape.py bookings` lists every target's bookings, `desktape.py unbook
-ID` removes your project's (`--force` removes another project's: for a person clearing a stale one). Bookings are
+[ID]` removes your project's (the ID only when it has several there; `--force` removes another project's: for a
+person clearing a stale one). `desktape.py handover [ID] --to PROJECT` gives your booking to another project in one
+write, so nobody can take the machine in between. A booking whose project has not used the machine for 10 minutes
+yields: another project's command runs, with a warning and a `yield` line in the activity log, and the booking's own
+project gets the machine back with its next command. A project kept out by a booking is noted on it, and the
+booking project's next command prints who waits and since when; `bookings` shows the same, with how long an active
+booking has been unused. Short bookings are fine: `--for 5m`. Bookings are
 JSON files next to the lock files; every locked command and every booking change also leaves a line in
 `activity.jsonl` there.
 

@@ -11,7 +11,8 @@
   desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py targets                             the named targets, with lock and status
-  desktape.py book --for 45m [--at 14:00] [--note T]  book the target for this project; bookings; unbook ID
+  desktape.py book --for 45m [--at 14:00] [--note T]  book the target for this project; bookings;
+                                                  unbook [ID]; handover [ID] --to PROJECT
   desktape.py panel [--port 8645]                 a local web page: every target's lock, bookings and live screen
   desktape.py doctor [--local] [--video]          what this machine still needs, with the command for each
   desktape.py --selftest                          offline checks, no host needed
@@ -615,6 +616,8 @@ LOCK_WAIT = 60.0      # seconds a second session waits before it stops (box-lock
 BOOK_MAX = 4 * 3600.0         # booking-and-panel D3: the longest booking
 BOOK_AHEAD = 7 * 86400.0      # how far ahead a booking may start
 BOOK_WARN = 15 * 60.0         # D2 rule 5: a command this close to another project's booking is warned
+BOOK_IDLE = 10 * 60.0         # booking-handover D2: an active booking unused this long yields to other projects
+WAIT_FRESH = 30 * 60.0        # booking-handover D3: a project refused this recently is still "waiting"
 ACTIVITY_MAX = 1 << 20        # D4: activity.jsonl is cut to its last ACTIVITY_KEEP lines past this size
 ACTIVITY_KEEP = 2000
 
@@ -669,6 +672,16 @@ def describe_booking(b, now=None):
     """`some-project, 14:00–14:45 (end-to-end suite; booking a3f9c1)`."""
     note = f"{b['note']}; " if b.get("note") else ""
     return f"{b.get('label')}, {when(b['from'], now)}–{when(b['until'], now)} ({note}booking {b.get('id')})"
+
+
+def booking_idle(b, now):
+    """booking-handover D2: seconds since an active booking's project last used the target (0 before it starts)."""
+    return max(0.0, now - max(b["from"], b.get("used") or 0))
+
+
+def booking_waiters(b, now):
+    """booking-handover D3: {project: since} of the projects refused by this booking in the last 30 minutes."""
+    return {k: v for k, v in (b.get("waiting") or {}).items() if now - v.get("last", v["since"]) < WAIT_FRESH}
 
 
 def describe_block(x, now=None):
@@ -782,7 +795,7 @@ class BoxLock:
             return cur
         now = self.now()
         active = [b for b in bookings if b["from"] <= now < b["until"]]
-        theirs = next((b for b in active if b.get("label") != self.label), None)
+        theirs = next((b for b in active if b.get("label") != self.label and booking_idle(b, now) < BOOK_IDLE), None)
         if theirs:
             return {"booking": theirs}
         if cur and (cur.get("until") or 0) > now:
@@ -820,8 +833,40 @@ class BoxLock:
             if took or (mine and cur.get("took_from")):
                 new["took_from"] = took or cur["took_from"]
             self._write(new)
+            self._touch_bookings(command)
             return None
         return self._under_mutex(take)
+
+    def _touch_bookings(self, command=None):
+        """booking-handover D2: this project's active booking was used now; another project's idle one yielded.
+        Called under the mutex."""
+        now, items, changed = self.now(), self.read_bookings(), False
+        for b in items:
+            if not b["from"] <= now < b["until"]:
+                continue
+            if b.get("label") == self.label:
+                b["used"], changed = now, True
+            elif command is not None and booking_idle(b, now) >= BOOK_IDLE:
+                logger.warning("%s: the booking of %s has not been used for %d min; it yields to %s for %r",
+                               self.host, describe_booking(b, now), booking_idle(b, now) // 60, self.label, command)
+                self.log("yield", id=b.get("id"), owner=b.get("label"), idle=round(booking_idle(b, now)), command=command)
+        if changed:
+            self._write_bookings(items)
+
+    def note_waiting(self, booking):
+        """booking-handover D3: this project was refused by another project's booking; its holder is told."""
+        def put():
+            items, now = self.read_bookings(), self.now()
+            b = next((x for x in items if x.get("id") == booking.get("id")), None)
+            if b is None:
+                return
+            w = b.setdefault("waiting", {})
+            w[self.label] = {"since": w.get(self.label, {}).get("since", now), "last": now}
+            self._write_bookings(items)
+        try:
+            self._under_mutex(put)
+        except Exception as e:
+            logger.warning("%s: could not record that %s waits: %s", self.host, self.label, e)
 
     def acquire(self, command, wait=LOCK_WAIT):
         end, told = time.time() + wait, False
@@ -831,16 +876,25 @@ class BoxLock:
                 logger.debug("lock on %s taken by %s (pid %s) for %r", self.host, self.label, os.getpid(), command)
                 self.warn_next_booking()
                 return
+            if not told:
+                if other.get("booking"):         # booking-handover D3: also when it gives up at once
+                    self.note_waiting(other["booking"])
+                if time.time() < end:
+                    logger.info("%s is %s; waiting up to %d s", self.host, describe_block(other), wait)
+                told = True
             if time.time() >= end:
                 raise TargetBusy(f"{self.host} is {describe_block(other)}; try again later")
-            if not told:
-                logger.info("%s is %s; waiting up to %d s", self.host, describe_block(other), wait)
-                told = True
             time.sleep(2.0)
 
     def warn_next_booking(self):
-        """D2 rule 5: another project's booking starts soon; the command runs, but is told."""
+        """D2 rule 5: another project's booking starts soon; the command runs, but is told. booking-handover D3:
+        and this project's own active booking is told who waits for the target."""
         now = self.now()
+        for b in self.read_bookings():
+            if b.get("label") == self.label and b["from"] <= now < b["until"]:
+                for who, w in booking_waiters(b, now).items():
+                    logger.warning("%s: %s has been waiting for this target since %s; `desktape.py handover --to %s` "
+                                   "gives your booking %s over", self.host, who, when(w["since"], now), who, b.get("id"))
         soon = [b for b in self.read_bookings() if b.get("label") != self.label and now < b["from"] <= now + BOOK_WARN]
         if soon:
             b = min(soon, key=lambda b: b["from"])
@@ -904,8 +958,49 @@ class BoxLock:
             self.log("book", id=made["id"], at=made["from"], until=made["until"], note=made.get("note"))
         return made, why
 
+    def own_booking_id(self):
+        """booking-handover D4: the id of this project's only booking on the target, or (None, why not)."""
+        own = [b for b in self.read_bookings() if b.get("label") == self.label]
+        if len(own) == 1:
+            return own[0]["id"], None
+        if not own:
+            return None, f"{self.label} has no booking on {self.host}"
+        return None, f"{self.label} has {len(own)} bookings on {self.host}; name one: " + ", ".join(b["id"] for b in own)
+
+    def handover(self, booking_id, to_label, force=False):
+        """booking-handover D1: give a booking to another project in one write, with no gap between. Returns
+        (booking, None) or (None, why not)."""
+        if not to_label or to_label == self.label:
+            return None, "handover needs another project's name (--to PROJECT)"
+
+        def give():
+            items, now = self.read_bookings(), self.now()
+            b = next((b for b in items if b.get("id") == booking_id), None)
+            if not b:
+                return None, f"no booking {booking_id} on {self.host}"
+            if b.get("label") != self.label and not force:
+                return None, f"booking {booking_id} belongs to {b.get('label')}; only that project hands it over"
+            for x in items:
+                if x is not b and x.get("label") == to_label and x["from"] < b["until"] and b["from"] < x["until"]:
+                    return None, f"{to_label} already has an overlapping booking {x['id']}; it books on from there"
+            old = b.get("label")
+            b.update(label=to_label, holder=None, used=now, handed_by=old)
+            (b.get("waiting") or {}).pop(to_label, None)
+            self._write_bookings(items)
+            return dict(b), None
+        made, why = self._under_mutex(give)
+        if made:
+            logger.info("%s: booking %s handed over from %s to %s", self.host, booking_id, made["handed_by"], to_label)
+            self.log("handover", id=booking_id, to=to_label, owner=made["handed_by"])
+        return made, why
+
     def unbook(self, booking_id, force=False):
         """Remove a booking of this project, or any with force. Returns None when done, else why not."""
+        if not booking_id:                   # booking-handover D4: this project's only booking on the target
+            booking_id, why = self.own_booking_id()
+            if why:
+                return why
+
         def drop():
             items = self.read_bookings()
             b = next((b for b in items if b.get("id") == booking_id), None)
@@ -953,6 +1048,7 @@ class BoxLock:
                 self._write(cur)
             else:
                 os.remove(self.path)
+            self._touch_bookings()
         self._under_mutex(give)
 
     def status(self, **fields):
@@ -5107,9 +5203,23 @@ def cmd_book(a):
 
 
 def cmd_unbook(a):
-    why = BoxLock(a.host).unbook(a.id, force=a.force)
-    print(f"{a.host}: " + (why or f"booking {a.id} removed"), file=sys.stderr if why else sys.stdout)
+    lk = BoxLock(a.host)
+    bid = a.id or lk.own_booking_id()[0]
+    why = lk.unbook(a.id, force=a.force)
+    print(f"{a.host}: " + (why or f"booking {bid} removed"), file=sys.stderr if why else sys.stdout)
     return 1 if why else 0
+
+
+def cmd_handover(a):
+    """booking-handover D1: give this project's booking to another project, with no gap."""
+    lk = BoxLock(a.host)
+    bid, why = (a.id, None) if a.id else lk.own_booking_id()
+    made, why = (None, why) if why else lk.handover(bid, a.to, force=a.force)
+    if why:
+        print(f"desktape: {a.host}: not handed over: {why}", file=sys.stderr)
+        return 1
+    print(f"{a.host}: handed over to {a.to}: {describe_booking(made)}")
+    return 0
 
 
 def known_hosts(cfg):
@@ -5128,9 +5238,17 @@ def known_hosts(cfg):
 def cmd_bookings(a):
     """Every target's bookings (booking-and-panel D3)."""
     n = 0
+    now = time.time()
     for name, host, _ in known_hosts(load_targets()):
         for b in BoxLock(host).read_bookings():
-            print(f"{name} [{host}]: {describe_booking(b)}"); n += 1
+            extra = ""
+            if b["from"] <= now < b["until"]:          # booking-handover D2, D3
+                idle = booking_idle(b, now)
+                extra += f" | unused for {idle // 60:.0f} min" + (" (yields to others)" if idle >= BOOK_IDLE else "")
+                waits = booking_waiters(b, now)
+                if waits:
+                    extra += " | waiting: " + ", ".join(f"{k} since {when(v['since'], now)}" for k, v in waits.items())
+            print(f"{name} [{host}]: {describe_booking(b)}{extra}"); n += 1
     if not n:
         print("no bookings")
     return 0
@@ -6660,6 +6778,45 @@ def selftest_booking_panel():
             assert not t["lock"]["held"] and not t["lock"]["running"] and t["activity"][0]["event"] in ("book", "unbook")
             st = panel_status([("box", "user@box", {})], directory=d, now=base + 100, alive=lambda p: False)
             assert st["targets"][0]["lock"]["held"] and st["targets"][0]["booked_now"] is None   # Q's lease, before P
+            # booking-handover D2: a booking unused for 10 min yields; its project's own use keeps it
+            p1.unlock(); q.unlock(); p1._write_bookings([]); clock[0] = base
+            pb, _ = p1.book(base, 3600)
+            clock[0] = base + 300
+            assert q.try_acquire("look").get("booking")                         # 5 min after its start: still P's
+            assert p1.try_acquire("look") is None; p1.release(); p1.unlock()   # P uses it at +5 min
+            clock[0] = base + 300 + BOOK_IDLE - 5
+            assert q.try_acquire("look").get("booking")                         # unused 9:55: still P's
+            clock[0] = base + 300 + BOOK_IDLE + 1
+            assert q.try_acquire("look") is None and q.read()["holder"] == "Q"   # unused 10 min: yields to Q
+            assert any(a["event"] == "yield" and a["owner"] == "proj-p" for a in read_activity(d))
+            q.release()
+            assert p1.try_acquire("look") is None                               # P is back: its booking beats Q's lease
+            p1.release(); p1.unlock()
+            # D3: a refused project is recorded on the booking, and the holder's next command is told
+            clock[0] += 60
+            seen = []
+            h = Grab(); logger.addHandler(h); logger.setLevel(logging.WARNING)
+            try:
+                try:
+                    q.acquire("look", wait=0); raise AssertionError("expected TargetBusy")
+                except TargetBusy:
+                    pass
+                assert "proj-q" in booking_waiters(p1.read_bookings()[0], clock[0])
+                p1.acquire("look", wait=0); p1.release(); p1.unlock()
+            finally:
+                logger.removeHandler(h); logger.setLevel(logging.CRITICAL)
+            assert any("proj-q has been waiting" in m and "handover --to proj-q" in m for m in seen), seen
+            # D1: a handover moves the booking in one write; D4: the only booking needs no id
+            assert "belongs to proj-p" in q.handover(pb["id"], "proj-r")[1]
+            assert "another project" in p1.handover(pb["id"], "proj-p")[1]
+            assert p1.own_booking_id() == (pb["id"], None)
+            hb, why = p1.handover(pb["id"], "proj-q")
+            assert why is None and hb["label"] == "proj-q" and hb["handed_by"] == "proj-p" and not hb.get("waiting"), (hb, why)
+            assert q.try_acquire("look") is None and p1.try_acquire("look").get("booking")   # Q in, P out
+            q.release(); q.unlock()
+            assert "has no booking" in p1.unbook(None) and q.unbook(None) is None and q.read_bookings() == []
+            p1.book(base + 7200, 600); p1.book(base + 9000, 600)
+            assert "has 2 bookings" in p1.unbook(None)
         # D4: box_lock writes an end line, also when the command fails
         with tempfile.TemporaryDirectory() as d:
             os.environ["XDG_STATE_HOME"], os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = d, "A", "proj-a"
@@ -8880,7 +9037,7 @@ def selftest():
     selftest_win_home()
     selftest_panel_audit()
     for cmd in ("run", "look", "act", "lock", "unlock", "targets", "doctor", "status", "tidy", "record", "pair", "unpair",
-                "knowledge", "book", "unbook", "bookings", "panel", "find"):
+                "knowledge", "book", "unbook", "handover", "bookings", "panel", "find"):
         r = subprocess.run([sys.executable, os.path.abspath(__file__), cmd, "--help"], capture_output=True, text=True)
         assert r.returncode == 0, f"{cmd} --help: {r.stderr.strip()[-300:]}"     # a clashing option breaks only at run time
     selftest_find()
@@ -9207,7 +9364,12 @@ def main():
     p.add_argument("--at", default="now", metavar="WHEN", help="now (default), +30m, 14:00 or 2026-11-08 14:00")
     p.add_argument("--note", help="what the booking is for, shown to the other projects")
     p = sub.add_parser("unbook", help="remove a booking of this project")
-    p.add_argument("id"); p.add_argument("--force", action="store_true", help="also another project's (a stale one)")
+    p.add_argument("id", nargs="?", help="default: this project's only booking on the target")
+    p.add_argument("--force", action="store_true", help="also another project's (a stale one)")
+    p = sub.add_parser("handover", help="give this project's booking to another project, with no gap (booking-handover)")
+    p.add_argument("id", nargs="?", help="default: this project's only booking on the target")
+    p.add_argument("--to", required=True, metavar="PROJECT", help="the project that takes the booking over")
+    p.add_argument("--force", action="store_true", help="also another project's booking (a person clearing up)")
     sub.add_parser("bookings", help="every target's bookings")
     p = sub.add_parser("find", help="find a target that moved on the local network, by its pinned SSH host key")
     p.add_argument("--save", action="store_true", help="connect to the found address from now on")
@@ -9272,7 +9434,7 @@ def main():
                      f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
                 "status": cmd_status, "tidy": cmd_tidy, "record": cmd_record, "book": cmd_book,
-                "unbook": cmd_unbook, "find": cmd_find}[a.cmd](a)
+                "unbook": cmd_unbook, "handover": cmd_handover, "find": cmd_find}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
         return 3

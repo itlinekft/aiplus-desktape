@@ -155,14 +155,19 @@ Several projects drive the same machines. Before a long job, look and book:
 desktape bookings                                            # every machine's bookings, with project, time and note
 desktape targets                                             # who holds each machine now, and its session state
 desktape book --target NAME --for 45m --note "what it is for"     # from now; --at 14:00 or --at +30m for later
-desktape unbook ID                                           # when the job is done early
+desktape unbook                                              # when the job is done early (ID if you have several)
+desktape handover --to PROJECT                               # give your booking to a project that waits for it
 ```
 
 - **Book** a video take, an end-to-end suite, or any flow with pauses longer than a few minutes. A booking is the
   project's (the work folder's name, or `DESKTAPE_LABEL`), at most 4 h, at most 7 days ahead. Booking again right
   after your own booking extends it.
+- Book for the work, not for the afternoon: `--for 5m` is fine, and `unbook` as soon as you are done. A booking
+  unused for 10 minutes yields to other projects anyway.
+- When a command warns that another project is waiting for your booked machine, finish the step you are on and
+  `handover --to` that project, or `unbook`.
 - During another project's booking, `run`, `look`, `act` and `tidy` stop with exit code 3 naming the booking: pick
-  another machine (`desktape bookings`) or wait. Do not `unbook --force` another project's booking; that is the person's
+  another machine (`desktape bookings`) or wait; the booking project is told that you wait. Do not `unbook --force` another project's booking; that is the person's
   call.
 - A command that is already running is never cut off when a booking starts; a command started 15 min before
   another project's booking gets a warning: finish before it.

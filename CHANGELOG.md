@@ -10,6 +10,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   `file:`) reads the value on the controller when the step runs, like `type`, and sets it on the named element, so a
   password field can be filled by element without the password on desktape's command line. A `set` step needs
   exactly one of `value`, `env` or `file`, and `env`/`file` need `secret: true`; both are checked before any tool call.
+- **Bookings hand over, yield and tell** (`booking-handover`): `handover [ID] --to PROJECT` gives a booking to
+  another project in one write, with no gap; a booking unused for 10 minutes yields to other projects' commands
+  (logged as `yield`) until its own project comes back; a project kept out by a booking is noted on it, and the
+  booking project's next command prints who waits; `bookings` shows how long an active booking has been unused and
+  who waits; `unbook` without an ID removes the project's only booking on the target.
 - **`focus` can name the program** (`focus-app`): `focus: {title: Claude, app: claude}` takes only a window of that
   program, so a browser tab with the same title is not picked; when none has it, the focus fails and names the
   programs that do show the title.
