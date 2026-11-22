@@ -672,8 +672,10 @@ files on the controller, needing no server.
 
 ### Requirement: A booking keeps other projects out
 
-While another project's booking is active, `run`, `look`, `act` and `tidy` SHALL treat the target as held: wait,
-then stop with exit code 3 naming the booking's project, its end and its note. A command whose process is running
+While another project's booking is active and has been used by its project within the last 10 minutes, `run`,
+`look`, `act` and `tidy` SHALL treat the target as held: wait, then stop with exit code 3 naming the booking's
+project, its end and its note. A booking unused for 10 minutes, counted from its start at the earliest, SHALL yield
+to another project's command, which logs a warning and a `yield` line in the activity log. A command whose process is running
 SHALL keep the target even when a booking starts. Within its own active booking, a project SHALL get the target
 over another project's lease. A command started at most 15 minutes before another project's booking SHALL log a
 warning naming it.
@@ -692,6 +694,12 @@ warning naming it.
 
 - **WHEN** Q's command ended less than 180 s ago and P, inside its own booking, calls `look`
 - **THEN** P gets the target at once
+
+#### Scenario: an idle booking yields
+
+- **WHEN** P's booking is active and P has not taken or released the target for 10 minutes, and Q calls `look`
+- **THEN** Q's look runs, a warning names P's booking, and the activity log has a `yield` line; P's next command
+  gets the target over Q's lease
 
 ### Requirement: Every locked command leaves a line in the activity log
 
@@ -825,3 +833,123 @@ tape before the first step.
 #### Scenario: A field that needs time after the click
 - **WHEN** a tape sets `click_wait: 1.5` and a step clicks a field and then sends keys
 - **THEN** the keys are sent 1.5 s after the click, in the same input task
+
+### Requirement: A secret set value comes from the controller
+A `set` step SHALL accept its value from `env: NAME` or `file: PATH` on the controller when it also says
+`secret: true`, read when the step runs, and SHALL refuse before any tool call a `set` step with no value source, with
+more than one, or with `env`/`file` but no `secret: true`. The value SHALL go to the picked element only, and SHALL
+not appear in the tape, the audit, a report or a repair bundle.
+
+#### Scenario: A password set from the environment
+- **WHEN** a step is `set: {label: Jelszó, role: Edit, env: PW, secret: true}` and `PW` is set on the controller
+- **THEN** the element's value is set to `PW`'s value and the audit records `<redacted>` in its place
+
+#### Scenario: A value source without secret
+- **WHEN** a step is `set: {label: Jelszó, env: PW}`
+- **THEN** desktape refuses the step before any tool call and says `secret: true` is required
+
+#### Scenario: Two value sources
+- **WHEN** a step gives both `value` and `env`
+- **THEN** desktape refuses the step before any tool call
+
+### Requirement: A focus can require the window's program
+A `focus` step given as `{title, app}` SHALL take only a window with that title whose program name equals `app`,
+ignoring case and a `.exe` suffix, and SHALL fail, naming the programs that show the title, when no such window
+appears within the step's timeout. A `focus` given as a dict SHALL match its title exactly unless it says
+`prefix: true`.
+
+#### Scenario: Two windows with one title
+- **WHEN** a browser window and the Claude app both show the title "Claude" and the step is `focus: {title: Claude, app: claude}`
+- **THEN** the Claude app's window is focused
+
+#### Scenario: The title belongs to another program
+- **WHEN** only a browser window shows the title and the step is `focus: {title: Claude, app: claude}`
+- **THEN** the focus fails, the error names the browser's program, and no later step of the same `act` is sent
+
+#### Scenario: A longer title of the same program
+- **WHEN** the Claude app shows windows titled "Claude Code" and "Claude" and the step is `focus: {title: Claude, app: claude}`
+- **THEN** the window titled exactly "Claude" is focused; with `prefix: true` either may be
+
+### Requirement: A booking is handed over in one write
+`desktape.py handover [ID] --to PROJECT` SHALL give the caller's project's booking to the named project in one write
+under the lock mutex, keeping its times, and SHALL leave a `handover` line in the activity log. It SHALL refuse
+another project's booking without `--force`, a handover to the caller's own project, and a handover to a project
+that already has an overlapping booking on the target.
+
+#### Scenario: handing a booking to a waiting project
+- **WHEN** P holds an active booking and runs `handover --to Q`
+- **THEN** the booking is Q's at once, Q's next command gets the target, and P's next command is kept out
+
+### Requirement: A booking holder learns who waits
+When a project's command is refused by another project's active booking, desktape SHALL record that project and
+the time on the booking. The booking project's next command SHALL log a warning naming each project refused in the
+last 30 minutes, since when, and the `handover` command. `desktape.py bookings` SHALL show, for an active booking,
+how long it has been unused and who waits.
+
+#### Scenario: a refused project is named to the holder
+- **WHEN** Q's `look` is refused by P's booking and then a session of P runs `look`
+- **THEN** P's look logs that Q has been waiting since that time, with `handover --to Q`
+
+### Requirement: The only booking needs no ID
+`desktape.py unbook` and `desktape.py handover` without an ID SHALL act on the caller's project's only booking on the
+target, and SHALL refuse, naming the IDs, when the project has several there, or say that it has none.
+
+#### Scenario: one booking
+- **WHEN** P has one booking on the target and runs `unbook`
+- **THEN** that booking is removed
+
+### Requirement: A selector can require a single match
+A `click`, `expect` or `set` selector with `unique: true` SHALL fail the step without sending its action when more
+than one element matches it (counting enabled elements for `click` and `set`), naming the number of matches, and a
+selector with both `unique: true` and an `nth` other than 1 SHALL be refused before any tool call.
+
+#### Scenario: two fields with one name
+- **WHEN** a window has two enabled Edits named "Path" and the step is `set: {label: Path, role: Edit, env: PW, secret: true, unique: true}`
+- **THEN** the step fails with "2 enabled elements match", and no value is set
+
+#### Scenario: unique and nth
+- **WHEN** a step is `click: {label: Copy, nth: 2, unique: true}`
+- **THEN** desktape refuses it before any tool call
+
+### Requirement: The pinned Cua Driver reports password fields
+desktape SHALL pin one exact Cua Driver version of at least 0.54.0 for Windows and macOS targets, SHALL read the
+target's driver version from the MCP handshake, and SHALL ask a driver of 0.35.0 or later explicitly for the
+element list and the full tree it reads, so that selectors behave as with 0.34.1.
+
+#### Scenario: A large window on the new driver
+- **WHEN** a window has more than 250 accessibility nodes and the target runs the pinned driver
+- **THEN** `look` and the selectors see its elements as with 0.34.1
+
+#### Scenario: A target not yet upgraded
+- **WHEN** a target still runs 0.34.1
+- **THEN** desktape calls it with today's arguments, and `doctor` names the version found and the pinned one
+
+### Requirement: A selector can require a password field
+`look` SHALL mark an element the driver reports with `is_password: true`, and a `click`, `expect` or `set` selector
+with `password: true` SHALL fail without sending its action unless the matched element is reported as a password
+field; an element with no report SHALL count as not a password field.
+
+#### Scenario: A secret into a password field
+- **WHEN** a step is `set: {label: Jelszó, role: Edit, env: PW, secret: true, password: true}` and the Edit is reported with `is_password: true`
+- **THEN** the value is set
+
+#### Scenario: A plain field
+- **WHEN** the same step matches an Edit without `is_password: true`
+- **THEN** the step fails with "not reported as a password field", and no value is set
+
+### Requirement: A command can hold the target alone within its session
+`act` and `run` with `--exclusive` SHALL make every other command of the same holder that takes the target's lock
+wait, as for another session's running command, until the exclusive process ends; an exclusive command SHALL wait
+for a running command of the same holder before it starts. A crashed exclusive command SHALL NOT block the target.
+
+#### Scenario: a second shell of the same session
+- **WHEN** session A runs `act --exclusive` with three steps and A's other shell calls `look` on the same target
+- **THEN** the `look` waits until the `act` ends, and after the bounded wait exits with code 3 naming the `act`
+
+#### Scenario: without the flag
+- **WHEN** session A runs `act` without `--exclusive` and A's other shell calls `look`
+- **THEN** the `look` gets the target at once, as before
+
+#### Scenario: a crashed exclusive command
+- **WHEN** the process of an exclusive `act` is gone
+- **THEN** the next command of the same session gets the target at once
