@@ -5,6 +5,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-22
+
 ### Fixed
 - **Text that only moved no longer fails a step** (`failure-lines-moved`): after a step desktape fails on a new line
   of the window carrying a failure word; lines were compared with their indentation, so a menu that wrapped the page
