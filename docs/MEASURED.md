@@ -741,6 +741,16 @@ DESKTAPE_HOLDER=x python3 desktape.py --target VM act --exclusive '{"expect": {"
 sleep 5; DESKTAPE_HOLDER=x python3 desktape.py --target VM look
 ```
 
+## 2026-11-22: `tidy` on a person's Mac with `tidy: minimize` (`tidy-minimize-only`)
+
+The Mac mini (macOS 26.4), its profile with `tidy: minimize`; Claude Desktop, Chrome, Messages, Terminal (already
+minimised), Finder and Xcode running.
+
+| what | result |
+|---|---|
+| `desktape.py --target <mac> tidy --keep Claude --minimize Terminal` | closed nothing; the Messages and Chrome windows minimised, each logged with "the target's profile says tidy: minimize"; the Terminal windows left (already minimised) |
+| the running programs before and after (System Events, non-background) | the same six |
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

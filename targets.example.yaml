@@ -21,6 +21,7 @@ targets:
     label: "Second Windows machine"
     call_deadline: 2                    # optional: a slower machine; doubles every driver call's deadline
     driver: 0.55.0                      # optional: this machine runs another Cua Driver release than the pinned one
+    tidy: minimize                      # optional: a person works on this machine; `tidy` closes none of their programs
     alert_cmd: 'notify-send desktape "$DESKTAPE_ALERT"'   # optional: runs when a session is blocked or stuck
 
   mac-mini:

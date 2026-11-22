@@ -136,7 +136,8 @@ A recorded take must run on its own, with no person stepping in, and show only w
   the take will change, before every take. A take that changes data is never "tried again" on top of itself.
 - **`tidy` first.** The take's first step closes every program the scene does not need and minimises what must keep
   running (the driver's own host, remote access), matched by program, not by window title (two windows can share a
-  title). A minimised window is left alone.
+  title). A minimised window is left alone. On a machine a person also uses, its profile says `tidy: minimize`
+  and nothing is closed, only minimised; never run a tidy that closes programs on a person's own machine.
 - **No person in the loop.** Every prompt the take can raise is planned in the tape (`dialogs:` and the step that
   answers it); an unplanned one stops the take, and the take is redone, not cut around.
 - **A fresh session in its own folder.** An assistant shown in a take starts a new session in a work folder that

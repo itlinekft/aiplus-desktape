@@ -56,6 +56,7 @@ DRIVER_VERSION = "0.55.0"   # the pinned Cua Driver (driver-054: 0.34.1 before; 
 EXE = EXE_AT.format(DRIVER_VERSION)
 TARGET_DRIVER = {}    # host string -> a profile's `driver:` version (driver-054 D4: one target at a time)
 DRIVER_PINS_READ = [None]   # the targets file's mtime when TARGET_DRIVER was filled
+TARGET_TIDY = {}      # host string -> "minimize" when tidy must close nothing there (tidy-minimize-only D1)
 # agent-efficiency D3: the driver tools that only read; any other call may change the screen
 READ_TOOLS = {"list_windows", "get_window_state", "get_recording_state", "get_desktop_state", "get_screen_size",
               "screenshot"}
@@ -78,7 +79,9 @@ def host_default():
 
 SSH_OPTS = {}         # host string -> extra ssh/scp options, from the target's profile (an identity file)
 HOMES = {}            # host string -> the target user's home folder, asked once
-TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os", "paired", "driver"}
+TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os", "paired", "driver",
+                 "tidy"}
+TIDY_MODES = ("close", "minimize")
 
 
 def targets_path():
@@ -101,6 +104,7 @@ def load_targets(path=None):
     targets = doc.get("targets") or {}
     if os.path.abspath(path) == os.path.abspath(targets_path()):
         TARGET_DRIVER.clear()                   # driver-054 D4: a `driver:` line removed from the file is gone too
+        TARGET_TIDY.clear()
         DRIVER_PINS_READ[0] = os.path.getmtime(path)
     for name, t in targets.items():
         if not isinstance(t, dict) or not t.get("host"):
@@ -114,6 +118,11 @@ def load_targets(path=None):
             if not re.fullmatch(r"\d+\.\d+\.\d+", str(t["driver"])):
                 raise ValueError(f"{path}: target {name!r} has driver {t['driver']!r}; write a version like 0.55.0")
             TARGET_DRIVER[ssh_host(t)] = str(t["driver"])
+        if t.get("tidy") is not None:            # tidy-minimize-only D1: a person's machine: tidy closes nothing
+            if t["tidy"] not in TIDY_MODES:
+                raise ValueError(f"{path}: target {name!r} has tidy {t['tidy']!r}; known: {', '.join(TIDY_MODES)}")
+            if t["tidy"] == "minimize":
+                TARGET_TIDY[ssh_host(t)] = "minimize"
     if doc.get("default") and doc["default"] not in targets:
         raise ValueError(f"{path}: default {doc['default']!r} is not a target; known: {sorted(targets)}")
     return {"default": doc.get("default"), "targets": targets, "path": path}
@@ -3161,7 +3170,8 @@ class Runner:
                 cmdlines[pid] = process_cmdline(self.cua.host, pid)
             return cmdlines[pid]
         self.tidied = {"closed": [], "minimised": [], "left": []}
-        if self.mac:
+        no_close = TARGET_TIDY.get(self.cua.host) == "minimize"
+        if self.mac and not no_close:
             self.answer_stale_prompts()
         wins = self.cua.call("list_windows", {})[0].get("windows", [])
         plan = {}                          # pid -> (program, [(window, "keep" | "min:<why>" | "close" | "left:<why>")])
@@ -3184,6 +3194,8 @@ class Runner:
                 what = "min:it hosts the driver"
             elif any(app_is(w, r, prefix=True) for r in REMOTE_APPS):
                 what = "min:remote access"
+            elif no_close:
+                what = "min:the target's profile says tidy: minimize"     # tidy-minimize-only D2
             else:
                 what = "close"
             if what:
@@ -7898,6 +7910,18 @@ def selftest_tidy():
         assert not ask.keys and r.tidied["left"] == ['"Accessibility Access" (macOS asks for Accessibility for CuaDriver: '
                                                      'System Settings → Privacy & Security → Accessibility → turn on CuaDriver)'], r.tidied
         assert not any(k[0] == 7 and k[1] == ("cmd", "q") for k in mac.keys)   # Preview has a hidden window: not quit
+        # tidy-minimize-only D2: on a person's machine nothing is closed; what would be closed is minimised
+        TARGET_TIDY["me@mac"] = "minimize"
+        try:
+            own = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(2, 20, "Messages", "Messages"),
+                                 w(3, 30, "Google Chrome", "News"), w(4, 40, "universalAccessAuthWarn", "Screen Recording")])
+            r = Runner(own, "test")
+            r.tidy({"keep": ["Claude"], "timeout": 1})
+            assert r.tidied["closed"] == [] and not any(k[1] in (("cmd", "q"), ("click",)) for k in own.keys), (r.tidied, own.keys)
+            assert sorted(r.tidied["minimised"]) == ['"Messages" (Messages: the target\'s profile says tidy: minimize)',
+                                                     '"News" (Google Chrome: the target\'s profile says tidy: minimize)'], r.tidied
+        finally:
+            TARGET_TIDY.pop("me@mac", None)
         assert tidy_match({"pid": 6, "app_name": "Terminal"}, {"app": "Terminal", "cmdline_has": "login"}, lambda p: "login -pf me")
         asks = TidyCua(True, [w(1, 10, "Claude", "Claude"), w(7, 70, "TextEdit", "Doc")], asks=[7])
         try:
@@ -8749,6 +8773,13 @@ def selftest():
             else:
                 os.environ["DESKTAPE_TARGETS"] = old_env
             TARGET_DRIVER.clear(); DRIVER_PINS_READ[0] = old_read
+        open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, tidy: hide}\n")
+        try:
+            load_targets(f); raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "close, minimize" in str(e), e
+        open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, tidy: minimize}\n")
+        load_targets(f); assert TARGET_TIDY.pop("u@new") == "minimize"
         open(f, "w", encoding="utf-8").write("targets:\n  a: {host: u@new, driver: latest}\n")
         try:
             load_targets(f); raise AssertionError("expected ValueError")

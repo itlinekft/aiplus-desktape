@@ -480,6 +480,10 @@ a program answers with a question ("save changes?", "terminate running processes
 naming the program and quoting the question with its buttons; desktape never answers it and never
 force-kills a program. Between takes, `desktape.py tidy --keep Claude` does the same without a tape.
 
+On a machine a person also works on, its target profile says `tidy: minimize`: there `tidy` closes nothing, and
+every window it would close is minimised instead (the log says "the target's profile says tidy: minimize"), so the
+same tape leaves a test machine clean and a person's programs open.
+
 What must keep running but must not show is minimised instead: `minimize:` beside `keep:`. It wins over
 `keep`, and an entry may name a process exactly, which tells two windows with one title apart:
 

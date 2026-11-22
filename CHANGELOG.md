@@ -10,6 +10,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   commands on that target wait as for another session's (the wait line says `exclusive`), and it waits for the
   session's command already running. For a multi-step `act` (a sign-in) that another shell of the same agent must
   not interleave. A crashed one frees the target at once.
+- **`tidy: minimize` in a target profile** (`tidy-minimize-only`): on a machine a person also works on, `tidy` (the
+  step and the command) closes no program; every window it would close is minimised instead. Without the line
+  `tidy` closes as before. On 2026-11-22 a tour's `tidy` quit a person's programs on their own Mac; this is the fix.
 
 ## [0.8.0] - 2026-11-22
 
