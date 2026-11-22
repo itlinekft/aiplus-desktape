@@ -772,6 +772,16 @@ The Windows 11 VM, Claude Desktop's new chat, no map. `act '{type: "Ezt nem lehe
 prompt: FAILED on 0.8.1 ("now shows: - Edit … value=…nem lehet…"); ok twice with the fix (the prompt cleared after
 each). A real new failure line after typing is covered by the selftest only (no failing program on that machine).
 
+## 2026-11-22: a password field in Claude Desktop's built-in browser (reported by another project)
+
+The Windows 11 VM, Cua Driver 0.55.0, desktape at 0efacee (before 0.8.1); measured by a project that drives a web
+sign-in page in Claude Desktop's built-in browser pane, and reported over the agent bus. Not repeated here.
+
+| what | result |
+|---|---|
+| `look` of the sign-in page's password input | `Edit "Jelszó" [id=jelszo password actions=[set_value,text]]`: the web page's password input is marked `password` inside Claude Desktop's own window, as it is in Chrome (above) |
+| `set {…, secret: true, password: true}` on it | accepted; the value was sent |
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
