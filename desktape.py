@@ -2881,14 +2881,16 @@ class Runner:
         want, start = title, time.time()
         end = start + float(want.get("timeout", FOCUS_WAIT) if isinstance(want, dict) else FOCUS_WAIT)
         locked = None
+        app = want.get("app") if isinstance(want, dict) else None
+        ours = lambda w: not app or app_is(w, app)   # focus-app: {title, app}: the title AND the program
         while True:
             sc, _ = self.cua.call("list_windows", {})
             title = want
             if isinstance(want, dict):           # {title: "Accounting", prefix: true}: the rest of the title varies
                 pre = want["title"]
                 title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
-                              and w.get("is_on_screen", True)), pre)
-            wins = [w for w in sc.get("windows", []) if w.get("title") == title]
+                              and w.get("is_on_screen", True) and ours(w)), pre)
+            wins = [w for w in sc.get("windows", []) if w.get("title") == title and ours(w)]
             wins.sort(key=lambda w: not w.get("on_current_space", True))      # macOS: this Space's window first
             w = next((w for w in wins if not w.get("minimized")), None) or (wins[0] if wins else None)
             if not w and self.mac and locked is None:
@@ -2900,6 +2902,10 @@ class Runner:
             if locked:
                 raise RuntimeError(f"no window titled {title!r}: the screen is locked; unlock it "
                                    "(docs/macos-setup.md step 5)")
+            if app:
+                others = sorted({x.get("app_name") or "?" for x in sc.get("windows", []) if x.get("title") == title})
+                raise RuntimeError(f"no window titled {title!r} of the program {app!r} (waited {end - start:.0f} s)"
+                                   + (f"; that title belongs to {', '.join(others)}" if others else ""))
             raise RuntimeError(f"no window titled {title!r} (waited {end - start:.0f} s)")
         self.win, self.title = {"pid": w["pid"], "window_id": w["window_id"]}, title
         self.app = w.get("app_name") or w.get("app") or ""
@@ -8138,6 +8144,20 @@ def selftest():
         raise AssertionError("expected ValueError")
     except ValueError as e:
         assert str(e).startswith("set: ") and "not set" in str(e), e
+    # focus-app: two windows titled "Claude", a browser's and the app's; `app:` picks the program, or fails
+    class TwoWins(Screen):
+        def call(self, tool, args, secret=False, timeout=None):
+            if tool == "list_windows":
+                return {"windows": [{"title": "Claude", "app_name": "chrome.exe", "pid": 5, "window_id": 2},
+                                    {"title": "Claude", "app_name": "Claude.exe", "pid": 6, "window_id": 3}]}, ""
+            return super().call(tool, args, secret, timeout)
+    r = Runner(TwoWins(base), "test")
+    r.focus({"title": "Claude", "app": "claude"}); assert r.win == {"pid": 6, "window_id": 3} and r.app == "Claude.exe", r.win
+    r.focus("Claude"); assert r.win["pid"] == 5, r.win                    # no app: the first, as before
+    try:
+        r.focus({"title": "Claude", "app": "msedge", "timeout": 0.3}); raise AssertionError("expected RuntimeError")
+    except RuntimeError as e:
+        assert "of the program 'msedge'" in str(e) and "chrome.exe" in str(e), e
     # type-verify-whole: a keystroke lost after the 40th character is caught, retyped in chunks, or the step fails
     url = "https://host.example/a/long/path/to/the/api/studio/mcp/"
     for drops, ok in ((1, True), (99, False)):

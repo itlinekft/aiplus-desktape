@@ -10,6 +10,9 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   `file:`) reads the value on the controller when the step runs, like `type`, and sets it on the named element, so a
   password field can be filled by element without the password on desktape's command line. A `set` step needs
   exactly one of `value`, `env` or `file`, and `env`/`file` need `secret: true`; both are checked before any tool call.
+- **`focus` can name the program** (`focus-app`): `focus: {title: Claude, app: claude}` takes only a window of that
+  program, so a browser tab with the same title is not picked; when none has it, the focus fails and names the
+  programs that do show the title.
 - **The panel can step in over a booking** (`panel-override`): when another project's booking is active or a live
   run holds a target, the zoomed view offers Override — after a confirm, the person's clicks, drags and keys reach
   the machine while the booking and the run continue; the panel takes no lock, renews nothing and unlocks nothing,
