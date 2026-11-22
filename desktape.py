@@ -432,6 +432,20 @@ def start_daemon(host):
     t.sh("schtasks /delete /tn desktape-cua /f >nul")
 
 
+TREE_MAX = 5000        # driver-054 D2: a full walk, as 0.34.1 gave; 0.35.0 and later cap the tree at 250 by default
+
+
+def driver_version(text):
+    """`0.55.0` (or `cua-driver 0.55.0`) as a tuple of ints; None when it is not given or not a version."""
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", str(text or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def lean_driver(version):
+    """driver-054 D3: from 0.35.0 get_window_state leaves out `elements` and caps the tree unless asked."""
+    return bool(version) and version >= (0, 35, 0)
+
+
 class Cua:
     """One MCP session to cua-driver: `ssh … cua-driver mcp --socket`, or the driver itself when local.
     A target with no daemon gets one started, once (driver-autostart)."""
@@ -482,8 +496,10 @@ class Cua:
         self.n = 0
         self.lines = queue.Queue()             # D1: a reader thread, so a call can wait with a deadline
         threading.Thread(target=self._read, args=(self.p.stdout, self.lines), daemon=True).start()
-        self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                 "clientInfo": {"name": "desktape", "version": "0.1"}})
+        r = self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                     "clientInfo": {"name": "desktape", "version": "0.1"}})
+        self.version = driver_version(((r.get("result") or {}).get("serverInfo") or {}).get("version"))
+        logger.debug("cua-driver on %s: version %s", host, ".".join(map(str, self.version)) if self.version else "unknown")
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     @staticmethod
@@ -527,6 +543,9 @@ class Cua:
         mac = getattr(self, "mac", False)     # a test may build the object without __init__
         if mac and tool == "get_window_state" and args.get("include_accessibility_tree") is not False:
             args = {"include_screenshot": False, **args}   # macOS sends a screenshot unless told not to; a tree read needs none
+        if tool == "get_window_state" and lean_driver(getattr(self, "version", None)) \
+                and args.get("include_accessibility_tree") is not False and not args.get("display_only"):
+            args = {"tree_format": "both", "max_elements": TREE_MAX, **args}   # driver-054 D2: what 0.34.1 returned
         if getattr(self, "session", None):    # person-cursor D1: the run's own session, which the hidden cursor belongs to
             args = {**args, "session": self.session}
         logged = {**args, **{k: "<redacted>" for k in ("text", "value") if k in args}} if secret else args
@@ -564,6 +583,8 @@ class Cua:
             for e in sc.get("elements") or []:
                 mac_element(e)
             text = mac_values(text, sc.get("elements") or [])
+        if tool == "get_window_state":
+            text = mark_passwords(text, sc.get("elements") or [])
         return sc, text
 
     def reconnect(self):
@@ -1605,6 +1626,26 @@ def mac_values(text, elements):
     return re.sub(r'^(\s*- \[(\d+)\] .*)$', add, text, flags=re.M)
 
 
+def is_password(e):
+    """driver-054 D5: the driver reports this element as a password field (UIA IsPassword, cua-driver 0.54.0+).
+    Absent is not a yes."""
+    return e.get("is_password", e.get("isPassword")) is True
+
+
+def mark_passwords(text, elements):
+    """driver-054 D5: `password=yes` in the line of every element the driver reports as a password field, so `look`
+    shows it."""
+    idx = {e["element_index"] for e in elements if is_password(e) and "element_index" in e}
+    if not idx:
+        return text
+    def add(m):
+        line = m.group(0)
+        if int(m.group(2)) not in idx or "password=" in line:
+            return line
+        return re.sub(r'( \[(?=[a-z_]+=))|$', lambda b: " [password=yes " if b.group(1) else " [password=yes]", line, count=1)
+    return re.sub(r'^(\s*- \[(\d+)\] .*)$', add, text, flags=re.M)
+
+
 def mac_tree(text):
     return "\n".join(mac_line(l) for l in text.splitlines())
 
@@ -2425,6 +2466,10 @@ class NoEffect(AssertionError):
     """A step the driver accepted that changed nothing it should have (step-effect-check D2, D3)."""
 
 
+class NotPassword(AssertionError):
+    """driver-054 D5: a selector with `password: true` matched an element the driver does not report as one."""
+
+
 class AmbiguousElement(AssertionError):
     """unique-selector: a selector with `unique: true` matched more than one element."""
 
@@ -2972,6 +3017,8 @@ class Runner:
         instead of the first in tree order being taken."""
         e = self.wait_for(a.get("label"), a.get("role"), timeout, a.get("prefix", False), a.get("nth", 1),
                           enabled_only, a.get("id"), a.get("field"), reuse)
+        if e and a.get("password") and not is_password(e):      # driver-054 D5
+            raise NotPassword(f"{sel_name(a)!r}: not reported as a password field, so nothing was sent")
         if e and a.get("unique"):
             hits = [x for x in select(self.elements, self.tree, a.get("label"), a.get("role"), a.get("prefix", False),
                                       a.get("id"), a.get("field")) if not (enabled_only and x.get("enabled") is False)]
@@ -8354,6 +8401,39 @@ def selftest():
         check_selectors([({"click": {"label": "Path", "unique": True, "nth": 2}}, None)]); raise AssertionError("accepted")
     except ValueError as e:
         assert "contradict" in str(e), e
+    # driver-054: the version from the handshake decides the arguments; is_password marks a line and gates a selector
+    assert driver_version("cua-driver 0.55.0") == (0, 55, 0) and driver_version(None) is None and driver_version("x") is None
+    assert lean_driver((0, 55, 0)) and lean_driver((0, 35, 0)) and not lean_driver((0, 34, 1)) and not lean_driver(None)
+    for ver, lean in (((0, 55, 0), True), ((0, 34, 1), False), (None, False)):
+        c, sent = Cua.__new__(Cua), []
+        c.version, c.audit, c.on_blocked = ver, io.StringIO(), None
+        c._rpc = lambda m, prm, timeout=None: (sent.append(prm["arguments"]), {"result": {"content": [{"type": "text", "text": "t"}]}})[1]
+        c.call("get_window_state", {"pid": 1, "window_id": 2})
+        c.call("get_window_state", {"pid": 1, "window_id": 2, "include_accessibility_tree": False})
+        assert (sent[0].get("tree_format") == "both" and sent[0]["max_elements"] == TREE_MAX) == lean, (ver, sent)
+        assert "tree_format" not in sent[1], sent
+    tree = '- Window "W"\n  - [3] Edit "Jelszó" [id=jelszo actions=[set_value]]\n  - [4] Edit "Email"'
+    marked = mark_passwords(tree, [{"element_index": 3, "is_password": True}, {"element_index": 4, "is_password": False}])
+    assert '[3] Edit "Jelszó" [password=yes id=jelszo' in marked and '[4] Edit "Email"' in marked.splitlines()[2], marked
+    assert mark_passwords('  - [4] Edit "P"', [{"element_index": 4, "isPassword": True}]) == '  - [4] Edit "P" [password=yes]'
+    class Pw(Screen):
+        def call(self, tool, args, secret=False, timeout=None):
+            sc, text = super().call(tool, args, secret, timeout)
+            if tool == "get_window_state":
+                for e in sc["elements"]:
+                    if e["element_index"] == 3:
+                        e["is_password"] = True
+            return sc, text
+    got = []
+    sc = Pw(base + '\n  - [3] Edit "Secret" [actions=[set_value]]'); real_call = sc.call
+    sc.call = lambda tool, args, secret=False, timeout=None: (got.append(tool), real_call(tool, args))[1]
+    r = Runner(sc, "test"); r.focus("Main")
+    r.step({"set": {"label": "Secret", "role": "Edit", "env": "DESKTAPE_SELFTEST_PW", "secret": True, "password": True}})
+    assert got.count("set_value") == 1, got
+    try:
+        r.step({"set": {"label": "Path", "role": "Edit", "value": "x", "password": True}}); raise AssertionError("expected NotPassword")
+    except NotPassword as e:
+        assert "not reported as a password field" in str(e) and got.count("set_value") == 1, (e, got)
     # type-verify-whole: a keystroke lost after the 40th character is caught, retyped in chunks, or the step fails
     url = "https://host.example/a/long/path/to/the/api/studio/mcp/"
     for drops, ok in ((1, True), (99, False)):

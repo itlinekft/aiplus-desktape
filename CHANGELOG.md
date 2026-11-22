@@ -15,6 +15,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   (logged as `yield`) until its own project comes back; a project kept out by a booking is noted on it, and the
   booking project's next command prints who waits; `bookings` shows how long an active booking has been unused and
   who waits; `unbook` without an ID removes the project's only booking on the target.
+- **`password: true` on a selector** (`driver-054`, in progress): the step fails unless the driver reports the
+  matched element as a password field, and `look` marks such elements `password=yes`. It needs Cua Driver 0.54.0 or
+  later (Windows); a target still on the pinned 0.34.1 reports none, so the step fails there. desktape now reads the
+  driver's version at connect and asks a 0.35.0 or later driver for the element list it reads.
 - **`unique: true` on a selector** (`unique-selector`): `click`, `expect` and `set` fail when more than one element
   matches, instead of taking the first in tree order; nothing is sent.
 - **`focus` can name the program** (`focus-app`): `focus: {title: Claude, app: claude}` takes only a window of that

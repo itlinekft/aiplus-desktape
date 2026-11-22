@@ -50,7 +50,10 @@ start (useful when a card's label carries its description too). `role` is the UI
 as the driver reports it (`Button`, `TabItem`, `MenuItem`, `ComboBox`, …). When several elements match,
 the first in tree order is used; `nth: 2` takes the second and `nth: -1` the last (for example the latest
 message's `Copy`). `unique: true` fails the step instead when more than one element matches (`click` and `set` count
-the enabled ones), so a secret or a destructive click cannot land on a look-alike; it cannot be combined with `nth`.
+the enabled ones), so a secret or a destructive click cannot land on a look-alike; it cannot be combined with `nth`. `password: true`
+fails the step unless the matched element is reported as a password field (`look` shows it as `password=yes`). Only
+Cua Driver 0.54.0 or later reports this, on Windows; with an older driver, or where the driver does not judge it,
+the step fails, because no report is not a yes.
 
 Two more keys find a control that has no usable name; they work in `click`, `expect`, `absent`, `set` and
 the `value`/`filled`/`enabled` outcomes, alone or with `label`, `role` and `nth`:
