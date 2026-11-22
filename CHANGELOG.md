@@ -5,6 +5,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- **`act --exclusive`, `run --exclusive`** (`exclusive-act`): while such a command runs, the same session's other
+  commands on that target wait as for another session's (the wait line says `exclusive`), and it waits for the
+  session's command already running. For a multi-step `act` (a sign-in) that another shell of the same agent must
+  not interleave. A crashed one frees the target at once.
+
 ## [0.8.0] - 2026-11-22
 
 ### Changed

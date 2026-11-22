@@ -169,6 +169,9 @@ desktape handover --to PROJECT                               # give your booking
 - During another project's booking, `run`, `look`, `act` and `tidy` stop with exit code 3 naming the booking: pick
   another machine (`desktape bookings`) or wait; the booking project is told that you wait. Do not `unbook --force` another project's booking; that is the person's
   call.
+- Your session's own commands do not wait for each other. A multi-step `act` that must not be interleaved by your
+  other shells (sign-in: account, password, click) takes `--exclusive`: until it ends, your other commands on that
+  target wait (the wait line says `exclusive`).
 - A command that is already running is never cut off when a booking starts; a command started 15 min before
   another project's booking gets a warning: finish before it.
 - **The panel:** `desktape panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,

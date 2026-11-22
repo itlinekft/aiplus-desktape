@@ -725,6 +725,22 @@ which a person also uses, that quit programs of theirs before it stopped at a Ch
 measurement then ran a copy whose `tidy` only minimised the other programs. Not measured here: a `password: true`
 field (macOS reports none).
 
+## 2026-11-22: one session's two commands with `--exclusive` (`exclusive-act`)
+
+The Windows 11 VM, Claude Desktop in front; two processes of one holder (`DESKTAPE_HOLDER` the same) on the Linux
+controller. Process A: an `act` whose one step waits 12 s for an element that never comes (it fails, which is
+irrelevant here); process B: a `look` started 5 s after A.
+
+| A | B's `look` |
+|---|---|
+| `act --exclusive` (ended at 14.5 s) | waited ("held by … running as pid …; waiting up to 60 s"), done at 16.6 s |
+| `act` without the flag (ended at 14.2 s) | ran at once, done at 6.7 s, while A ran |
+
+```bash
+DESKTAPE_HOLDER=x python3 desktape.py --target VM act --exclusive '{"expect": {"label": "no such element here", "role": "Button", "timeout": 12}}' &
+sleep 5; DESKTAPE_HOLDER=x python3 desktape.py --target VM look
+```
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

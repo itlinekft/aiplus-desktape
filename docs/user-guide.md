@@ -168,6 +168,12 @@ your own lock early, for example at the end of a flow. A holder that crashed fre
 lease runs out. The lock lives on the controller, so two controllers on different machines do not see each
 other's locks.
 
+Two commands of one session do not wait for each other, so a second shell of the same agent can run a `look` between
+two steps of the first one's `act`. When that must not happen (a sign-in that sets the account, then the password,
+then clicks), give the `act` or `run` **`--exclusive`**: while it runs, every other command of the same session on
+that target waits as for another session's (the wait line says `exclusive`), and it waits itself for a command of
+the session that is already running. It ends with the process; a crashed one frees the target at once.
+
 **Bookings: a machine for a project, for a time window.** A lease covers the gap between two steps; a video take
 or a long suite needs the machine for longer. `desktape.py book --for 45m [--at 14:00] [--note "suite"]` books the
 target for your project (the working directory's name, or `DESKTAPE_LABEL`): at most 4 hours, at most 7 days ahead,

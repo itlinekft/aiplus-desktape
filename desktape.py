@@ -707,7 +707,8 @@ def pid_alive(pid):
 def describe_lock(cur):
     """`project (command, since 10:27:25, running as pid N)`, or `…, lease until …` once it ended."""
     hm = lambda t: time.strftime("%H:%M:%S", time.localtime(t or 0))
-    state = f"running as pid {cur['pid']}" if cur.get("pid") else f"lease until {hm(cur.get('until'))}"
+    state = (f"running as pid {cur['pid']}" + (", exclusive" if cur.get("exclusive") else "") if cur.get("pid")
+             else f"lease until {hm(cur.get('until'))}")
     return f"{cur.get('label') or cur.get('holder')} ({cur.get('command')}, since {hm(cur.get('since'))}, {state})"
 
 
@@ -779,8 +780,9 @@ class BoxLock:
     """The lock file of one target on this controller (box-lock D1). The holder is the agent's session
     (D2): DESKTAPE_HOLDER, else CLAUDE_CODE_SESSION_ID, else this process, which then keeps no lease."""
 
-    def __init__(self, host, directory=None, alive=pid_alive, now=time.time):
+    def __init__(self, host, directory=None, alive=pid_alive, now=time.time, exclusive=False):
         self.dir, self.host, self.alive, self.now = directory or lock_dir(), host, alive, now
+        self.exclusive = exclusive      # exclusive-act D2: no other process of this holder while this one runs
         self.path = os.path.join(self.dir, re.sub(r"[^\w.@-]+", "_", host) + ".json")
         self.mutex = self.path[:-len(".json")] + ".mutex"
         self.bookings_path = self.path[:-len(".json")] + ".bookings.json"     # booking-and-panel D1
@@ -839,7 +841,12 @@ class BoxLock:
         """What keeps this session out (booking-and-panel D2), or None: 1. another session's running command;
         2. another project's active booking; 3. another session's lease, unless this project's own booking beats a
         lease of another project; 4. otherwise the target is free (or ours)."""
-        if not cur or cur.get("holder") == self.holder:
+        if cur and cur.get("holder") == self.holder:
+            pid = cur.get("pid")
+            # exclusive-act D2: the same session waits for its own exclusive command, and an exclusive command
+            # waits for the session's running one; a dead pid never blocks
+            if pid and pid != os.getpid() and (cur.get("exclusive") or self.exclusive) and self.alive(pid):
+                return cur
             cur = None
         if cur and self.alive(cur.get("pid")):
             return cur
@@ -880,6 +887,8 @@ class BoxLock:
                    "since": cur["since"] if mine else t, "until": t + (LEASE if self.keeps else 0)}
             if mine:            # step-effect-check D5: the session's status outlives its commands
                 new.update({k: cur[k] for k in STATUS_FIELDS if k in cur})
+            if self.exclusive:
+                new["exclusive"] = True
             if took or (mine and cur.get("took_from")):
                 new["took_from"] = took or cur["took_from"]
             self._write(new)
@@ -1095,6 +1104,7 @@ class BoxLock:
                 return
             if self.keeps:
                 cur.update(pid=None, until=self.now() + LEASE)
+                cur.pop("exclusive", None)          # exclusive-act D2: it ends with the process
                 self._write(cur)
             else:
                 os.remove(self.path)
@@ -1193,8 +1203,8 @@ def passed(lk, step):
 
 
 @contextlib.contextmanager
-def box_lock(host, command):
-    lk = BoxLock(host)
+def box_lock(host, command, exclusive=False):
+    lk = BoxLock(host, exclusive=exclusive)
     lk.acquire(command)
     t0, err = time.time(), None
     try:
@@ -4063,7 +4073,7 @@ def cmd_run(a):
     tape["_answers"] = answers
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
-    with box_lock(a.host, f"run {a.tape}") as lk:    # box-lock: after the offline checks, so a broken tape never waits
+    with box_lock(a.host, f"run {a.tape}", exclusive=getattr(a, "exclusive", False)) as lk:    # box-lock: after the offline checks, so a broken tape never waits
         if uploads:                                  # data-driven-import: now the real target paths
             values = upload_vars(a.host, uploads, values)
             plan = [(substitute(s, values), e) for s, e in resolve_all(tape["steps"], amap)]
@@ -4483,7 +4493,7 @@ def cmd_act(a):
         items.append((step, substitute(s, values), entry))
     deny = deny_entries(amap)
     label = " ".join(a.step if isinstance(a.step, list) else [a.step])
-    with box_lock(a.host, f"act {label}") as lk:
+    with box_lock(a.host, f"act {label}", exclusive=getattr(a, "exclusive", False)) as lk:
         if uploads:
             up = upload_vars(a.host, uploads, values)
             items = [(step, substitute(resolve(step, amap)[0], up), entry) for step, _, entry in items]
@@ -6823,6 +6833,30 @@ def selftest_booking_panel():
                 os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = holder, label
                 return BoxLock("user@box", d, alive=lambda p: p in live, now=lambda: clock[0])
             p1, p2, q = as_("P1", "proj-p"), as_("P2", "proj-p"), as_("Q", "proj-q")
+            # exclusive-act D2: one holder, two processes (the other one's pid is made "live" by hand)
+            os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = "X", "proj-x"
+            mk = lambda ex=False: BoxLock("user@ex", d, alive=lambda p: p in live, now=lambda: clock[0], exclusive=ex)
+            sib = os.getpid() + 100000
+
+            def as_sibling():
+                rec = mk().read(); rec["pid"] = sib; mk()._write(rec); live.add(sib)
+            e = mk(True)
+            assert e.try_acquire("act sign-in") is None and e.read()["exclusive"] is True
+            as_sibling()                                                    # the exclusive act runs in another process
+            blk = mk().try_acquire("look")
+            assert blk and blk["pid"] == sib and blk["holder"] == "X", blk  # the session's own look waits
+            os.environ["DESKTAPE_HOLDER"] = "Y"
+            assert mk().try_acquire("look")["holder"] == "X"                # another session waits too, as before
+            os.environ["DESKTAPE_HOLDER"] = "X"
+            live.discard(sib)
+            assert mk().try_acquire("look") is None and "exclusive" not in mk().read()   # a dead pid never blocks
+            as_sibling()                                                    # a plain command of the session runs
+            assert mk(True).try_acquire("act sign-in")["pid"] == sib        # an exclusive one waits for it
+            assert mk().try_acquire("look") is None                         # a plain one does not (as before)
+            e = mk(True); live.discard(sib)
+            assert e.try_acquire("act sign-in") is None; e.release()
+            assert "exclusive" not in e.read() and e.read()["pid"] is None  # released: the lease stays, the flag goes
+            e.unlock()
             # D3: limits, overlap, own extension, unbook
             assert "at most 4 h" in p1.book(base, 5 * 3600)[1]
             assert "in the past" in p1.book(base - 3600, 600)[1]
@@ -9556,6 +9590,8 @@ def main():
                         "back (tolerant-replay); needs the Anthropic SDK and an API key")
     p.add_argument("--repair-model", default=REPAIR_MODEL, help=f"the repair model (default {REPAIR_MODEL})")
     p.add_argument("--var", action="append", metavar="NAME=VALUE", help="a tape variable; NAME=@file uploads the file")
+    p.add_argument("--exclusive", action="store_true",
+                   help="no other command of this session on the target while this one runs (exclusive-act)")
     p = sub.add_parser("look"); p.add_argument("--window"); p.add_argument("--map")
     p.add_argument("--ocr", action="store_true"); p.add_argument("--full", action="store_true")
     p.add_argument("--text", action="store_true", help="add the window's text nodes")
@@ -9567,6 +9603,8 @@ def main():
     p.add_argument("--new", action="store_true", help="then the window's lines that changed since the last look")
     p.add_argument("--append")
     p.add_argument("--var", action="append", metavar="NAME=VALUE", help="a tape variable; NAME=@file uploads the file")
+    p.add_argument("--exclusive", action="store_true",
+                   help="no other command of this session on the target while this one runs (exclusive-act)")
     sub.add_parser("lock", help="who holds the target (box-lock)")
     sub.add_parser("unlock", help="give back this session's lock on the target now")
     sub.add_parser("targets", help="the named targets, with lock and status")
