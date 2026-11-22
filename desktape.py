@@ -1736,6 +1736,8 @@ def check_selectors(plan):
             raise ValueError(f"step {i}: {kind} needs a label, id, field or role to find its element")
         if kind == "set" and not isinstance(arg, dict):
             raise ValueError(f"step {i}: set needs {{label|id|field, value}}")
+        if kind in SELECTOR_STEPS and isinstance(arg, dict) and arg.get("unique") and arg.get("nth", 1) != 1:
+            raise ValueError(f"step {i}: {kind}: `unique: true` and `nth` contradict each other")
         if kind == "set":                    # secret-set: exactly one value source; env/file only as a secret
             given = [k for k in ("value", "env", "file") if k in arg]
             if len(given) != 1:
@@ -2423,6 +2425,10 @@ class NoEffect(AssertionError):
     """A step the driver accepted that changed nothing it should have (step-effect-check D2, D3)."""
 
 
+class AmbiguousElement(AssertionError):
+    """unique-selector: a selector with `unique: true` matched more than one element."""
+
+
 class TypedOther(AssertionError):
     """type-verify-whole: a field reads a text like the typed one, but not it (a keystroke lost or doubled)."""
     def __init__(self, read):
@@ -2962,9 +2968,17 @@ class Runner:
             time.sleep(0.4)
 
     def pick(self, a, timeout=8.0, enabled_only=False, reuse=False):
-        """wait_for with a step's selector dict."""
-        return self.wait_for(a.get("label"), a.get("role"), timeout, a.get("prefix", False), a.get("nth", 1),
-                             enabled_only, a.get("id"), a.get("field"), reuse)
+        """wait_for with a step's selector dict. unique-selector: with `unique: true`, a second match fails the step
+        instead of the first in tree order being taken."""
+        e = self.wait_for(a.get("label"), a.get("role"), timeout, a.get("prefix", False), a.get("nth", 1),
+                          enabled_only, a.get("id"), a.get("field"), reuse)
+        if e and a.get("unique"):
+            hits = [x for x in select(self.elements, self.tree, a.get("label"), a.get("role"), a.get("prefix", False),
+                                      a.get("id"), a.get("field")) if not (enabled_only and x.get("enabled") is False)]
+            if len(hits) > 1:
+                raise AmbiguousElement(f"{len(hits)} {'enabled ' if enabled_only else ''}elements match "
+                                       f"{sel_name(a)!r}; `unique: true` needs exactly one, so nothing was sent")
+        return e
 
     def nearest_hint(self, a):
         """agent-efficiency D1: the end of a not-found error, naming the window's closest labels."""
@@ -8315,6 +8329,20 @@ def selftest():
         r.focus({"title": "Claude", "app": "msedge", "timeout": 0.3}); raise AssertionError("expected RuntimeError")
     except RuntimeError as e:
         assert "of the program 'msedge'" in str(e) and "chrome.exe" in str(e), e
+    # unique-selector: two Edits named "Path"; `unique: true` fails before set_value, without it the first is set
+    got = []
+    sc = Screen(base + '\n  - [3] Edit "Path" [actions=[set_value]]'); real_call = sc.call
+    sc.call = lambda tool, args, secret=False, timeout=None: (got.append(tool), real_call(tool, args))[1]
+    r = Runner(sc, "test"); r.focus("Main")
+    try:
+        r.step({"set": {"label": "Path", "role": "Edit", "value": "x", "unique": True}}); raise AssertionError("expected AmbiguousElement")
+    except AmbiguousElement as e:
+        assert str(e).startswith("2 enabled elements match") and "set_value" not in got, (e, got)
+    r.step({"set": {"label": "Path", "role": "Edit", "value": "x"}}); assert "set_value" in got
+    try:
+        check_selectors([({"click": {"label": "Path", "unique": True, "nth": 2}}, None)]); raise AssertionError("accepted")
+    except ValueError as e:
+        assert "contradict" in str(e), e
     # type-verify-whole: a keystroke lost after the 40th character is caught, retyped in chunks, or the step fails
     url = "https://host.example/a/long/path/to/the/api/studio/mcp/"
     for drops, ok in ((1, True), (99, False)):

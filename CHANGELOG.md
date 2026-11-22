@@ -15,6 +15,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   (logged as `yield`) until its own project comes back; a project kept out by a booking is noted on it, and the
   booking project's next command prints who waits; `bookings` shows how long an active booking has been unused and
   who waits; `unbook` without an ID removes the project's only booking on the target.
+- **`unique: true` on a selector** (`unique-selector`): `click`, `expect` and `set` fail when more than one element
+  matches, instead of taking the first in tree order; nothing is sent.
 - **`focus` can name the program** (`focus-app`): `focus: {title: Claude, app: claude}` takes only a window of that
   program, so a browser tab with the same title is not picked; when none has it, the focus fails and names the
   programs that do show the title.
