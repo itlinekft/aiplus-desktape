@@ -700,7 +700,8 @@ group, so its SSH logon runs elevated), Claude Desktop (Store build); the contro
 | the panel's live screen | frames on 0.34.1 and on 0.55.0 |
 | the panel's control (`POST /control/<target>`, override over desktape's own booking) | **first 502 on every input**: the panel had read the targets file before the target got `driver: 0.55.0` and talked to the new daemon with the 0.34.1 client ("contract version 0.9.0 does not match SDK 0.8.0"). Fixed: the pin is re-read when the targets file changes. After the panel's restart: start 200, a move 200 in 0.34 s, a click on the title bar 200 in 0.06 s, stop 200 |
 
-Not measured here: a standard account's daemon (the test PC's desktop user is now an administrator), the
+Not measured here: a standard account's daemon (the test PC's desktop user is an administrator, which the owner
+accepted; a standard account's daemon is measured on 0.34.1 only, 2026-11-14), the
 `password: true` field (measured on the VM), and the Mac (task 2.3). The test PC keeps 0.55.0 through its
 profile's `driver: 0.55.0` on this controller.
 
