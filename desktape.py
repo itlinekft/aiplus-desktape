@@ -1649,6 +1649,9 @@ def is_password(e):
     return e.get("is_password", e.get("isPassword")) is True
 
 
+PASSWORD_MARK = re.compile(r"[\[ ]password(=yes)?[ \]]")
+
+
 def mark_passwords(text, elements):
     """driver-054 D5: `password=yes` in the line of every element the driver reports as a password field, so `look`
     shows it."""
@@ -1657,7 +1660,7 @@ def mark_passwords(text, elements):
         return text
     def add(m):
         line = m.group(0)
-        if int(m.group(2)) not in idx or "password=" in line:
+        if int(m.group(2)) not in idx or PASSWORD_MARK.search(line):     # 0.55.0 writes its own `password`
             return line
         return re.sub(r'( \[(?=[a-z_]+=))|$', lambda b: " [password=yes " if b.group(1) else " [password=yes]", line, count=1)
     return re.sub(r'^(\s*- \[(\d+)\] .*)$', add, text, flags=re.M)
@@ -1981,7 +1984,10 @@ def compact(tree_text, texts=False):
             if indent > 0:
                 out.append(f'Dialog "{label}"')
         elif actions and actions != "text":
-            out.append(f'{role} "{label}" ({actions})')
+            if "enabled=false" in line:      # driver-054: 0.47.20+ lists a disabled control with its actions
+                out.append(f'{role} "{label}" (disabled)')
+            else:
+                out.append(f'{role} "{label}" ({actions}' + (", password" if PASSWORD_MARK.search(line) else "") + ")")
         # A Text whose only action is `text` is a description, not a target: only with `texts`.
         elif texts and role == "Text":
             out.append(f'Text "{label[:117] + "…" if len(label) > 120 else label}"')
@@ -3654,7 +3660,8 @@ class Runner:
             value = m.group(1) if m else ""
             if key == "value" and spaces(str(sel.get("contains", ""))) not in spaces(value):
                 miss.append(f"{name!r} shows {value!r}, not {sel.get('contains')!r}")
-            if key == "enabled" and "actions=[" not in lines[at]:      # a disabled control has no actions
+            # 0.34.1 lists a disabled control without actions; 0.47.20 and later index it with `enabled=false`
+            if key == "enabled" and ("actions=[" not in lines[at] or "enabled=false" in lines[at]):
                 miss.append(f"{name!r} is still disabled")
             if key == "filled":
                 depth = parse(lines[at])[0]
@@ -8418,6 +8425,9 @@ def selftest():
         check_selectors([({"click": {"label": "Path", "unique": True, "nth": 2}}, None)]); raise AssertionError("accepted")
     except ValueError as e:
         assert "contradict" in str(e), e
+    assert compact(['  - [1] Button "Back" [id=a enabled=false actions=[invoke]]',
+                    '  - [2] Edit "Jelszó" [password=yes id=j actions=[set_value,text]]']) == \
+        ['Button "Back" (disabled)', 'Edit "Jelszó" (set_value,text, password)']
     # driver-054: the version from the handshake decides the arguments; is_password marks a line and gates a selector
     assert driver_version("cua-driver 0.55.0") == (0, 55, 0) and driver_version(None) is None and driver_version("x") is None
     assert lean_driver((0, 55, 0)) and lean_driver((0, 35, 0)) and not lean_driver((0, 34, 1)) and not lean_driver(None)
@@ -8433,6 +8443,9 @@ def selftest():
     marked = mark_passwords(tree, [{"element_index": 3, "is_password": True}, {"element_index": 4, "is_password": False}])
     assert '[3] Edit "Jelszó" [password=yes id=jelszo' in marked and '[4] Edit "Email"' in marked.splitlines()[2], marked
     assert mark_passwords('  - [4] Edit "P"', [{"element_index": 4, "isPassword": True}]) == '  - [4] Edit "P" [password=yes]'
+    own = '  - [18] Edit "Jelszo" [id=p password actions=[set_value,text]]'     # as 0.55.0 writes it (measured)
+    assert mark_passwords(own, [{"element_index": 18, "is_password": True}]) == own
+    assert compact([own]) == ['Edit "Jelszo" (set_value,text, password)']
     class Pw(Screen):
         def call(self, tool, args, secret=False, timeout=None):
             sc, text = super().call(tool, args, secret, timeout)
@@ -8793,6 +8806,12 @@ def selftest():
     r = Runner(Prog(off, {"Browse": lambda p: p.wins.__setitem__(1, ("Main", main))}), "test"); r.focus("Main")
     r.step({"click": {"label": "Browse", "expect": {"enabled": {"label": "Import", "role": "Button"}}}})
     r = Runner(Prog(off), "test"); r.focus("Main")
+    try:
+        r.step({"click": {"label": "Browse", "expect": {"enabled": "Import", "timeout": 0.4}}}); raise AssertionError("expected")
+    except OutcomeFailed as e:
+        assert "'Import' is still disabled" in str(e), e
+    off55 = main.replace('[2] Button "Import" [actions=[invoke]]', '[2] Button "Import" [enabled=false actions=[invoke]]')
+    r = Runner(Prog(off55), "test"); r.focus("Main")         # driver-054: 0.47.20+ lists a disabled control's actions
     try:
         r.step({"click": {"label": "Browse", "expect": {"enabled": "Import", "timeout": 0.4}}}); raise AssertionError("expected")
     except OutcomeFailed as e:

@@ -32,7 +32,7 @@ dialogs:
 elements:
   # --- mode switch (top of the sidebar). The Chat radio's label carries a status ("Claude, awaiting your
   # input"), so match it by prefix.
-  mode.chat:                  { label: "Claude", role: RadioButton, prefix: true, action: select }
+  mode.chat:                  { label: "Chat", role: RadioButton, prefix: true, action: select }   # "Chat and Cowork" since late 2026-11
   mode.code:                  { label: "Code", role: RadioButton, action: select }
 
   # --- sidebar, fixed navigation

@@ -653,6 +653,36 @@ Not measured here: the page's own button and confirm (the API is what the page c
 change's selftest), and an intervention on a UAC prompt during a real automated run — the mechanism is the same
 click path as the title-bar click above.
 
+## 2026-11-22: Cua Driver 0.55.0 beside 0.34.1 on the Windows 11 VM (`driver-054` task 2.1)
+
+The Windows 11 VM (Hungarian, build 26300, QEMU, an administrator account that is also the desktop user, reached over
+SSH), Claude Desktop (Store build) and Chrome on it; the controller on Linux.
+
+| what | result |
+|---|---|
+| the release's `install.ps1` | SHA-256 `8cdb0bff…d797f2c4`, the same as the release's `SHA256SUMS`; run in the desktop session (a one-off `/it` task, not elevated) with `-NoAutoStart -NoPathUpdate -NoConnect -NoTest` and `CUA_DRIVER_RS_KEEP_VERSIONS=0`: 25 s, zip checked against `SHA256SUMS` (cosign absent, so not its signature), Authenticode `Valid` (Cua AI, Inc.) |
+| side by side | `releases\0.34.1-…` kept, `releases\0.55.0-…` added; the `current` junction moved to 0.55.0 (desktape does not use it) |
+| the installer stops the running driver | yes: "Stopping any previous cua-driver processes"; the 0.34.1 daemon was gone after it. A session on the machine loses its driver until the next command starts one |
+| `config set update_check_enabled` / `disable_run_script` | refused by 0.55.0 (unknown key; the run-script switch is environment or `config.json` only); desktape already passes both as environment variables. `telemetry disable` works |
+| the daemon | started by desktape over SSH (`cua-serve.ps1 -Version 0.55.0`, the administrator's elevated task as before): the first `look` connected in 10.6 s including the start |
+| `look --full` of Claude Desktop | 372 tree lines on both versions; the only difference: three disabled buttons now indexed with `enabled=false actions=[invoke]` (0.34.1 listed them bare). Handled: the short `look` shows `(disabled)`, `expect: {enabled}` treats `enabled=false` as disabled |
+| a password field (a local page in Chrome: a text input, a password input, a text input labelled like it) | the password input reports `is_password`; 0.55.0 writes `password` in its tree line itself. `set {env, secret: true, password: true, unique: true}` set it; the same step on the look-alike text input failed: "not reported as a password field, so nothing was sent", exit 1. The audit holds `<redacted>`; the test value appears in no run file |
+| `tapes/claude-desktop-tour.yaml`, test mode | 42 of 42 in 63.9 s, after one map fix: the mode switch is now "Chat and Cowork", which the map's `mode.chat` (label "Claude") no longer matched (an app change: the 0.34.1 baseline look showed the same label) |
+| the same, video mode | 42 of 42, 112.9 s; the driver's recording 111.9 s with no gap, the captioned video and `.srt` written, frames checked by eye |
+| typing 200 characters (accents, a URL) into Claude Desktop's prompt | 3 of 3 read back whole, 4.4–4.8 s per `act` including the connection; cleared afterwards, nothing sent |
+| the panel's live screen | the H.264 stream of the VM, frame in 0.3 s |
+| `tapes/claude-desktop-add-marketplace-dialog.yaml` | fails at step 10 on 0.55.0: the app's dialog no longer has "Add from a repository" (a URL combo box comes at once). An app change; the tape needs updating |
+
+Not measured here: a standard account's daemon, the panel's control, the Windows 11 test PC and the Mac (tasks 2.2,
+2.3). The VM keeps 0.55.0 through its profile's `driver: 0.55.0` on this controller.
+
+```bash
+python3 desktape.py --target VM look --full                 # before (0.34.1) and after (0.55.0)
+python3 desktape.py --target VM act "focus: {title: 'desktape pw test - Google Chrome', app: chrome}" \
+  '{"set": {"label": "Jelszo", "role": "Edit", "env": "DESKTAPE_PW_TEST", "secret": true, "password": true, "unique": true}}'
+python3 desktape.py --target VM run tapes/claude-desktop-tour.yaml [--mode video]
+```
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.
