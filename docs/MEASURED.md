@@ -796,6 +796,7 @@ The Windows 11 VM (Hungarian, build 26300), Chrome, Cua Driver 0.55.0; a local t
 | Chrome's own controls | the new tab page also showed a `Document "Keresés ikon" [id=view_1011]` with no value, deeper than the page; `id: RootWebArea` keeps to pages (ok) |
 | `focus: {title: " - Google Chrome", suffix: true, app: chrome}` | focused the test window (the first match: with several Chrome windows, name the profile in the suffix) |
 | the Mac: Chrome's web area line (the window minimised) | `WebArea "New chat - Claude"` with no value, and no page tree ("a browser window with no page tree"): `check_value` refuses there; a shown window not measured |
+| the Mac, the same window brought to the front (`focus: {title, app: "Google Chrome"}`; `app: chrome` matches only on Windows, where the program is `chrome.exe`) | still no page tree and no value on the web area; `check_value {role: WebArea, prefix: "https://claude.ai/"}` FAILED: "reports no value, so the steps after it were not run". On this Mac `check_value` cannot pass in Chrome; the window was minimised again |
 
 Not measured: a Chrome profile's name in a Windows title (reported by another project: "… - Google Chrome – <profile>").
 
