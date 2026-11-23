@@ -5,6 +5,8 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-23
+
 ### Added
 - **`check_value` step** (`value-prefix-check`): passes only when the window's top element of a role (in Chrome the
   page's `Document`, `id: RootWebArea`) has a value, as the driver reports it, that starts with the given text;
