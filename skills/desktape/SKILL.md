@@ -173,6 +173,9 @@ desktape handover --to PROJECT                               # give your booking
 - Your session's own commands do not wait for each other. A multi-step `act` that must not be interleaved by your
   other shells (sign-in: account, password, click) takes `--exclusive`: until it ends, your other commands on that
   target wait (the wait line says `exclusive`).
+- Before a secret goes into a web page, check the page's address in the same `act`:
+  `check_value: {role: Document, id: RootWebArea, prefix: "https://host/path?"}` (the browser's own value of the
+  top page, not the title or the page text); it stops the steps after it when the address does not start so.
 - A command that is already running is never cut off when a booking starts; a command started 15 min before
   another project's booking gets a warning: finish before it.
 - **The panel:** `desktape panel` serves http://127.0.0.1:8645/ with every machine's holder, bookings and recent commands,

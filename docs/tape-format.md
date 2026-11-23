@@ -30,12 +30,13 @@ steps:
 
 | Step | Argument | What it does |
 |---|---|---|
-| `focus` | window title, `"@window"` from the map, or `{title, prefix, app, timeout}` | brings that window to the front, restoring it if it is minimised; every later step acts on it. The title is exact unless `prefix: true`; `app:` also requires the window's program (`claude`, `chrome`; case and `.exe` ignored), for a title that several programs show |
+| `focus` | window title, `"@window"` from the map, or `{title, prefix, suffix, app, timeout}` | brings that window to the front, restoring it if it is minimised; every later step acts on it. The title is exact unless `prefix: true` (its start) or `suffix: true` (its end: a browser's title ends with the program and the profile, the page's title in front); `app:` also requires the window's program (`claude`, `chrome`; case and `.exe` ignored), for a title that several programs show |
 | `click` | label, or `{label, role, prefix, nth, action}` | waits for an enabled element (up to 8 s), then clicks it through UI Automation; `action` picks e.g. `expand` or `select` |
 | `expect` | label, or `{label, role, prefix, nth, timeout}` | waits for the element; fails the run if it does not appear |
 | `absent` | label, or `{label, role, prefix, nth, timeout}` | waits until no such element is left; fails if one still is |
 | `type` | text, or `{text, secret, typing, chunk}` | types into the focused window; `secret: true` keeps the text out of the audit log; `typing:` overrides the tape's (see below) |
 | `set` | `{label\|id\|field, role, value}`, or `env`/`file` with `secret: true` instead of `value` | sets the element's value through UI Automation, not through the keyboard focus |
+| `check_value` | `{role, prefix, id, timeout}` | sends nothing; passes only when the window's top element of that role (the shallowest, and the only one at that depth; `id:` narrows to that id) has a value, as the driver reports it, that starts with `prefix`, compared as written. Otherwise it waits up to `timeout`, then fails with a sentence ending "so the steps after it were not run". In Chrome: `{role: Document, id: RootWebArea, prefix: "https://host/path?"}` before a `set … password: true` checks the page's address, which a substring or a title cannot |
 | `key` | a key name, as Cua Driver's `press_key` takes it | presses one key |
 | `hotkey` | a list of key names, as Cua Driver's `hotkey` takes them | presses a key combination |
 | `caption` | text | in video mode, shown from this step until the next caption, and written to the `.srt`; `""` ends the previous caption |

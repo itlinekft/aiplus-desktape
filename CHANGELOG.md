@@ -5,6 +5,13 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- **`check_value` step** (`value-prefix-check`): passes only when the window's top element of a role (in Chrome the
+  page's `Document`, `id: RootWebArea`) has a value, as the driver reports it, that starts with the given text;
+  otherwise the steps after it do not run. Put before a `set … password: true` on a web page, it checks the page's
+  address, which a window title or a substring cannot.
+- **`focus` by the end of a title** (`suffix: true`): a browser window's title ends with the program and profile.
+
 ## [0.8.2] - 2026-11-23
 
 ### Fixed

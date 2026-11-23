@@ -782,6 +782,29 @@ sign-in page in Claude Desktop's built-in browser pane, and reported over the ag
 | `look` of the sign-in page's password input | `Edit "Jelszó" [id=jelszo password actions=[set_value,text]]`: the web page's password input is marked `password` inside Claude Desktop's own window, as it is in Chrome (above) |
 | `set {…, secret: true, password: true}` on it | accepted; the value was sent |
 
+## 2026-11-23: `check_value` on a browser page (`value-prefix-check`)
+
+The Windows 11 VM (Hungarian, build 26300), Chrome, Cua Driver 0.55.0; a local test page with a file frame and a
+`srcdoc` frame, whose text also holds a sign-in address. The Mac mini (macOS 26.4), Chrome, read only.
+
+| what | result |
+|---|---|
+| the Windows tree's Documents | the page `[value="file:///…/top.html" id=RootWebArea]` at 14 spaces; both frames `RootWebArea` at 16 (`file:///…/inner.html`, `about:srcdoc`); the address bar `Edit` holds the address without its scheme |
+| `check_value {role: Document, prefix: <the page's address>}` | ok |
+| the same with the frame's address, and with the address only shown in the page text | FAILED both: "the top Document … has the value 'file:///…/top.html', which does not start with …, so the steps after it were not run"; the next step `not run` |
+| a second tab in front (Ctrl+T) | only the active tab's page is in the tree (`chrome://new-tab-page/` and its frame); the first tab's page is not; `check_value` with the first tab's address FAILED; after Ctrl+W it passed again |
+| Chrome's own controls | the new tab page also showed a `Document "Keresés ikon" [id=view_1011]` with no value, deeper than the page; `id: RootWebArea` keeps to pages (ok) |
+| `focus: {title: " - Google Chrome", suffix: true, app: chrome}` | focused the test window (the first match: with several Chrome windows, name the profile in the suffix) |
+| the Mac: Chrome's web area line (the window minimised) | `WebArea "New chat - Claude"` with no value, and no page tree ("a browser window with no page tree"): `check_value` refuses there; a shown window not measured |
+
+Not measured: a Chrome profile's name in a Windows title (reported by another project: "… - Google Chrome – <profile>").
+
+```bash
+python3 desktape.py --target VM act 'focus: {title: " - Google Chrome", suffix: true, app: chrome}' \
+  "{check_value: {role: Document, id: RootWebArea, prefix: 'file:///C:/Users/<user>/desktape/vt/top', timeout: 3}}"
+python3 desktape.py --target VM look --window "dt value test - Google Chrome" --full
+```
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

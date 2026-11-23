@@ -1828,6 +1828,9 @@ def check_selectors(plan):
             raise ValueError(f"step {i}: {kind} needs a label, id, field or role to find its element")
         if kind == "set" and not isinstance(arg, dict):
             raise ValueError(f"step {i}: set needs {{label|id|field, value}}")
+        if kind == "check_value" and not (isinstance(arg, dict) and isinstance(arg.get("role"), str) and arg["role"]
+                                          and isinstance(arg.get("prefix"), str) and arg["prefix"]):
+            raise ValueError(f"step {i}: check_value needs {{role, prefix}}, both non-empty text")
         if kind in SELECTOR_STEPS and isinstance(arg, dict) and arg.get("unique") and arg.get("nth", 1) != 1:
             raise ValueError(f"step {i}: {kind}: `unique: true` and `nth` contradict each other")
         if kind == "set":                    # secret-set: exactly one value source; env/file only as a secret
@@ -2524,6 +2527,14 @@ class NotPassword(AssertionError):
     """driver-054 D5: a selector with `password: true` matched an element the driver does not report as one."""
 
 
+class WrongValue(AssertionError):
+    """value-prefix-check D1: the window's top element of a role is missing, not one, or its value does not start
+    with the text the step names; the steps after it are not run."""
+
+
+WRONG_VALUE_END = "so the steps after it were not run"     # value-prefix-check D3: a caller pins this sentence
+
+
 class AmbiguousElement(AssertionError):
     """unique-selector: a selector with `unique: true` matched more than one element."""
 
@@ -2720,6 +2731,40 @@ class Runner:
                 if w.get("pid") != self.win["pid"] and w.get("is_on_screen") and not w.get("minimized")
                 and (w.get("z_index") or -1) > me["z_index"] and overlap(me.get("bounds"), w.get("bounds"))
                 and (w.get("app_name"), None) not in SHELL_WINDOWS and (w.get("app_name"), w.get("title")) not in SHELL_WINDOWS]
+
+    def check_value(self, arg):
+        """value-prefix-check: the focused window's top element of `role` (the shallowest; exactly one at that depth)
+        has a value, as the driver reports it, that starts with `prefix`, compared as written. Sends nothing; waits
+        up to `timeout` for a page that is still loading, then stops the steps after it (D1-D3)."""
+        role, prefix, want_id = arg["role"], arg["prefix"], arg.get("id")
+        end = time.time() + float(arg.get("timeout", self.wait_default()))
+        while True:
+            self.snapshot()
+            vals = {e.get("element_index"): e.get("value") for e in self.elements if e.get("value") is not None}
+            found = []
+            for line in self.tree.splitlines():
+                n = parse(line)
+                if n and n[1] == role and (want_id is None or (re.search(r"\bid=(\S+?)[\] ]", line) or [None, None])[1] == want_id):
+                    m, idx = VALUE.search(line), re.search(r"\[(\d+)\] ", line)
+                    v = vals.get(int(idx.group(1))) if idx and int(idx.group(1)) in vals else \
+                        (re.sub(r'\\(.)', r"\1", m.group(1)) if m else None)
+                    found.append((n[0], v))
+            top = [v for d, v in found if d == min(d for d, _ in found)] if found else []
+            if len(top) == 1 and isinstance(top[0], str) and top[0].startswith(prefix):
+                logger.info("check_value: the top %s of %r starts with %r", role, self.title, prefix)
+                return
+            if not top:
+                why = f"no {role}" + (f" with id {want_id!r}" if want_id else "") + f" is in {self.title!r}"
+            elif len(top) > 1:
+                why = f"{len(top)} {role} elements are at the top of {self.title!r}, so which one is the page is not known"
+            elif top[0] is None:
+                why = f"the top {role} of {self.title!r} reports no value"
+            else:
+                shown = top[0][:len(prefix) + 24] + ("…" if len(top[0]) > len(prefix) + 24 else "")
+                why = f"the top {role} of {self.title!r} has the value {shown!r}, which does not start with {prefix!r}"
+            if time.time() > end:
+                raise WrongValue(f"check_value: {why}, {WRONG_VALUE_END}")
+            time.sleep(0.4)
 
     def check_table(self, arg):
         """Compare a grid in the window with a file, row by row (data-driven-import)."""
@@ -3097,9 +3142,14 @@ class Runner:
         while True:
             sc, _ = self.cua.call("list_windows", {})
             title = want
-            if isinstance(want, dict) and want.get("prefix"):   # {title: "Accounting", prefix: true}: the rest varies
+            if isinstance(want, dict) and want.get("prefix") and want.get("suffix"):
+                raise ValueError("focus: `prefix: true` and `suffix: true` contradict each other")
+            if isinstance(want, dict) and (want.get("prefix") or want.get("suffix")):
+                # {title: "Accounting", prefix: true}: the rest varies; {title: " - Google Chrome - Demo", suffix: true}:
+                # the front varies, the program and its profile name end the title (value-prefix-check D4)
                 pre = want["title"]
-                title = next((w.get("title") for w in sc.get("windows", []) if (w.get("title") or "").startswith(pre)
+                fits = (lambda t: t.startswith(pre)) if want.get("prefix") else (lambda t: t.endswith(pre))
+                title = next((w.get("title") for w in sc.get("windows", []) if fits(w.get("title") or "")
                               and w.get("is_on_screen", True) and ours(w)), pre)
             elif isinstance(want, dict):         # focus-app: without `prefix: true` the title is exact, as a string's
                 title = want["title"]
@@ -3934,6 +3984,8 @@ class Runner:
                                     "the file was not opened")
         elif kind == "check_table":
             self.check_table(arg)
+        elif kind == "check_value":
+            self.check_value(arg)
         elif kind == "tidy":
             self.tidy(arg)
         elif kind == "caption":
@@ -8547,6 +8599,36 @@ def selftest():
         r.step({"set": {"label": "Path", "role": "Edit", "value": "x", "password": True}}); raise AssertionError("expected NotPassword")
     except NotPassword as e:
         assert "not reported as a password field" in str(e) and got.count("set_value") == 1, (e, got)
+    # value-prefix-check: the window's top Document must start with the address; a frame's or a query's copy is not it
+    pre = "https://accounts.example/signin/pwd?"
+    doc = lambda d, v, i: f'\n{" " * d}- [{i}] Document "Sign in" [value="{v}" actions=[scroll]]'
+    # Chrome's own controls can be Documents too (measured: "Keresés ikon"); `id: RootWebArea` keeps to the pages
+    r = Runner(Screen(base + '\n  - [6] Document "Keresés ikon" [id=view_1011 actions=[invoke]]'
+                      + doc(4, pre + "a=1", 7).replace("actions=", "id=RootWebArea actions=")), "test"); r.focus("Main")
+    r.step({"check_value": {"role": "Document", "id": "RootWebArea", "prefix": pre, "timeout": 0}})
+    try:
+        r.step({"check_value": {"role": "Document", "prefix": pre, "timeout": 0}}); raise AssertionError("expected WrongValue")
+    except WrongValue as e:
+        assert "reports no value" in str(e), e
+    for tree, ok, said in ((doc(2, pre + "a=1", 7) + doc(6, "https://evil.example/", 8), True, ""),
+                           (doc(2, "https://evil.example/?u=" + pre, 7) + doc(6, pre + "a=1", 8), False, "does not start with"),
+                           (doc(2, pre + "a=1", 7) + doc(2, pre + "b=2", 8), False, "2 Document elements are at the top"),
+                           ("", False, "no Document is in")):
+        r = Runner(Screen(base + tree), "test"); r.focus("Main")
+        try:
+            r.step({"check_value": {"role": "Document", "prefix": pre, "timeout": 0}})
+            assert ok, tree
+        except WrongValue as e:
+            assert not ok and said in str(e) and str(e).endswith(WRONG_VALUE_END), (tree, e)
+    try:
+        check_selectors([({"check_value": {"role": "Document"}}, None)]); raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "check_value needs {role, prefix}" in str(e), e
+    r = Runner(Screen(base), "test"); r.focus({"title": "ain", "suffix": True}); assert r.title == "Main", r.title
+    try:
+        r.focus({"title": "M", "prefix": True, "suffix": True}); raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "contradict" in str(e), e
     # type-verify-whole: a keystroke lost after the 40th character is caught, retyped in chunks, or the step fails
     url = "https://host.example/a/long/path/to/the/api/studio/mcp/"
     for drops, ok in ((1, True), (99, False)):
