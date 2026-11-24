@@ -297,6 +297,15 @@ Measured on the Hungarian build 26300 VM while writing `windows/setup-target.ps1
   reliably: the text „Needs your input” (a prompt is waiting), the button „Allow once” (a tool approval card: its
   label carries the shortcut number, „Allow once 2”, on some cards), and the absence of „Working” / „Stop” (the
   task is idle). Same VM, same day.
+- **A connector approval card in Chat takes neither an Invoke nor a quick press.** The card „Claude wants to use …
+  from <connector>” (Deny / Always allow / Allow once) behaved like this: (1) an accessibility Invoke on „Always
+  allow” or „Allow once” reports ok and does nothing; (2) a press right after the card appears is ignored, with the
+  toast „Press ignored. Check this button, wait a few seconds, then press again.”; (3) the first press that is
+  accepted only arms the button, with the tip „Press Ctrl+Shift+Enter again to confirm”, so a second press is
+  needed; (4) a card whose buttons sit under the composer is not hit by a frame click until „Scroll to bottom” is
+  pressed. Left unanswered, the card times out after about 15 minutes and the tool call fails. What worked: „Scroll
+  to bottom”, wait about 4 s, a real mouse click on the button's `screenshot_frame`, wait about 3 s, and click again.
+  Measured on the Hungarian build 26300 VM, 2026-11-24 12:05–12:30, reported by a consuming project.
 
 ## Upgrading Cua Driver
 
