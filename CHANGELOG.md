@@ -5,6 +5,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- **The panel shows each target's address** (`panel-address`): the tile header in the live grid and the status card
+  give the IP the controller reaches the target on, the port when not 22, and the network: LAN, VPN (Tailscale's
+  `100.64.0.0/10`), loopback or public.
+
 ### Fixed
 - **A lost take is never silent** (`record-fail-loud`): `record` writes `summary.json` with `"ok"` and the reason on
   every exit, prints `record FAILED:`, alerts and exits 1. A driver connection that closes mid-take (the daemon

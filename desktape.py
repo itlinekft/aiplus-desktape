@@ -5991,12 +5991,35 @@ def ssh_endpoint(host):
     return kv.get("hostname") or host.split("@")[-1], int(kv.get("port") or 22)
 
 
+def net_kind(ip):
+    """panel-address: which network an address is on: lan, vpn (100.64/10, Tailscale's), loopback or public."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if a.is_loopback:
+        return "loopback"
+    if a.version == 4 and a in ipaddress.ip_network(VPN_NET) or a.version == 6 and a in ipaddress.ip_network("fd7a:115c:a1e0::/48"):
+        return "vpn"            # Tailscale's IPv4 range, and its IPv6 one
+    return "lan" if a.is_private or a.is_link_local else "public"
+
+
 def probe(host, timeout=2.0):
-    """{"ok": bool or None, "checked": t, "detail": …}: does the target's SSH port accept a connection?"""
+    """{"ok": bool or None, "checked": t, "detail": …}: does the target's SSH port accept a connection? With
+    panel-address, also the `address` and `port` it tried and the `net` that address is on."""
     import socket
     ep = ssh_endpoint(host)
     if not ep:
         return {"ok": None, "checked": time.time(), "detail": "local" if host == "local" else "behind a proxy"}
+    where = {}
+    res = probe_tcp(ep, timeout, where)
+    if where.get("address"):
+        res.update(address=where["address"], port=ep[1], net=net_kind(where["address"]))
+    return res
+
+
+def probe_tcp(ep, timeout, where):
+    import socket
     t0 = time.time()
     try:
         try:
@@ -6009,7 +6032,12 @@ def probe(host, timeout=2.0):
                 raise
             logger.debug("%s resolved by getent: %s", ep[0], r.stdout.split()[0])
             ep = (r.stdout.split()[0], ep[1])
+        try:
+            where["address"] = socket.getaddrinfo(ep[0], ep[1], type=socket.SOCK_STREAM)[0][4][0]
+        except (OSError, IndexError) as e:
+            logger.debug("no address for %s: %s", ep[0], e)
         c = socket.create_connection(ep, timeout=timeout)
+        where["address"] = c.getpeername()[0]       # the one actually connected to
         try:              # find-moved-target D4: a port forward accepts even when the machine behind it is silent
             c.settimeout(max(timeout, 3.0))
             greeting = c.recv(64)
@@ -9897,6 +9925,9 @@ def selftest_find():
             g["ssh_endpoint"] = keep; srv.close()
         assert r["ok"] is ok, (greeting, r)
         assert ok or "no SSH greeting" in r["detail"], r
+        assert r["address"] == "127.0.0.1" and r["port"] == port and r["net"] == "loopback", r   # panel-address
+    assert [net_kind(x) for x in ("192.0.2.10", "10.0.0.9", "100.64.0.5", "8.8.8.8", "127.0.0.1", "nope")] == \
+        ["lan", "lan", "vpn", "public", "loopback", None]
     return 0
 
 

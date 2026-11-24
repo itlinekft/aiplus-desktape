@@ -80,6 +80,8 @@
   .tile .top { top: 0; background: linear-gradient(#000a, #0000); white-space: nowrap; overflow: hidden; }
   .tile .top > * { flex: none; }
   .tile .top .cmd { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #fff; }
+  .tile .top .addr { font-size: 12px; opacity: .85; font-variant-numeric: tabular-nums; }
+  .addr.vpn { color: var(--booked); } .tile .top .addr.vpn { color: #d0c4ff; }
   .tile .bottom { bottom: 0; justify-content: flex-end; background: linear-gradient(#0000, #000a); font-size: 12px; }
   .tile.bad { outline: 3px solid var(--bad); outline-offset: -3px; }
   .tile .mark { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 2px solid #ffd60a;
@@ -144,6 +146,7 @@ const HU = {
   status: "Állapot", cctv: "Élő képek", cols: "Oszlopok", fps: "Kép/mp", solofps: "Nagyítva", size: "Méret",
   fullscreen: "Teljes képernyő", fullscreenOff: "Kilépés a teljes képernyőből",
   free: "Szabad", running: "Fut", lease: "Lease", booked: "Foglalva", unreachable: "Nem érhető el", reachable: "Elérhető",
+  net: {lan: "LAN", vpn: "VPN", loopback: "helyi", public: "nyilvános"}, netTitle: "Ezen a címen éri el a vezérlő",
   unknown: "Ismeretlen", holder: "Ki használja", since: "óta", until: "eddig", bookings: "Foglalások", none: "nincs",
   activity: "Legutóbb", session: "Session", step: "lépés", strikes: "hibák", lastok: "utolsó jó lépés",
   note: "Megjegyzés", noframe: "Még nincs kép", stale: "régi kép", ago: "ezelőtt", updated: "frissítve",
@@ -165,6 +168,7 @@ const EN = {
   status: "Status", cctv: "Live screens", cols: "Columns", fps: "Frames/s", solofps: "Zoomed", size: "Size",
   fullscreen: "Full screen", fullscreenOff: "Exit full screen",
   free: "Free", running: "Running", lease: "Lease", booked: "Booked", unreachable: "Unreachable", reachable: "Reachable",
+  net: {lan: "LAN", vpn: "VPN", loopback: "loopback", public: "public"}, netTitle: "The address the controller reaches it on",
   unknown: "Unknown", holder: "Held by", since: "since", until: "until", bookings: "Bookings", none: "none",
   activity: "Recent", session: "Session", step: "step", strikes: "strikes", lastok: "last good step",
   note: "Note", noframe: "No frame yet", stale: "old frame", ago: "ago", updated: "updated",
@@ -217,6 +221,14 @@ function badge(t) {
   if (t.booked_now) return `<span class="badge booked">${T.booked}: ${esc(t.booked_now.label)}</span>`;
   if (L && L.held) return `<span class="badge lease">${T.lease}: ${esc(L.label)} → ${hm(L.until)}</span>`;
   return `<span class="badge free">${T.free}</span>`;
+}
+/* panel-address: the address the reach probe connected to, the port when not 22, and its network kind. */
+function addr(t) {
+  const r = t.reach;
+  if (!r || !r.address) return "";
+  const a = r.address.includes(":") ? `[${r.address}]` : r.address;
+  const kind = r.net ? ` · ${esc((T.net || {})[r.net] || r.net)}` : "";
+  return `<span class="addr ${esc(r.net || "")}" title="${esc(T.netTitle)}">${esc(a)}${r.port && r.port !== 22 ? ":" + r.port : ""}${kind}</span>`;
 }
 function reachDot(t) {
   const r = t.reach;
@@ -304,7 +316,7 @@ function renderStatus() {
       : `<span class="muted">${T.none}</span>`;
     return `<div class="card">
       <h2>${reachDot(t)}${esc(t.name)} <span class="spacer"></span>${badge(t)}</h2>
-      <div class="muted small">${esc(t.label || t.host)}${t.os ? " · " + esc(t.os) : ""}</div>
+      <div class="muted small">${esc(t.label || t.host)}${t.os ? " · " + esc(t.os) : ""}${addr(t) ? " · " + addr(t) : ""}</div>
       <div class="row"><span class="label">${T.holder}</span>${lockHtml}</div>
       ${sess}
       <div class="row"><span class="label">${T.bookings}</span>${strip(t, now)}${books}</div>
@@ -439,7 +451,7 @@ function overlays() {
     if (!t) continue;
     tile.el.classList.toggle("ctl", !!(control.on === n));
     tile.el.classList.toggle("bad", isBad(t));
-    setHTML(tile.el.querySelector(".top"), `${reachDot(t)}<b>${esc(n)}</b> ${badge(t)}` +
+    setHTML(tile.el.querySelector(".top"), `${reachDot(t)}<b>${esc(n)}</b> ${addr(t)} ${badge(t)}` +
       (isBad(t) ? ` <span class="badge bad">${esc(t.lock.state)}</span>` : "") +
       (t.lock && t.lock.held && !t.control ? ` <code class="cmd" title="${esc(t.lock.command)}">${esc(short(t.lock.command, 80))}</code>` : ""));
     if (solo === n) soloBar(t);
