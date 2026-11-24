@@ -243,6 +243,16 @@ Measured on the Hungarian build 26300 VM while writing `windows/setup-target.ps1
   Reproduced 2026-11-14 on a Windows 10 PC: with a driver connection reading a 312-element window every 2 s, the
   recording stopped growing at about minute 5–6. So desktape records in 4-minute segments and starts a new one when a
   segment stops growing (`docs/tape-format.md`); 10 minutes in segments under the same load did not stop.
+- **Commit memory can run out, and the driver crashes with it.** On a 12 GB VM with a fixed 2 GB page file (commit
+  limit 14.3 GB), running Claude Desktop with a Cowork session (`vmmem` 4.3 GB), Chrome and the panel's live view,
+  Windows logged "low on virtual memory" (System, event 2004) six times in 42 minutes; the driver daemon's own commit
+  grew from 1.60 GB to 1.87 GB in that time while it served a `look` every 20 s. Two seconds after a
+  `start_recording`, "out of virtual memory" (Application Popup, event 26), `dwm.exe` crashed (0xc00001ad) and
+  `cua-driver.exe` crashed (0xc0000409); the driver's ffmpeg died with it and left a 48-byte `recording.mp4`, and
+  every SSH session's driver connection closed. A fresh daemon held 146 MB. `record` now sees the closed connection at
+  once, records on in a new segment, and logs the free commit at its start. Measured 2026-11-24, Windows 11 VM, Cua
+  Driver 0.55.0, ffmpeg 9.0.2. Before a long take on a busy machine, check the free commit
+  (`Get-CimInstance Win32_OperatingSystem` → `FreeVirtualMemory`) and restart a daemon that has grown large.
 - **A user name with an accent comes back mangled from cmd over SSH.** `echo %USERPROFILE%` answered in the console's
   code page, decoded as U+FFFD; a path spelt out with it in a cmd line was "not found", and the driver, given it,
   made a new folder by that wrong name and recorded there. desktape reads the profile as UTF-8 through PowerShell

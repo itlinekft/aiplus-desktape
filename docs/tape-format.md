@@ -524,6 +524,17 @@ captions and the redaction boxes are moved to the joined video's clock. `summary
 recorded seconds against the run's length, and every gap with its cause. A gap from a dead recorder makes the run
 fail (exit 1 for `record`) unless the tape says `on_dead: alert`; the video is kept either way.
 
+### A lost take is never silent
+
+`record` ends every take with `summary.json`: `"ok": true`, or `"ok": false` with `error` naming the reason, a
+`record FAILED: …` line on stderr, the alert (`DESKTAPE_ALERT_CMD`) and exit 1. Check the exit code in a take script
+(`wait $REC || true` hides it). When the driver connection closes during a take (the driver daemon crashed, measured
+on a Windows VM that ran out of memory), `record` sees it within a second, opens a new connection (starting the
+daemon when none runs) and records on in the next segment. A segment whose file is under 4 KB holds no video (a
+crashed recorder leaves a 48-byte header): it is left out of the join and listed in `gaps` as "segment N has no
+video". On Windows, `memory` in the summary gives the free commit memory and the driver daemon's commit at the start,
+with a `warning` under 2 GB free.
+
 ## A person's pointer: `cursor: person` (macOS)
 
 By default the driver draws its agent cursor, which glides to each element it acts on; on the Windows box

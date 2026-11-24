@@ -5,6 +5,14 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Fixed
+- **A lost take is never silent** (`record-fail-loud`): `record` writes `summary.json` with `"ok"` and the reason on
+  every exit, prints `record FAILED:`, alerts and exits 1. A driver connection that closes mid-take (the daemon
+  crashed when a Windows VM ran out of commit memory) is seen within a second instead of after two minutes, a new
+  connection is opened and recording goes on in the next segment; before, the restart wrote to the closed pipe and
+  the process ended with a traceback, no summary and no video. A segment under 4 KB counts as no video; a call that
+  fails on a closed connection is in `audit.jsonl`. On Windows the summary gives the free commit memory at the start.
+
 ## [0.8.3] - 2026-11-23
 
 ### Added

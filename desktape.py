@@ -413,6 +413,10 @@ def deadline(tool, args):
     return base * float(os.environ.get("DESKTAPE_CALL_DEADLINE") or 1)
 
 
+class DriverGone(RuntimeError):
+    """record-fail-loud: the driver connection closed under a call (the daemon exited, or its SSH session)."""
+
+
 class CallBlocked(RuntimeError):
     """A driver call that passed its deadline (step-effect-check D1)."""
 
@@ -489,7 +493,7 @@ class Cua:
     A target with no daemon gets one started, once (driver-autostart)."""
 
     def __init__(self, host, audit_path, autostart=True):
-        self.audit = open(audit_path, "a", encoding="utf-8")
+        self.audit, self.audit_path = open(audit_path, "a", encoding="utf-8"), audit_path
         self.host, self.on_blocked = host, None     # on_blocked(tool, args, waited): the status hook (D5)
         self.acts = 0          # agent-efficiency D3: calls that may change the screen, so a kept read is stale
         t = Target(host)
@@ -570,7 +574,7 @@ class Cua:
         except subprocess.TimeoutExpired:
             logger.warning("cua-driver closed its output but is still running (pid %s)", self.p.pid)
         self.err.seek(0)
-        raise RuntimeError(f"cua-driver connection closed: {self.err.read().strip()[:300]}")
+        raise DriverGone(f"cua-driver connection closed: {self.err.read().strip()[:300]}")
 
     def call(self, tool, args, secret=False, timeout=None):
         if tool not in ALLOWED:
@@ -600,6 +604,14 @@ class Cua:
                 self.on_blocked(tool, args, waited)
             self.reconnect()
             raise CallBlocked(tool, args, waited) from None
+        except (RuntimeError, OSError) as e:     # record-fail-loud: a closed connection is audited too
+            self.audit.write(json.dumps({"ts": round(t0, 3), "tool": tool, "args": logged, "ok": False,
+                                         "ms": int((time.time() - t0) * 1000), "error": str(e)[:300]},
+                                        ensure_ascii=False) + "\n")
+            self.audit.flush()
+            if isinstance(e, OSError):          # a write to the closed pipe: the same fact as a closed output
+                raise DriverGone(f"cua-driver connection closed ({e})") from None
+            raise
         res = r.get("result", {})
         text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
         ok = "error" not in r and not res.get("isError")
@@ -663,9 +675,36 @@ class Cua:
             self.audit.flush()
             del self.sums[tool]
 
+    def alive(self):
+        """record-fail-loud: False once the driver connection's process has ended (the daemon or SSH went away)."""
+        p = getattr(self, "p", None)
+        return p is None or p.poll() is None
+
+    def revive(self):
+        """record-fail-loud: drop a closed connection and open a new one, starting the daemon when none runs."""
+        self._drop()
+        self.flush_counts()
+        self.audit.close()
+        keep = {k: getattr(self, k) for k in ("on_blocked", "summarize", "acts") if hasattr(self, k)}
+        time.sleep(2)          # a daemon another command is starting at this moment gets the chance to listen
+        type(self).__init__(self, self.host, self.audit_path)
+        self.__dict__.update(keep)
+        logger.info("new driver connection to %s after the old one closed", self.host)
+        if getattr(self, "session", None):    # person-cursor D1: the new connection's session hides its cursor too
+            self.hide_agent_cursor()
+
+    def _drop(self):
+        try:
+            self.p.stdin.close()
+        except OSError as e:
+            logger.warning("closing the driver connection to %s (pid %s): %s", self.host, self.p.pid, e)
+        self.p.terminate()
+        self.err.close()
+
     def close(self):
         self.flush_counts()
-        self.p.stdin.close(); self.p.terminate(); self.audit.close(); self.err.close()
+        self._drop()
+        self.audit.close()
 
 
 # ---- one driver session per target (box-lock) ---------------------------------------------------
@@ -4322,7 +4361,13 @@ def run_tape(a, tape, amap, plan, deny, tape_boxes, redacting, lk=None):
                     break
                 r.t_rec = seg.t0
             if seg:                              # record-segments: a dead or full segment is followed by the next
-                dead = seg.tick()
+                try:
+                    dead = seg.tick()
+                except RuntimeError as e:        # record-fail-loud: the connection closed and none could be opened
+                    failed = f"step {i}: the screen recording: {e}"
+                    logger.error("tape failed at %s", failed)
+                    alert(f"desktape {a.host}: run {tape['name']} stopped at {failed}")
+                    break
                 if dead:
                     deaths.append(f"step {i}: {dead}")
             desc = f"{tape['name']} step {i}: " + json.dumps(tape["steps"][i], ensure_ascii=False)[:100]
@@ -4749,6 +4794,8 @@ class Liveness:
 
 
 SEGMENT_SECONDS = 240.0   # record-segments: the driver's recorder died at minute 5-6 three times; a segment ends before
+MIN_VIDEO_BYTES = 4096    # record-fail-loud: a crashed recorder left a 48-byte file (a header only); below this, no video
+GONE = "driver connection lost (the driver daemon exited?)"
 
 
 class Segments:
@@ -4793,6 +4840,7 @@ class Segments:
             self.cua.call("stop_recording", {})
         except Exception as e:
             logger.warning("stop_recording failed (%s); segment %d may be incomplete", e, self.cur["n"])
+            self.cur["stop_failed"] = str(e)[:200]
         end = self.clock() - self.t0
         if self.lv and self.lv.dead:       # it stopped writing when the file stopped growing, not now
             end = min(end, self.lv.last_grew - self.t0)
@@ -4800,9 +4848,24 @@ class Segments:
 
     def tick(self):
         """Between steps or in a wait loop: a dead or full segment is ended and the next started. Returns the
-        liveness text of a segment that died, else None."""
+        liveness text of a segment that died, else None. A closed driver connection (record-fail-loud) ends the
+        segment at once, and the next one starts on a new connection; raises when that cannot be opened."""
         if not self.cur:
             return None
+        alive = getattr(self.cua, "alive", None)
+        if alive and not alive():
+            logger.error("recording: segment %d: %s; opening a new connection", self.cur["n"], GONE)
+            if self.on_dead:
+                self.on_dead(GONE)
+            self.cur["end"], self.cur["ended_by"] = round(self.clock() - self.t0, 3), GONE
+            if self.lv:
+                self.lv.stop()
+            try:
+                self.cua.revive()
+            except Exception as e:
+                raise RuntimeError(f"{GONE}, and no new connection: {e}") from None
+            self.start()
+            return GONE
         dead = self.lv.check() if self.lv else None
         if dead:
             logger.warning("recording: segment %d %s; starting the next", self.cur["n"], dead)
@@ -4816,11 +4879,21 @@ class Segments:
             self.start()
         return None
 
+    @staticmethod
+    def _empty(p):
+        """record-fail-loud: a segment judged at join to hold no video (under MIN_VIDEO_BYTES, or no file)."""
+        return "bytes" in p and (p["bytes"] or 0) < MIN_VIDEO_BYTES
+
     def gaps(self):
-        """(from, to, why) where nothing was recorded, in seconds since the start."""
+        """(from, to, why) where nothing was recorded, in seconds since the start: between two segments, and a
+        segment that holds no video (record-fail-loud)."""
         out = []
-        for a, b in zip(self.parts, self.parts[1:]):
-            if a["end"] is not None and b["start"] > a["end"]:
+        for a, b in zip(self.parts, self.parts[1:] + [None]):
+            if self._empty(a) and a["end"] is not None:
+                out.append({"from": a["start"], "to": a["end"], "seconds": round(a["end"] - a["start"], 3),
+                            "why": f"segment {a['n']} has no video ({a['bytes']} bytes)"
+                                   + (f": {a['ended_by']}" if a["ended_by"] not in ("length", "stop") else "")})
+            if b and a["end"] is not None and b["start"] > a["end"]:
                 out.append({"from": a["end"], "to": b["start"], "seconds": round(b["start"] - a["end"], 3),
                             "why": "the recorder stopped: " + a["ended_by"] if a["ended_by"] not in ("length", "stop")
                             else "between two segments"})
@@ -4830,6 +4903,10 @@ class Segments:
         """The joined video's time of `w` seconds since the start: the gaps are not in the video."""
         v = 0.0
         for p in self.parts:
+            if self._empty(p):                  # left out of the joined video
+                if p["end"] is not None and w < p["end"]:
+                    return v
+                continue
             end = p["end"] if p["end"] is not None else float("inf")
             if w < p["start"]:
                 return v
@@ -4839,7 +4916,8 @@ class Segments:
         return v
 
     def recorded(self):
-        return round(sum((p["end"] or 0) - p["start"] for p in self.parts if p.get("bytes")), 1)
+        return round(sum((p["end"] or 0) - p["start"] for p in self.parts
+                         if (p.get("bytes") or 0) >= MIN_VIDEO_BYTES), 1)
 
     def join(self):
         """Concatenate the segments' files into `recording.mp4` in `rec_dir`. A segment with no file is left out
@@ -4847,12 +4925,15 @@ class Segments:
         have = []
         for p in self.parts:
             p["bytes"] = self.t.size(p["dir"] + self.sep + "recording.mp4")
-            if p["bytes"]:
+            if p["bytes"] and p["bytes"] >= MIN_VIDEO_BYTES:
                 have.append(p)
             else:
-                logger.warning("recording: segment %d has no video file; left out", p["n"])
+                logger.warning("recording: segment %d has no video (%s); left out", p["n"],
+                               f"{p['bytes']} bytes" if p["bytes"] is not None else "no file")
         if not have:
-            raise RuntimeError("no segment of the recording has a video file")
+            raise RuntimeError("no segment of the recording has a video: " + ", ".join(
+                f"seg-{p['n']:03d} " + (f"{p['bytes']} bytes" if p["bytes"] is not None else "no file")
+                for p in self.parts))
         out = self.rec_dir + self.sep + "recording.mp4"
         # the list names the parts relative to itself: a profile path may hold a character cmd's echo would mangle
         if self.t.mac:
@@ -4869,79 +4950,134 @@ class Segments:
         return out
 
     def summary(self, length=None):
-        s = {"segments": [{k: p.get(k) for k in ("n", "start", "end", "ended_by", "bytes")} for p in self.parts],
+        s = {"segments": [{k: p.get(k) for k in ("n", "start", "end", "ended_by", "bytes", "stop_failed")
+                           if k != "stop_failed" or p.get(k)} for p in self.parts],
              "recorded_seconds": self.recorded(), "gaps": self.gaps()}
         if length is not None:
             s["run_seconds"] = round(length, 1)
         return s
 
 
+LOW_COMMIT_MB = 2048      # record-fail-loud: under this much free commit memory a Windows target is warned about
+WIN_MEMORY_PS = ("$o = Get-CimInstance Win32_OperatingSystem; $d = (Get-Process cua-driver -ErrorAction SilentlyContinue "
+                 "| Measure-Object PagedMemorySize64 -Sum).Sum; "
+                 "'{0} {1} {2}' -f [int]($o.FreeVirtualMemory/1024), [int]($o.TotalVirtualMemorySize/1024), [int]($d/1MB)")
+
+
+def win_memory(t):
+    """record-fail-loud: a Windows target's free and total commit memory and the driver daemons' commit, in MB, or
+    None. Measured 2026-11-24: commit ran out on a 12 GB VM with a 2 GB page file, and the driver crashed mid-take."""
+    if t.mac or t.local:
+        return None
+    try:
+        r = t.sh("powershell -NoProfile -EncodedCommand " + base64.b64encode(WIN_MEMORY_PS.encode("utf-16-le")).decode())
+        free, total, driver = (int(x) for x in (r.stdout or "").split()[-3:])
+    except Exception as e:
+        logger.warning("record: could not read the memory of %s (%s)", t.host, e)
+        return None
+    m = {"commit_free_mb": free, "commit_limit_mb": total, "driver_commit_mb": driver}
+    if free < LOW_COMMIT_MB:
+        m["warning"] = (f"only {free} MB of {total} MB commit memory free (the driver daemon holds {driver} MB): "
+                        "the recorder or the driver may crash; close programs, restart the daemon, or enlarge the page file")
+        logger.warning("record: %s: %s", t.host, m["warning"])
+    else:
+        logger.info("record: %s has %d MB of %d MB commit memory free; the driver daemon holds %d MB",
+                    t.host, free, total, driver)
+    return m
+
+
 def cmd_record(a):
     """screen-record: the target's whole screen, recorded on its own until Ctrl+C, a stop file on the controller,
-    or --seconds; acts on nothing and takes no lock, so a run beside it goes on."""
+    or --seconds; acts on nothing and takes no lock, so a run beside it goes on. record-fail-loud: every exit after
+    the run folder exists writes summary.json with `ok` and, on a failure, the reason, and returns 1."""
     limit = min(float(a.seconds or RECORD_MAX), RECORD_MAX)
-    run_dir = new_run_dir(a.name or "screen", "record")
-    stamp = os.path.basename(run_dir)
-    t = Target(a.host)
-    need_ffmpeg(t, "record")
-    rec_rel = f"desktape/rec/{stamp}"
-    rec_dir = t.home() + ("/" + rec_rel if t.mac else "\\" + rec_rel.replace("/", "\\"))
     if a.until_file and os.path.exists(a.until_file):
         raise ValueError(f"record: the stop file {a.until_file} exists already; remove it first")
-    cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
-    t0 = time.time()
-    seg = Segments(cua, t, rec_dir, {"include_accessibility_tree": False})
-    deaths = []
+    t = Target(a.host)
+    need_ffmpeg(t, "record")            # a setup error stops before the run folder: nothing was recorded
+    run_dir = new_run_dir(a.name or "screen", "record")
+    stamp = os.path.basename(run_dir)
+    summary = {"record": a.name or "screen", "host": a.host, "ok": False}
+    seg = None
+    t0 = t1 = t2 = time.time()
+    why, deaths, local, error = "error", [], None, None
     try:
+        rec_rel = f"desktape/rec/{stamp}"
+        rec_dir = t.home() + ("/" + rec_rel if t.mac else "\\" + rec_rel.replace("/", "\\"))
+        cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
+        t0 = time.time()
+        seg = Segments(cua, t, rec_dir, {"include_accessibility_tree": False})
         try:
-            seg.start()
-        except RuntimeError as e:
-            raise RuntimeError(f"record: {e}") from None
-        t1 = time.time()
-        print(f"recording {a.host} since {utc_iso(t0)}; stop with Ctrl+C" +
-              (f", or create {a.until_file}" if a.until_file else "") + f" (at most {limit:.0f} s)", flush=True)
-        logger.info("record: %s started (the call took %.2f s), output %s", a.host, t1 - t0, rec_dir)
-        why = "time limit"
-        import signal
-        old = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))   # a kill stops it cleanly too
-        try:
-            while time.time() - t1 < limit:
-                if a.until_file and os.path.exists(a.until_file):
-                    why = "stop file"
-                    break
-                dead = seg.tick()       # record-segments: a dead segment is followed by the next one
-                if dead:
-                    deaths.append(dead)
-                    alert(f"desktape {a.host}: record {a.name or 'screen'}: {dead}; recording goes on in a new segment")
-                time.sleep(0.2)
-        except KeyboardInterrupt:
-            why = "interrupted"
+            try:
+                seg.start()
+            except RuntimeError as e:
+                raise RuntimeError(f"record: {e}") from None
+            t1 = t2 = time.time()
+            print(f"recording {a.host} since {utc_iso(t0)}; stop with Ctrl+C" +
+                  (f", or create {a.until_file}" if a.until_file else "") + f" (at most {limit:.0f} s)", flush=True)
+            logger.info("record: %s started (the call took %.2f s), output %s", a.host, t1 - t0, rec_dir)
+            memory = win_memory(t)      # after the start: a take script types a few seconds after launching record
+            if memory:
+                summary["memory"] = memory
+            why = "time limit"
+            import signal
+            old = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))   # a kill stops it cleanly too
+            try:
+                while time.time() - t1 < limit:
+                    if a.until_file and os.path.exists(a.until_file):
+                        why = "stop file"
+                        break
+                    dead = seg.tick()       # record-segments: a dead segment is followed by the next one
+                    if dead:
+                        deaths.append(dead)
+                        alert(f"desktape {a.host}: record {a.name or 'screen'}: {dead}; recording goes on in a new segment")
+                    time.sleep(0.2)
+            except KeyboardInterrupt:
+                why = "interrupted"
+            except Exception as e:          # record-fail-loud: still stop, join and keep what was recorded
+                why, error = "error", f"{type(e).__name__}: {e}"
+                logger.error("record: %s", error)
+            finally:
+                signal.signal(signal.SIGTERM, old)
+            t2 = time.time()
+            seg.stop(why)
         finally:
-            signal.signal(signal.SIGTERM, old)
-        t2 = time.time()
-        seg.stop(why)
-    finally:
-        cua.close()
-    local = os.path.join(run_dir, f"{a.name or 'screen'}.mp4")
-    try:
-        seg.join()
-        t.get(f"{rec_rel}/recording.mp4", local)
-    except (RuntimeError, subprocess.CalledProcessError) as e:
-        logger.error("record: no video: %s", e)
-        local = None
-    finally:
-        if t.mac:
-            t.sh(f'rm -rf "$HOME/{rec_rel}"')      # the whole screen: no copy stays on the target
-        else:
-            t.sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
-    summary = {"record": a.name or "screen", "host": a.host, "stopped_by": why, "recording_started_at": utc_iso(t0),
-               "start_call_seconds": round(t1 - t0, 3), "seconds": round(t2 - t1, 1), "video": local,
-               "bytes": os.path.getsize(local) if local else None, **seg.summary(t2 - t1)}
+            cua.close()
+        local = os.path.join(run_dir, f"{a.name or 'screen'}.mp4")
+        try:
+            seg.join()
+            t.get(f"{rec_rel}/recording.mp4", local)
+        except (RuntimeError, subprocess.CalledProcessError) as e:
+            logger.error("record: no video: %s", e)
+            error = error or f"no video: {e}"
+            local = None
+        finally:
+            if t.mac:
+                t.sh(f'rm -rf "$HOME/{rec_rel}"')      # the whole screen: no copy stays on the target
+            else:
+                t.sh(f'rmdir /s /q "%USERPROFILE%\\{rec_rel.replace(chr(47), chr(92))}"')
+    except Exception as e:
+        error = error or f"{type(e).__name__}: {e}"
+        logger.error("record: %s", error)
+        local = local if local and os.path.exists(local) else None
+    summary.update({"stopped_by": why, "recording_started_at": utc_iso(t0), "start_call_seconds": round(t1 - t0, 3),
+                    "seconds": round(t2 - t1, 1), "video": local,
+                    "bytes": os.path.getsize(local) if local else None})
+    if seg:
+        summary.update(seg.summary(t2 - t1))
+    if not error and deaths and getattr(a, "on_dead", "fail") != "alert":
+        error = f"the recording has {len(deaths)} gap(s): " + "; ".join(deaths)
+    summary["ok"] = not error
+    if error:
+        summary["error"] = error
     json.dump(summary, open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if error:
+        print(f"record FAILED: {error} (summary: {os.path.join(run_dir, 'summary.json')})", file=sys.stderr, flush=True)
+        alert(f"desktape {a.host}: record {a.name or 'screen'} FAILED: {error}")
     logger.info("record: %s stopped by %s after %.1f s; %s (%s s recorded in %d segments)", a.host, why, t2 - t1,
-                local, seg.recorded(), len(seg.parts))
-    return 1 if not local or (deaths and getattr(a, "on_dead", "fail") != "alert") else 0
+                local, seg.recorded() if seg else 0, len(seg.parts) if seg else 0)
+    return 1 if error else 0
 
 
 # ---- target-pairing: a controller's own key on a target, and taking it back --------------------------------
@@ -7824,7 +7960,7 @@ def selftest_record():
     Target.sh = lambda self, cmd, check=False, input=None: cmds.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
     Target.home = lambda self: "/Users/me"
     Target.ffmpeg = lambda self: FFMPEG_MAC
-    real_size, Target.size = Target.size, lambda self, path: 3
+    real_size, Target.size = Target.size, lambda self, path: MIN_VIDEO_BYTES
     level = logger.level; logger.setLevel(logging.CRITICAL)
     try:
         with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
@@ -7839,13 +7975,14 @@ def selftest_record():
         assert calls[0][1]["output_dir"].startswith("/Users/me/desktape/rec/") and calls[0][1]["record_video"] is True
         assert calls[0][1]["output_dir"].endswith("/seg-001"), calls[0][1]
         assert summary["stopped_by"] == "stop file" and summary["bytes"] == 3 and summary["recording_started_at"].endswith("Z")
+        assert summary["ok"] is True and "error" not in summary, summary
         assert len(summary["segments"]) == 1 and summary["gaps"] == [], summary
         assert any("-f concat -i parts.txt -c copy recording.mp4" in c and "seg-001/recording.mp4" in c for c in cmds), cmds
         assert cmds and cmds[-1].startswith('rm -rf "$HOME/desktape/rec/'), cmds          # no copy stays on the target
         # record-segments: a recorder that stops growing is followed by a new segment; the gap is in the summary,
         # and the exit is 1 (the take has a hole) unless on_dead is alert
         calls.clear()
-        Target.size = lambda self, path: 100
+        Target.size = lambda self, path: MIN_VIDEO_BYTES + 100
         os.environ["DESKTAPE_LIVENESS_EVERY"] = "0.3"
         try:
             with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")):
@@ -7865,11 +8002,65 @@ def selftest_record():
             tools = [c[0] for c in calls]
             assert tools[:4] == ["start_recording", "stop_recording", "start_recording", "stop_recording"], tools
             assert tools.count("start_recording") == tools.count("stop_recording"), tools
+            assert summary["ok"] is False and "gap" in summary["error"], summary
         finally:
             os.environ.pop("DESKTAPE_LIVENESS_EVERY", None)
+        # record-fail-loud: the driver daemon crashes two seconds in (measured 2026-11-24): the closed connection is
+        # seen at once, a new one is opened, the 48-byte first segment is left out, the gap named, the exit is 1
+        for revive_ok in (True, False):
+            calls.clear()
+            state = {"alive": True, "revived": 0}
+            class DyingCua(FakeCua):
+                def call(self, tool, args, **kw):
+                    calls.append((tool, args))
+                    if tool == "start_recording" and not state["revived"]:
+                        state["alive"] = False          # the daemon exits right after it started recording
+                    return {}, ""
+                def alive(self):
+                    return state["alive"]
+                def revive(self):
+                    if not revive_ok:
+                        raise RuntimeError("no Cua Driver daemon listening")
+                    state["alive"], state["revived"] = True, state["revived"] + 1
+            globals()["Cua"] = DyingCua
+            Target.size = lambda self, path: 48 if "seg-001" in path else MIN_VIDEO_BYTES * 10
+            with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(open(os.devnull, "w")), \
+                    contextlib.redirect_stderr(open(os.devnull, "w")):
+                globals()["RUNS"], runs = d, globals()["RUNS"]
+                try:
+                    rc = cmd_record(argparse.Namespace(host="rec@mac", seconds=1, until_file=None, name="mac"))
+                    summary = json.load(open(glob_one(d, "summary.json")))
+                finally:
+                    globals()["RUNS"] = runs
+            assert rc == 1 and summary["ok"] is False, summary
+            assert summary["segments"][0]["ended_by"] == GONE, summary
+            if revive_ok:
+                tools = [c[0] for c in calls]
+                assert tools == ["start_recording", "start_recording", "stop_recording"], tools   # no stop on a dead pipe
+                assert summary["segments"][0]["bytes"] == 48 and summary["video"], summary
+                assert summary["gaps"][0]["why"] == f"segment 1 has no video (48 bytes): {GONE}", summary
+                assert summary["error"].startswith("the recording has 1 gap(s)"), summary
+            else:
+                assert "no new connection" in summary["error"] and summary["video"] is None, summary
+                assert summary["error"].count("no segment") == 0, summary      # the first reason is kept
+        globals()["Cua"] = FakeCua
+        Target.size = lambda self, path: MIN_VIDEO_BYTES
+        # a call on a closed connection is audited, and surfaces as DriverGone
+        c = object.__new__(real[0])
+        c.audit, c.mac, c.host = io.StringIO(), False, "rec@win"
+        def closed(method, params, timeout=None):
+            raise BrokenPipeError(32, "Broken pipe")
+        c._rpc = closed
+        try:
+            c.call("stop_recording", {})
+            raise AssertionError("a call on a closed pipe passed")
+        except DriverGone as e:
+            assert "connection closed" in str(e), e
+        line = json.loads(c.audit.getvalue())
+        assert line["tool"] == "stop_recording" and line["ok"] is False and "Broken pipe" in line["error"], line
         # a full segment is ended and the next started; the joined video's clock skips the gaps
         clock = [0.0]
-        sizes = iter(range(1000, 10 ** 6, 1000))
+        sizes = iter(range(MIN_VIDEO_BYTES, 10 ** 7, 1000))
         Target.size = lambda self, path: next(sizes)
         class C:
             def call(self, tool, args, **kw):
