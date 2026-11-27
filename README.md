@@ -172,8 +172,12 @@ Status: **early**. The tape format and the commands may still change.
   content with redaction boxes, and then keeps no unredacted copy. A map can deny clicks on dangerous
   controls, and a replay stops on a dialog the tape did not plan.
 - **One session per target:** `run`, `look` and `act` lock the target, so two agents cannot drive one
-  desktop at once; the second waits, then stops naming the holder (`desktape.py lock` shows it). A project
-  can book a machine for a time window (`desktape.py book --for 45m`), and `desktape.py panel` shows every
+  desktop at once; the second waits, then stops naming the holder (`desktape.py lock` shows it), or with
+  `--wait-queue` (`DESKTAPE_QUEUE=1`) waits in a first-come line until the machine is free. Using a machine is
+  taking it: each command keeps it for its session for 180 s after it ends. A project can also book a window
+  that must not be disturbed (`desktape.py book --for 45m`). A booking nobody uses in its first 10 minutes is
+  removed, and an unused one yields after 5. `desktape.py wait --for SEL | --gone SEL | --window T` waits on
+  the controller for the screen, with no model and no agent turn per poll. `desktape.py panel` shows every
   machine's holder, bookings and live screen on a local web page. The panel's zoomed view also lets a
   person step in over a booking or a running command (Override): clicks and keys reach the machine while
   the booking and the run go on, and nothing is taken or released.

@@ -6,6 +6,13 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- **Taking a machine on use, not by schedule** (`fast-box-use`): `desktape.py wait --for SEL | --gone SEL |
+  --window T [--timeout 30m] [--every 10]` waits on the controller until an element appears or goes, or a window
+  opens. It reads on a fresh connection every poll, with no model call. It writes one run folder and one activity
+  line, and exits 0 when the condition held or 1 at the timeout. `--wait-queue` (or `DESKTAPE_QUEUE=1`) on `run`,
+  `look`, `act`, `tidy` and `wait` waits in a first-come line of waiters instead of stopping after 60 s, up to
+  `--queue-max` (60m). A booking not used in its first 10 minutes is removed (a `noshow` activity line), and an
+  unused booking now yields to another project after 5 minutes instead of 10.
 - **A real click on macOS, decided by desktape** (`real-click-policy`): an `os: true` `key` or `type` step with an
   anchored `at:` on a Mac clicks for real through desktape's input helper (`key: ""` is a click alone), only when the
   system's window list has the step's window topmost at the point. A target profile's `use: test | personal` decides

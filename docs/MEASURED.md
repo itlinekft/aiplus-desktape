@@ -852,6 +852,33 @@ python3 desktape.py book --target <mac> --for 5m --note "…"      # then the sa
 - The driver's bounds and the system's window list agree in points on this Mac (Claude at 0,30 1920x1050 in both).
 - Not measured here: a real click refused on a system prompt ("needs a person (panel click)"): selftest only.
 
+## 2026-11-27: where a shared box's time goes, and the controller-side `wait` (`fast-box-use`)
+
+**Machines:** the controller's lock activity log (Linux), covering four days and every project on two Windows 11
+test boxes and two Macs. The `wait` checks ran on a Windows 11 VM test box with Cua Driver 0.55.0.
+
+```bash
+python3 <script> ~/.local/state/desktape/locks/activity.jsonl     # durations, gaps between commands, booking use
+python3 desktape.py wait --window <a window that is open> --timeout 1m
+python3 desktape.py wait --window <a window that is not open> --timeout 1m
+python3 desktape.py wait --window <open window> --gone '{label: no-such-xyz}' --timeout 1m
+python3 desktape.py wait --window <open window> --for '{label: no-such-xyz}' --timeout 30s
+```
+
+| What | Result |
+|---|---|
+| activity log span | 2026-11-23 23:06 – 2026-11-27 19:29, 2739 lines |
+| `look`, 1510 calls | median 1.0 s, p90 2.5 s |
+| `act`, 1116 calls | median 2.0 s, p90 5.8 s |
+| box work, all commands | 1.57 h |
+| gap between one session's consecutive commands (agent turns) | median 4.6 s, p75 12 s, p90 22 s; 11.0 h in total |
+| bookings | 39 held 37.9 h; the box worked 4.2 % of it; 4 were never used, keeping others out for 230 min; 28 were released early |
+| refused commands | not logged before this change; not measured |
+| `wait` for an open window | ok at the first poll, 1.1 s |
+| `wait` for a window that is not open | 6 polls in 61 s, each counted as not yet, then exit 1 |
+| `wait --gone` for an absent element | ok at the first poll, 1.5 s |
+| `wait --for` an absent element, `--timeout 30s`, `--every 10` | 3 polls in 24 s, exit 1; one poll on its own connection takes about 2–3 s |
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

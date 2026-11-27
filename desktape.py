@@ -8,6 +8,7 @@
   desktape.py run TAPE [--mode test|video]       a tape, as a test or as a captioned video
   desktape.py look [--window T] [--ocr] [--full]  what the window shows, cheapest form first
   desktape.py act 'STEP' ['STEP' …] [--new] [--append TAPE]  steps on one connection; the passed ones appended
+  desktape.py wait --for SEL | --gone SEL | --window T [--timeout 30m] [--every 10]  wait on the controller
   desktape.py lock | unlock                       who holds the target; give this session's lock back
   desktape.py status [--json]                     the session's state, last good step, strikes
   desktape.py targets                             the named targets, with lock and status
@@ -720,8 +721,10 @@ LOCK_WAIT = 60.0      # seconds a second session waits before it stops (box-lock
 BOOK_MAX = 4 * 3600.0         # booking-and-panel D3: the longest booking
 BOOK_AHEAD = 7 * 86400.0      # how far ahead a booking may start
 BOOK_WARN = 15 * 60.0         # D2 rule 5: a command this close to another project's booking is warned
-BOOK_IDLE = 10 * 60.0         # booking-handover D2: an active booking unused this long yields to other projects
+BOOK_IDLE = 5 * 60.0          # booking-handover D2, fast-box-use D4: an active booking unused this long yields
+BOOK_NOSHOW = 10 * 60.0       # fast-box-use D4: a booking never used this long after its start is removed
 WAIT_FRESH = 30 * 60.0        # booking-handover D3: a project refused this recently is still "waiting"
+QUEUE_MAX = 60 * 60.0         # fast-box-use D5: how long a command waits in line by default
 ACTIVITY_MAX = 1 << 20        # D4: activity.jsonl is cut to its last ACTIVITY_KEEP lines past this size
 ACTIVITY_KEEP = 2000
 
@@ -795,6 +798,9 @@ def describe_block(x, now=None):
         b = x["booking"]
         note = f"{b['note']}; " if b.get("note") else ""
         return f"booked by {b.get('label')} until {when(b['until'], now)} ({note}booking {b.get('id')})"
+    if x.get("queued"):                  # fast-box-use D5
+        w = x["queued"]
+        return f"free, but {w.get('label')} waits in line first (since {when(w['since'], now)})"
     return f"held by {describe_lock(x)}"
 
 
@@ -840,6 +846,7 @@ class BoxLock:
         self.path = os.path.join(self.dir, re.sub(r"[^\w.@-]+", "_", host) + ".json")
         self.mutex = self.path[:-len(".json")] + ".mutex"
         self.bookings_path = self.path[:-len(".json")] + ".bookings.json"     # booking-and-panel D1
+        self.queue_path = self.path[:-len(".json")] + ".queue.json"           # fast-box-use D5
         self.activity_path = os.path.join(self.dir, "activity.jsonl")         # D4
         h = os.environ.get("DESKTAPE_HOLDER") or os.environ.get("CLAUDE_CODE_SESSION_ID")
         self.holder, self.keeps = (h, True) if h else (f"pid{os.getpid()}", False)
@@ -932,6 +939,11 @@ class BoxLock:
             if other:
                 return other
             mine = cur and cur.get("holder") == self.holder
+            line = self._live_queue()
+            if line and not mine and line[0]["holder"] != self.holder and not self.own_booking_active():
+                return {"queued": line[0]}           # fast-box-use D5: the first waiter goes first
+            if any(w["holder"] == self.holder for w in line):
+                self._write_queue([w for w in line if w["holder"] != self.holder])
             if cur and not mine:
                 logger.info("taking %s over from %s: its process is gone and its lease is %s",
                             self.host, describe_lock(cur), "over" if (cur.get("until") or 0) <= self.now()
@@ -954,11 +966,17 @@ class BoxLock:
         """booking-handover D2: this project's active booking was used now; another project's idle one yielded.
         Called under the mutex."""
         now, items, changed = self.now(), self.read_bookings(), False
-        for b in items:
+        for b in list(items):
             if not b["from"] <= now < b["until"]:
                 continue
             if b.get("label") == self.label:
                 b["used"], changed = now, True
+            elif command is not None and not b.get("used") and now - b["from"] >= BOOK_NOSHOW:
+                logger.warning("%s: the booking of %s was not used in its first %d min; removed as a no-show",
+                               self.host, describe_booking(b, now), BOOK_NOSHOW // 60)
+                self.log("noshow", id=b.get("id"), owner=b.get("label"), note=b.get("note"), command=command)
+                items.remove(b)
+                changed = True
             elif command is not None and booking_idle(b, now) >= BOOK_IDLE:
                 logger.warning("%s: the booking of %s has not been used for %d min; it yields to %s for %r",
                                self.host, describe_booking(b, now), booking_idle(b, now) // 60, self.label, command)
@@ -981,23 +999,91 @@ class BoxLock:
         except Exception as e:
             logger.warning("%s: could not record that %s waits: %s", self.host, self.label, e)
 
-    def acquire(self, command, wait=LOCK_WAIT):
-        end, told = time.time() + wait, False
-        while True:
-            other = self.try_acquire(command)
-            if not other:
-                logger.debug("lock on %s taken by %s (pid %s) for %r", self.host, self.label, os.getpid(), command)
-                self.warn_next_booking()
-                return
-            if not told:
-                if other.get("booking"):         # booking-handover D3: also when it gives up at once
-                    self.note_waiting(other["booking"])
-                if time.time() < end:
-                    logger.info("%s is %s; waiting up to %d s", self.host, describe_block(other), wait)
-                told = True
-            if time.time() >= end:
-                raise TargetBusy(f"{self.host} is {describe_block(other)}; try again later")
-            time.sleep(2.0)
+    def acquire(self, command, wait=LOCK_WAIT, queue=None):
+        """Take the target, waiting up to `wait` s; with `queue` (seconds), wait that long in the target's line of
+        waiters instead (fast-box-use D5)."""
+        if queue:
+            wait = queue
+        end, told, place = time.time() + wait, False, None
+        try:
+            while True:
+                other = self.try_acquire(command)
+                if not other:
+                    logger.debug("lock on %s taken by %s (pid %s) for %r", self.host, self.label, os.getpid(), command)
+                    self.warn_next_booking()
+                    return
+                if not told:
+                    if other.get("booking"):         # booking-handover D3: also when it gives up at once
+                        self.note_waiting(other["booking"])
+                    if time.time() < end:
+                        logger.info("%s is %s; waiting up to %d s%s", self.host, describe_block(other), wait,
+                                    " in line" if queue else "")
+                    told = True
+                if queue:
+                    now_place = self.queue_join()
+                    if now_place != place:
+                        logger.info("%s: %s is number %d in line", self.host, self.label, now_place)
+                        place = now_place
+                if time.time() >= end:
+                    raise TargetBusy(f"{self.host} is {describe_block(other)}; try again later")
+                time.sleep(2.0)
+        except BaseException:
+            if queue:
+                self.queue_leave()
+            raise
+
+    # ---- the line of waiters (fast-box-use D5) ----
+
+    def _read_queue(self):
+        try:
+            items = json.load(open(self.queue_path, encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except ValueError:
+            logger.warning("unreadable queue file %s: treating the line as empty", self.queue_path)
+            return []
+        return [w for w in items if isinstance(w, dict) and w.get("holder")]
+
+    def _live_queue(self):
+        """The waiters whose process still runs, first come first. Called under the mutex; drops the dead."""
+        items = self._read_queue()
+        live = [w for w in items if self.alive(w.get("pid"))]
+        if len(live) != len(items):
+            gone = [w.get("label") for w in items if w not in live]
+            logger.info("%s: dropped %d waiter(s) whose process is gone from the line: %s", self.host,
+                        len(items) - len(live), ", ".join(map(str, gone)))
+            self._write_queue(live)
+        return live
+
+    def _write_queue(self, items):
+        if items:
+            json.dump(items, open(self.queue_path, "w", encoding="utf-8"), ensure_ascii=False)
+        elif os.path.exists(self.queue_path):
+            os.remove(self.queue_path)
+
+    def queue_join(self):
+        """Join the line once; returns this session's place in it (1 = next)."""
+        def put():
+            line = self._live_queue()
+            if not any(w["holder"] == self.holder for w in line):
+                line.append({"holder": self.holder, "label": self.label, "pid": os.getpid(), "since": self.now()})
+                self._write_queue(line)
+            return 1 + next(i for i, w in enumerate(line) if w["holder"] == self.holder)
+        return self._under_mutex(put)
+
+    def queue_leave(self):
+        def drop():
+            line = self._read_queue()
+            if any(w["holder"] == self.holder for w in line):
+                self._write_queue([w for w in line if w["holder"] != self.holder])
+        try:
+            self._under_mutex(drop)
+        except Exception as e:
+            logger.warning("%s: could not leave the line: %s", self.host, e)
+
+    def own_booking_active(self):
+        now = self.now()
+        return any(b.get("label") == self.label and b["from"] <= now < b["until"] for b in self.read_bookings())
 
     def warn_next_booking(self):
         """D2 rule 5: another project's booking starts soon; the command runs, but is told. booking-handover D3:
@@ -1257,9 +1343,9 @@ def passed(lk, step):
 
 
 @contextlib.contextmanager
-def box_lock(host, command, exclusive=False):
+def box_lock(host, command, exclusive=False, queue=None):
     lk = BoxLock(host, exclusive=exclusive)
-    lk.acquire(command)
+    lk.acquire(command, queue=queue)
     t0, err = time.time(), None
     try:
         yield lk
@@ -4256,7 +4342,7 @@ def cmd_run(a):
     tape["_answers"] = answers
     tape_boxes = boxes(tape.get("redact", []), "tape redact")
     redacting = bool(tape_boxes) or any("redact" in s and s["redact"] for s, _ in plan)
-    with box_lock(a.host, f"run {a.tape}", exclusive=getattr(a, "exclusive", False)) as lk:    # box-lock: after the offline checks, so a broken tape never waits
+    with box_lock(a.host, f"run {a.tape}", exclusive=getattr(a, "exclusive", False), queue=queue_wanted(a)) as lk:    # box-lock: after the offline checks, so a broken tape never waits
         if uploads:                                  # data-driven-import: now the real target paths
             values = upload_vars(a.host, uploads, values)
             plan = [(substitute(s, values), e) for s, e in resolve_all(tape["steps"], amap)]
@@ -4593,7 +4679,7 @@ def fold_repeats(lines):
 
 
 def cmd_look(a):
-    with box_lock(a.host, "look") as lk:
+    with box_lock(a.host, "look", queue=queue_wanted(a)) as lk:
         try:
             rc = look(a)
         except RuntimeError as e:
@@ -4643,6 +4729,118 @@ def look(a):
     return 0
 
 
+def queue_wanted(a):
+    """fast-box-use D5: seconds to wait in line, or None: `--wait-queue` or DESKTAPE_QUEUE=1, up to --queue-max."""
+    if not (getattr(a, "wait_queue", False) or os.environ.get("DESKTAPE_QUEUE") == "1"):
+        return None
+    return parse_duration(getattr(a, "queue_max", None) or "60m")
+
+
+# ---- wait on the controller (fast-box-use D1-D3) --------------------------------------------------
+
+WAIT_EVERY = 10.0       # D1: seconds between two polls
+WAIT_EVERY_MIN = 2.0
+WAIT_TIMEOUT = 30 * 60.0
+
+
+def wait_condition(a, amap):
+    """D2: ("for" | "gone", selector dict) or ("window", None) from `--for`, `--gone` and `--window`."""
+    given = [k for k in ("for_", "gone") if getattr(a, k, None)]
+    if len(given) > 1:
+        raise SystemExit("wait: give --for or --gone, not both")
+    if not given:
+        if not a.window:
+            raise SystemExit("wait: give --for SEL, --gone SEL, or --window TITLE alone")
+        return "window", None
+    kind = "for" if given[0] == "for_" else "gone"
+    raw = getattr(a, given[0])
+    v = yaml.safe_load(raw) if raw.lstrip().startswith(("{", "[")) else raw
+    step, _ = resolve({"expect" if kind == "for" else "absent": v}, amap)
+    sel = next(iter(step.values()))
+    sel = sel if isinstance(sel, dict) else {"label": sel}
+    check_selectors([(step, None)])
+    return kind, sel
+
+
+def wait_limits(a):
+    """D1, D2: the poll interval and the timeout, in seconds, within their limits."""
+    num = lambda t: float(t) if re.fullmatch(r"\d+(\.\d+)?", str(t).strip()) else parse_duration(t)
+    every, timeout = num(a.every), parse_duration(a.timeout)
+    if every < WAIT_EVERY_MIN:
+        raise SystemExit(f"wait: --every is at least {WAIT_EVERY_MIN:.0f} s")
+    if not 0 < timeout <= BOOK_MAX:
+        raise SystemExit(f"wait: --timeout is more than 0 and at most {BOOK_MAX / 3600:.0f} h")
+    return every, timeout
+
+
+def wait_poll(make, title, kind, sel):
+    """D1: one read on a new connection. Returns (the condition holds, the tree read or None)."""
+    cua = make()
+    try:
+        r = Runner(cua, "test")
+        r.focus({"title": title, "timeout": 1})
+        if kind == "window":
+            return True, None
+        r.snapshot()
+        hit = r.find(sel.get("label"), sel.get("role"), sel.get("prefix", False), sel.get("nth", 1),
+                     id=sel.get("id"), field=sel.get("field"))
+        if kind == "for":
+            return hit is not None, r.tree
+        return (hit is None and not getattr(r, "busy", False)), r.tree
+    finally:
+        cua.close()
+
+
+def wait_loop(poll, every, timeout, now=time.time, sleep=time.sleep):
+    """D1: poll until the condition holds or the timeout. A failed poll is "not yet", warned once per kind.
+    Returns (held, seconds, polls, the last tree read)."""
+    start, polls, last, warned = now(), 0, None, set()
+    while True:
+        polls += 1
+        try:
+            held, tree = poll()
+        except Exception as e:
+            held, tree = False, None
+            why = type(e).__name__ + (": no window" if str(e).startswith("no window titled") else "")
+            if why not in warned:
+                warned.add(why)
+                logger.warning("wait: not yet (%s); polling on every %.0f s", str(e)[:200], every)
+        if tree is not None:
+            last = tree
+        took = now() - start
+        if held:
+            logger.info("wait: the condition held after %.0f s and %d polls", took, polls)
+            return True, took, polls, last
+        if took + every > timeout:
+            logger.info("wait: timed out after %.0f s and %d polls", took, polls)
+            return False, took, polls, last
+        sleep(every)
+
+
+def cmd_wait(a):
+    amap = load_map(a.map)
+    kind, sel = wait_condition(a, amap)
+    every, timeout = wait_limits(a)
+    title = window_title(a)
+    what = f"window {title!r}" if kind == "window" else \
+        f"{'--for' if kind == 'for' else '--gone'} {sel_name(sel)!r}" + (f" in {title!r}" if a.window else "")
+    with box_lock(a.host, f"wait {what}", queue=queue_wanted(a)) as lk:
+        run_dir = new_run_dir("wait", "adhoc")
+        audit = os.path.join(run_dir, "audit.jsonl")
+        lk.status(state="running", step=f"wait {what}")
+        held, took, polls, last = wait_loop(lambda: wait_poll(lambda: Cua(a.host, audit), title, kind, sel),
+                                            every, timeout)
+        lk.status(state="ok" if held else "failed", step=f"wait {what}", error=None if held else "wait timed out")
+    if held:
+        print(f"ok: {what} after {took:.0f} s ({polls} polls)")
+        return 0
+    near = nearest_labels(last or "", sel.get("label"), sel.get("role")) if sel and sel.get("label") else []
+    limit = f"{timeout / 60:.0f} min" if timeout >= 120 else f"{timeout:.0f} s"
+    print(f"TIMEOUT: {what} did not happen within {limit} ({polls} polls)"
+          + (f"; nearest: {', '.join(near)}" if near else "") + f"\nrun folder: {run_dir}")
+    return 1
+
+
 def append_step(tape_path, step):
     """Append one step to the tape's `steps:` list, keeping the file's comments (steps must be last)."""
     tape = yaml.safe_load(open(tape_path, encoding="utf-8"))
@@ -4682,7 +4880,7 @@ def cmd_act(a):
         items.append((step, substitute(s, values), entry))
     deny = deny_entries(amap)
     label = " ".join(a.step if isinstance(a.step, list) else [a.step])
-    with box_lock(a.host, f"act {label}", exclusive=getattr(a, "exclusive", False)) as lk:
+    with box_lock(a.host, f"act {label}", exclusive=getattr(a, "exclusive", False), queue=queue_wanted(a)) as lk:
         if uploads:
             up = upload_vars(a.host, uploads, values)
             items = [(step, substitute(resolve(step, amap)[0], up), entry) for step, _, entry in items]
@@ -5528,7 +5726,7 @@ def cmd_knowledge(a):
 
 def cmd_tidy(a):
     """scene-tidy: the `tidy` step outside a tape, between takes."""
-    with box_lock(a.host, "tidy") as lk:
+    with box_lock(a.host, "tidy", queue=queue_wanted(a)) as lk:
         run_dir = new_run_dir("tidy", "adhoc")
         cua = Cua(a.host, os.path.join(run_dir, "audit.jsonl"))
         r = Runner(cua, "test")
@@ -7208,6 +7406,124 @@ def cmd_panel(a):
 
 # ---- offline selftest --------------------------------------------------------------------------
 
+def selftest_fast_box_use():
+    """fast-box-use: the controller-side wait (D1-D3) and the line of waiters (D5); D4 is in selftest_booking_panel."""
+    level = logger.level
+    logger.setLevel(logging.CRITICAL)
+    keys = ("DESKTAPE_HOLDER", "CLAUDE_CODE_SESSION_ID", "DESKTAPE_LABEL", "XDG_STATE_HOME", "DESKTAPE_QUEUE")
+    env = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        # D1: the loop: a held condition ends it, a failed poll is "not yet", the timeout ends it unsuccessfully
+        clock = [0.0]
+        answers = iter([RuntimeError("no window titled 'Claude' (waited 1 s)"), (False, "t1"), (True, "t2")])
+
+        def poll():
+            x = next(answers)
+            if isinstance(x, Exception):
+                raise x
+            return x
+        sleep = lambda s: clock.__setitem__(0, clock[0] + s)
+        held, took, polls, last = wait_loop(poll, 10, 60, now=lambda: clock[0], sleep=sleep)
+        assert held and took == 20 and polls == 3 and last == "t2", (held, took, polls, last)
+        clock[0] = 0.0
+        held, took, polls, last = wait_loop(lambda: (False, "same"), 10, 60, now=lambda: clock[0], sleep=sleep)
+        assert not held and polls == 7 and took == 60 and last == "same", (held, took, polls)
+
+        # D2: the conditions and limits
+        ns = lambda **k: argparse.Namespace(**{"for_": None, "gone": None, "window": None, "every": "10",
+                                               "timeout": "30m", **k})
+        assert wait_condition(ns(window="Setup"), None) == ("window", None)
+        assert wait_condition(ns(for_="Needs your approval"), None) == ("for", {"label": "Needs your approval"})
+        assert wait_condition(ns(gone='{label: Stop, role: Button}'), None) == ("gone", {"label": "Stop", "role": "Button"})
+        amap = {"app": "x", "window": "Claude", "elements": {"stop": {"label": "Stop response", "role": "Button"}}}
+        assert wait_condition(ns(gone="@stop"), amap)[1]["label"] == "Stop response"
+        for bad in (ns(), ns(for_="a", gone="b")):
+            try:
+                wait_condition(bad, None); raise AssertionError("expected SystemExit")
+            except SystemExit:
+                pass
+        assert wait_limits(ns(every="2", timeout="4h")) == (2.0, 4 * 3600.0)
+        assert wait_limits(ns(every="30s", timeout="70m")) == (30.0, 4200.0)
+        for bad in (ns(every="1"), ns(timeout="5h")):
+            try:
+                wait_limits(bad); raise AssertionError("expected SystemExit")
+            except SystemExit:
+                pass
+
+        # D1: one poll reads a window on its own connection and closes it
+        class Fake:
+            def __init__(self, labels, wins=("Claude",)):
+                self.labels, self.wins, self.closed = labels, wins, False
+            def call(self, tool, args, secret=False, timeout=None):
+                if tool == "list_windows":
+                    return {"windows": [{"title": t, "pid": 7, "window_id": i} for i, t in enumerate(self.wins)]}, ""
+                if tool == "get_window_state":
+                    tree = '- Window "Claude"\n' + "\n".join(f'  - [{i}] Button "{l}"' for i, l in enumerate(self.labels))
+                    return {"elements": [{"label": l, "role": "Button", "element_index": i}
+                                         for i, l in enumerate(self.labels)]}, tree
+                return {}, "ok"
+            def close(self):
+                self.closed = True
+        f = Fake(["Needs your approval"])
+        assert wait_poll(lambda: f, "Claude", "for", {"label": "Needs", "prefix": True})[0] and f.closed
+        assert not wait_poll(lambda: Fake(["Run now"]), "Claude", "for", {"label": "Needs your approval"})[0]
+        assert wait_poll(lambda: Fake(["Run now"]), "Claude", "gone", {"label": "Stop"})[0]
+        assert not wait_poll(lambda: Fake(["Stop"]), "Claude", "gone", {"label": "Stop"})[0]
+        assert wait_poll(lambda: Fake([], ("Claude", "Setup")), "Setup", "window", None) == (True, None)
+        f = Fake([], ("Claude",))
+        try:
+            wait_poll(lambda: f, "Setup", "window", None); raise AssertionError("expected RuntimeError")
+        except RuntimeError as e:
+            assert "no window titled" in str(e) and f.closed       # not yet, and the connection is closed
+
+        # D5: the line of waiters
+        with tempfile.TemporaryDirectory() as d:
+            clock, live = [time.time()], set()
+
+            def as_(holder, label):
+                os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = holder, label
+                return BoxLock("user@box", d, alive=lambda p: p in live, now=lambda: clock[0])
+            p, q, r = as_("P", "proj-p"), as_("Q", "proj-q"), as_("R", "proj-r")
+            assert p.try_acquire("look") is None; p.release()          # P's lease
+            qpid, rpid = os.getpid() + 200001, os.getpid() + 200002
+            live |= {qpid, rpid}
+            p._write_queue([{"holder": "Q", "label": "proj-q", "pid": qpid, "since": clock[0]},
+                            {"holder": "R", "label": "proj-r", "pid": rpid, "since": clock[0] + 1}])
+            assert p.try_acquire("look") is None; p.release()          # the holder's own next command is not held up
+            clock[0] += LEASE + 1                                        # P's lease is over
+            blk = r.try_acquire("act x")
+            assert blk.get("queued", {}).get("label") == "proj-q" and "waits in line" in describe_block(blk), blk
+            assert q.try_acquire("look") is None                        # the first waiter goes first, and leaves
+            assert [w["holder"] for w in q._read_queue()] == ["R"]
+            q.release(); clock[0] += LEASE + 1
+            assert r.try_acquire("act x") is None and not os.path.exists(r.queue_path)
+            r.release(); r.unlock()
+            # a waiter that died is dropped
+            p._write_queue([{"holder": "Q", "label": "proj-q", "pid": os.getpid() + 200009, "since": clock[0]}])
+            assert r.try_acquire("look") is None and not r._read_queue()
+            r.release(); r.unlock()
+            # a project inside its own booking does not wait behind the line
+            p._write_queue([{"holder": "Q", "label": "proj-q", "pid": qpid, "since": clock[0]}])
+            p.book(clock[0], 1800)
+            assert p.try_acquire("look") is None, "booking beats the line"
+            p.release(); p.unlock(); p.unbook(None)
+            # queue_join puts this session in line once and names its place; leaving takes it out
+            q._write_queue([{"holder": "R", "label": "proj-r", "pid": rpid, "since": clock[0]}])
+            assert q.queue_join() == 2 and q.queue_join() == 2
+            q.queue_leave(); assert [w["holder"] for w in q._read_queue()] == ["R"]
+            # queue_wanted: the flag, the environment, the limit
+            assert queue_wanted(argparse.Namespace()) is None
+            assert queue_wanted(argparse.Namespace(wait_queue=True, queue_max="10m")) == 600
+            os.environ["DESKTAPE_QUEUE"] = "1"
+            assert queue_wanted(argparse.Namespace()) == 3600
+    finally:
+        for k, v in env.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        logger.setLevel(level)
+
+
 def selftest_booking_panel():
     """booking-and-panel: bookings and their limits, the lock's booking rules, the activity log, the panel."""
     level = logger.level
@@ -7321,16 +7637,16 @@ def selftest_booking_panel():
             assert not t["lock"]["held"] and not t["lock"]["running"] and t["activity"][0]["event"] in ("book", "unbook")
             st = panel_status([("box", "user@box", {})], directory=d, now=base + 100, alive=lambda p: False)
             assert st["targets"][0]["lock"]["held"] and st["targets"][0]["booked_now"] is None   # Q's lease, before P
-            # booking-handover D2: a booking unused for 10 min yields; its project's own use keeps it
+            # booking-handover D2: a booking unused for 5 min (fast-box-use D4) yields; its project's own use keeps it
             p1.unlock(); q.unlock(); p1._write_bookings([]); clock[0] = base
             pb, _ = p1.book(base, 3600)
-            clock[0] = base + 300
-            assert q.try_acquire("look").get("booking")                         # 5 min after its start: still P's
-            assert p1.try_acquire("look") is None; p1.release(); p1.unlock()   # P uses it at +5 min
-            clock[0] = base + 300 + BOOK_IDLE - 5
-            assert q.try_acquire("look").get("booking")                         # unused 9:55: still P's
-            clock[0] = base + 300 + BOOK_IDLE + 1
-            assert q.try_acquire("look") is None and q.read()["holder"] == "Q"   # unused 10 min: yields to Q
+            clock[0] = base + 240
+            assert q.try_acquire("look").get("booking")                         # 4 min after its start: still P's
+            assert p1.try_acquire("look") is None; p1.release(); p1.unlock()   # P uses it at +4 min
+            clock[0] = base + 240 + BOOK_IDLE - 5
+            assert q.try_acquire("look").get("booking")                         # unused 4:55: still P's
+            clock[0] = base + 240 + BOOK_IDLE + 1
+            assert q.try_acquire("look") is None and q.read()["holder"] == "Q"   # unused 5 min: yields to Q
             assert any(a["event"] == "yield" and a["owner"] == "proj-p" for a in read_activity(d))
             q.release()
             assert p1.try_acquire("look") is None                               # P is back: its booking beats Q's lease
@@ -7360,6 +7676,21 @@ def selftest_booking_panel():
             assert "has no booking" in p1.unbook(None) and q.unbook(None) is None and q.read_bookings() == []
             p1.book(base + 7200, 600); p1.book(base + 9000, 600)
             assert "has 2 bookings" in p1.unbook(None)
+            # fast-box-use D4: a booking never used is removed 10 min after its start; a used one is not
+            p1.unlock(); q.unlock(); p1._write_bookings([]); clock[0] = base
+            ns, _ = p1.book(base, 3600, "never used")
+            clock[0] = base + BOOK_NOSHOW - 5
+            assert q.try_acquire("look") is None and any(b["id"] == ns["id"] for b in q.read_bookings())  # idle: yields
+            q.release(); q.unlock()
+            clock[0] = base + BOOK_NOSHOW + 1
+            assert q.try_acquire("look") is None and not q.read_bookings()      # a no-show: gone
+            assert any(a["event"] == "noshow" and a["id"] == ns["id"] and a["note"] == "never used" for a in read_activity(d))
+            q.release(); q.unlock(); clock[0] = base
+            us, _ = p1.book(base, 3600)
+            assert p1.try_acquire("look") is None; p1.release(); p1.unlock()    # used at once
+            clock[0] = base + BOOK_NOSHOW + 1
+            assert q.try_acquire("look") is None and q.read_bookings()          # idle, so it yields, but it stays
+            q.release(); q.unlock(); p1._write_bookings([])
         # D4: box_lock writes an end line, also when the command fails
         with tempfile.TemporaryDirectory() as d:
             os.environ["XDG_STATE_HOME"], os.environ["DESKTAPE_HOLDER"], os.environ["DESKTAPE_LABEL"] = d, "A", "proj-a"
@@ -9881,6 +10212,7 @@ def selftest():
     selftest_mac_file_dialog()
     selftest_knowledge()
     selftest_booking_panel()
+    selftest_fast_box_use()
     selftest_click_offscreen()
     selftest_run_level()
     selftest_browser_page()
@@ -10219,19 +10551,30 @@ def main():
     p.add_argument("--var", action="append", metavar="NAME=VALUE", help="a tape variable; NAME=@file uploads the file")
     p.add_argument("--exclusive", action="store_true",
                    help="no other command of this session on the target while this one runs (exclusive-act)")
-    p = sub.add_parser("look"); p.add_argument("--window"); p.add_argument("--map")
+    queued = []          # fast-box-use D5: the commands that can wait in line
+    queued.append(p)
+    p = sub.add_parser("look"); p.add_argument("--window"); p.add_argument("--map"); queued.append(p)
     p.add_argument("--ocr", action="store_true"); p.add_argument("--full", action="store_true")
     p.add_argument("--text", action="store_true", help="add the window's text nodes")
     p.add_argument("--new", action="store_true", help="only lines that changed since the last look")
     p.add_argument("--grep", metavar="PATTERN", help="only lines matching this regex (case-insensitive)")
     p.add_argument("--all", action="store_true", help="ignore the map's ignore regions")
     p = sub.add_parser("act"); p.add_argument("step", nargs="+", help="one or more steps (act-several-steps)")
+    queued.append(p)
     p.add_argument("--map"); p.add_argument("--window")
     p.add_argument("--new", action="store_true", help="then the window's lines that changed since the last look")
     p.add_argument("--append")
     p.add_argument("--var", action="append", metavar="NAME=VALUE", help="a tape variable; NAME=@file uploads the file")
     p.add_argument("--exclusive", action="store_true",
                    help="no other command of this session on the target while this one runs (exclusive-act)")
+    p = sub.add_parser("wait", help="wait on the controller until an element appears or goes, or a window opens "
+                                    "(fast-box-use)")
+    p.add_argument("--for", dest="for_", metavar="SEL", help="a selector as `expect` takes it: YAML or @map.entry")
+    p.add_argument("--gone", metavar="SEL", help="a selector as `absent` takes it")
+    p.add_argument("--window", help="the window to read; alone: wait until a window with this title exists")
+    p.add_argument("--map"); p.add_argument("--timeout", default="30m", help="at most 4h (default 30m)")
+    p.add_argument("--every", default=str(WAIT_EVERY), help="seconds between polls (default 10, at least 2)")
+    queued.append(p)
     sub.add_parser("lock", help="who holds the target (box-lock)")
     sub.add_parser("unlock", help="give back this session's lock on the target now")
     sub.add_parser("targets", help="the named targets, with lock and status")
@@ -10279,6 +10622,12 @@ def main():
     p.add_argument("--keep", action="append", default=[], metavar="NAME", help="a program name or a window title's start")
     p.add_argument("--minimize", action="append", default=[], metavar="NAME", help="a program name or a window title's start to minimise")
     p.add_argument("--timeout", type=float, default=TIDY_WAIT, help="seconds each program has to close")
+    queued.append(p)
+    for q in queued:
+        q.add_argument("--wait-queue", action="store_true",
+                       help="when the target is held, wait in its line of waiters instead of stopping after 60 s; "
+                            "DESKTAPE_QUEUE=1 sets it (fast-box-use)")
+        q.add_argument("--queue-max", default="60m", help="how long to wait in line (default 60m)")
     p = sub.add_parser("status", help="the target's session: state, last step, last good step, strikes")
     p.add_argument("--json", action="store_true")
     # Old form kept: `desktape.py TAPE [--mode …]` means `run`.
@@ -10309,7 +10658,7 @@ def main():
             ap.error("no target: pass --target NAME or --host user@host, set DESKTAPE_TARGET or DESKTAPE_HOST, "
                      f"or name a default in {targets_path()}")
         return {"run": cmd_run, "look": cmd_look, "act": cmd_act, "lock": cmd_lock, "unlock": cmd_unlock,
-                "status": cmd_status, "tidy": cmd_tidy, "record": cmd_record, "book": cmd_book,
+                "status": cmd_status, "tidy": cmd_tidy, "wait": cmd_wait, "record": cmd_record, "book": cmd_book,
                 "unbook": cmd_unbook, "handover": cmd_handover, "find": cmd_find}[a.cmd](a)
     except TargetBusy as e:        # box-lock D3: another session drives this target
         print(f"desktape: {e}", file=sys.stderr)
