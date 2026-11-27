@@ -14,5 +14,6 @@
 - [ ] 3.2 Agree the statement format with devauth; its binding and tool (D4) — blocked: owner decision in the devauth repo [REQ: a-click-on-a-system-prompt-needs-a-devauth-authorization]
 
 ## 4. Close
-- [ ] 4.1 Selftests, `docs/tape-format.md`, `targets.example.yaml`, CHANGELOG [REQ: the-target-profile-decides-real-input]
-- [ ] 4.2 Measured end to end on the Mac: a consent prompt answered by an agent step with a devauth authorization [REQ: a-click-on-a-system-prompt-needs-a-devauth-authorization]
+- [x] 4.1 Selftests, `docs/tape-format.md`, `targets.example.yaml`, CHANGELOG [REQ: the-target-profile-decides-real-input]
+- [x] 4.2a Measured on the Mac: an agent's real click refused without a booking on a personal machine, sent with one (`docs/MEASURED.md`) [REQ: the-target-profile-decides-real-input]
+- [ ] 4.2 Measured end to end on the Mac: a consent prompt answered by an agent step with a devauth authorization (after 3.2) [REQ: a-click-on-a-system-prompt-needs-a-devauth-authorization]

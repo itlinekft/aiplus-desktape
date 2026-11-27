@@ -834,6 +834,24 @@ clicked its "Allow" button on the panel's zoomed frame.
   helper (`helper click`, `why: driver: not in front` in the panel's audit), and the prompt closed. The helper started
   in 0.1 s; the click needed no second try.
 
+## 2026-11-27: an agent's real click on macOS, decided by the target profile
+
+**Machine:** a Mac mini (macOS 26.4, arm64), Cua Driver 0.55.0, profile with `tidy: minimize` (so `use: personal`),
+from the Linux controller. Owner's OK for one click in the Claude window.
+
+```bash
+python3 desktape.py act --target <mac> '{key: {key: "", into: "Claude", os: true, at: {window: centre, dy: 525}}}'
+python3 desktape.py book --target <mac> --for 5m --note "…"      # then the same act again
+```
+
+- Without a booking: refused, "a personal machine (use: personal) and this session has no active booking there;
+  book it first. Nothing was clicked". After the fix in this change nothing on the screen moved either (the first
+  try had raised the window before the check).
+- With the session's own booking: the window raised, `front-at 960 555` named Claude topmost (layer 0), the helper's
+  `click` sent; the step took about 1.7 s, 0.45 s for `front-at` and 0.54 s for the click over SSH.
+- The driver's bounds and the system's window list agree in points on this Mac (Claude at 0,30 1920x1050 in both).
+- Not measured here: a real click refused on a system prompt ("needs a person (panel click)"): selftest only.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

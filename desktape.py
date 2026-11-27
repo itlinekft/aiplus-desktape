@@ -2147,17 +2147,23 @@ class NeedsPerson(AssertionError):
     """real-click-policy D3a: a real click would answer a system prompt; that stays a person's act (panel click)."""
 
 
-def mac_real_click(host, window, x, y, audit=None, label=None, bookings=None, now=None):
-    """real-click-policy D1-D3a: one real click at screen point (x, y), in points, through desktape's input helper,
-    only when the system's window list has `window` topmost there; on a personal target only inside the session's
-    own booking. A point on a system prompt is refused: answering it is a person's act. Nothing is clicked otherwise."""
+def real_click_allowed(host, what, label=None, bookings=None, now=None):
+    """real-click-policy D2: on a personal machine real input needs this session's own active booking. Checked before
+    anything on the target moves (a window raised is already a change on a person's screen)."""
     now = now or time.time()
     if target_use(host) == "personal":
         mine = [b for b in (BoxLock(host).read_bookings() if bookings is None else bookings)
                 if b.get("from", 0) <= now < b.get("until", 0) and b.get("label") == (label or BoxLock(host).label)]
         if not mine:
-            raise AssertionError(f"real click at {x:.0f},{y:.0f}: {host} is a personal machine (use: personal) and "
-                                 "this session has no active booking there; book it first. Nothing was clicked")
+            raise AssertionError(f"{what}: {host} is a personal machine (use: personal) and this session has no "
+                                 "active booking there; book it first. Nothing was clicked")
+
+
+def mac_real_click(host, window, x, y, audit=None, label=None, bookings=None, now=None):
+    """real-click-policy D1-D3a: one real click at screen point (x, y), in points, through desktape's input helper,
+    only when the system's window list has `window` topmost there; on a personal target only inside the session's
+    own booking. A point on a system prompt is refused: answering it is a person's act. Nothing is clicked otherwise."""
+    real_click_allowed(host, f"real click at {x:.0f},{y:.0f}", label, bookings, now)
     at = mac_front_at(host, x, y, audit)
     top = at[0] if at else {}
     if top.get("window_id") == window.get("window_id") or (top.get("pid") == window.get("pid") and top.get("layer") == 0):
@@ -3573,12 +3579,14 @@ class Runner:
         """real-click-policy D1/D2: an `os: true` step with an anchored `at` on macOS: the window raised and in front,
         then one real click through desktape's input helper, aimed at that window, then `click_wait`. The driver is
         not asked to click; desktape's own rules decide (the target's `use:`, the window at the point)."""
+        real_click_allowed(self.cua.host, f"real click in {a['into']!r}")      # before the window is raised
         self.check_front(a["into"])
         w, x, y = self.anchored_point(a["into"], a["at"])
         top = mac_real_click(self.cua.host, w, x, y, self.cua.audit)
         logger.info("real click at %d,%d in %r (%s)", x, y, a["into"], top.get("app"))
         self.dirty = True
-        time.sleep(float(a.get("click_wait", self.click_wait)))
+        wait = a.get("click_wait", self.click_wait)
+        time.sleep(0.3 if wait is None else float(wait))       # os-input.ps1's own default, as on Windows
 
     def anchored_point(self, title, at):
         """form-replay D2: (window, x, y) of an anchored click point, in screen pixels: `{window: centre|left|right,
