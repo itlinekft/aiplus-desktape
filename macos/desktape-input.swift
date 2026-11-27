@@ -10,6 +10,8 @@
 //                                        "click <x> <y> <left|right|middle> <1-3>" a click (panel-mac-click)
 //   desktape-input front                 the ordinary windows front to back (top 6), as JSON lines
 //                                        {"window_id", "pid", "app", "alpha"}; the caller skips overlays
+//   desktape-input front-at <x> <y>      the windows containing that point, front to back, any layer, with
+//                                        "layer" and bounds (real-click-policy D1)
 //
 // Keys go where a real keyboard's go: to the window in front. That is what reaches a macOS file dialog, which
 // runs in a separate service process: the driver's keys go to the app's own process and never arrive there
@@ -134,6 +136,27 @@ case "front":
         let alpha = w[kCGWindowAlpha as String] as? Double ?? 1
         let app = (w[kCGWindowOwnerName as String] as? String ?? "").replacingOccurrences(of: "\"", with: "'")
         print("{\"window_id\": \(id), \"pid\": \(pid), \"app\": \"\(app)\", \"alpha\": \(alpha)}")
+    }
+case "front-at":
+    // real-click-policy D1/D5: the windows that contain a screen point, front to back, any layer (a system prompt is
+    // not on layer 0), with owner, layer and bounds in screen points; at most 4, so the caller can skip overlays
+    let n = a.dropFirst().compactMap { Double($0) }
+    guard n.count == 2 else { fail("front-at needs x and y") }
+    let p = CGPoint(x: n[0], y: n[1])
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]] ?? []
+    var shown = 0
+    for w in list {
+        guard shown < 4, let bd = w[kCGWindowBounds as String] as? NSDictionary,
+              let r = CGRect(dictionaryRepresentation: bd as CFDictionary), r.contains(p) else { continue }
+        let id = w[kCGWindowNumber as String] as? Int ?? 0
+        let pid = w[kCGWindowOwnerPID as String] as? Int ?? 0
+        let layer = w[kCGWindowLayer as String] as? Int ?? 0
+        let alpha = w[kCGWindowAlpha as String] as? Double ?? 1
+        let app = (w[kCGWindowOwnerName as String] as? String ?? "").replacingOccurrences(of: "\"", with: "'")
+        print("{\"window_id\": \(id), \"pid\": \(pid), \"app\": \"\(app)\", \"layer\": \(layer), \"alpha\": \(alpha), "
+              + "\"x\": \(Int(r.minX)), \"y\": \(Int(r.minY)), \"w\": \(Int(r.width)), \"h\": \(Int(r.height))}")
+        shown += 1
     }
 default:
     fail("unknown command \(cmd)")

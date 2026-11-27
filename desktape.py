@@ -2132,6 +2132,17 @@ def mac_input(host, *args, audit=None, secret=False, stdin=None):
 OVERLAY_APPS = {"Cua Driver", "CuaDriver"}    # the agent cursor is an ordinary-layer window that never takes keys
 
 
+def mac_front_at(host, x, y, audit=None):
+    """real-click-policy D1/D5: the windows containing screen point (x, y) in points, front to back, any layer, from
+    the system's own window list, overlays and transparent windows left out."""
+    out = []
+    for line in mac_input(host, "front-at", round(x), round(y), audit=audit).splitlines():
+        w = json.loads(line)
+        if w.get("app") not in OVERLAY_APPS and float(w.get("alpha", 1)) > 0:
+            out.append(w)
+    return out
+
+
 def mac_front(host, audit=None):
     """The window a keyboard's events go to (mac-file-dialog D1): the first ordinary window, front to back, that is
     not an overlay, from the system's own window list. None when there is none."""
@@ -6715,6 +6726,11 @@ def mac_helper_click(g, args, refused, wait=10.0):
     if h is None:
         raise RuntimeError(f"{str(refused)[:200]} — the input helper is starting; click again")
     x, y = args["x"] / g.scale, args["y"] / g.scale
+    try:                        # real-click-policy D5: who owns what the person clicked, measured before it closes
+        at = [{k: w.get(k) for k in ("app", "pid", "layer", "window_id")} for w in mac_front_at(g.host, x, y)][:2]
+    except Exception as e:
+        at = None
+        logger.warning("panel: the window at %.0f,%.0f on %s not read: %s", x, y, g.host, e)
     t0 = time.time()
     h.send(f"click {x:.0f} {y:.0f} {args.get('button', 'left')} {args.get('count', 1)}")
     with g.inp_mu:              # one audit line per click, not a per-minute count: a person answered a system prompt
@@ -6722,10 +6738,11 @@ def mac_helper_click(g, args, refused, wait=10.0):
             g.inp.audit.write(json.dumps({"ts": round(t0, 3), "tool": "helper click", "ok": True,
                                           "args": {"x": round(x), "y": round(y), "button": args.get("button", "left"),
                                                    "count": args.get("count", 1)},
-                                          "ms": int((time.time() - t0) * 1000), "why": "driver: not in front"}) + "\n")
+                                          "ms": int((time.time() - t0) * 1000), "why": "driver: not in front",
+                                          "at": at}, ensure_ascii=False) + "\n")
             g.inp.audit.flush()
-    logger.info("panel: the driver refused a click on %s at %.0f,%.0f (not in front); sent through the input helper",
-                g.host, x, y)
+    logger.info("panel: the driver refused a click on %s at %.0f,%.0f (not in front); sent through the input helper "
+                "(at the point: %s)", g.host, x, y, at)
 
 
 def grabber_act(g, op, body):
@@ -7462,6 +7479,9 @@ def selftest_booking_panel():
             def send(self, line):
                 self.lines.append(line)
         TARGET_OS["user@mac"] = "macos"
+        real_front_at = globals()["mac_front_at"]
+        globals()["mac_front_at"] = lambda h, x, y, audit=None: [{"app": "UserNotificationCenter", "pid": 9, "layer": 8,
+                                                                  "window_id": 3}]
         with tempfile.TemporaryDirectory() as d:
             mg = FrameGrabber("user@mac", d, connect=MacDrv)
             mg.fresh, mg.frame, mg.frame_wh, mg.scale, mg.helpers = True, b"x", (2048, 1280), 2.0, False
@@ -7469,6 +7489,7 @@ def selftest_booking_panel():
             grabber_act(mg, "click", {"x": 2042, "y": 874})
             assert Helper.lines == ["click 1021 437 left 1"], Helper.lines
             assert '"helper click"' in mg.inp.audit.getvalue() and '"why": "driver: not in front"' in mg.inp.audit.getvalue()
+            assert '"app": "UserNotificationCenter"' in mg.inp.audit.getvalue(), "D5: the owner at the point is recorded"
             try:
                 grabber_act(mg, "click", {"x": 6000, "y": 1}); raise AssertionError("another refusal must reach the page")
             except RuntimeError as e:
@@ -7479,6 +7500,7 @@ def selftest_booking_panel():
                 raise AssertionError("expected the helper-starting refusal")
             except RuntimeError as e:
                 assert "click again" in str(e), e
+        globals()["mac_front_at"] = real_front_at
         TARGET_OS.pop("user@mac", None)
         # panel-control: the input mapping, the lock, the idle release, the token and Origin checks
         assert control_call("click", {"x": 10.4, "y": 20})[:2] == ("click", {"x": 10, "y": 20, "button": "left", "count": 1})

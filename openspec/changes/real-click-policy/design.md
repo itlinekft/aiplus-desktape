@@ -32,7 +32,23 @@ expiry (at most 120 s), the nonce not seen before (kept in the state dir), the t
 OCR'd text containing `prompt_text`, and the button found by OCR inside the prompt. Any mismatch: no click, a named
 failure. The private key is devauth's (its store, never readable by a session); desktape holds no secret.
 
-## D4. The devauth side (owned by itline-ai-devauth)
+## D3a. Today: a prompt needs a person
+
+Until a devauth grant binding is decided (D4), a real click on a system prompt fails with "needs a person (panel
+click)" — the way out that exists. The failure names only the field that stopped it, never the OCR'd text of a
+prompt, since the log may be shared.
+
+## D4. The devauth side (owned by the devauth repo; blocked on an owner decision there)
+
+The devauth repo answered 2026-11-27: in that repo a macOS TCC consent is written down as the person's act, so a
+signed grant needs the owner's decision recorded in a devauth session (his words verbatim in a change's
+proposal), not a bus request. It recommends keeping out, even then, a consent that widens the agent's own reach (the
+measured prompt granted Claude itself access). If the owner decides for it, the format keeps `ssh-keygen -Y` with
+namespace `desktape-grant` and a public-key-only signers file, plus: sign and verify the exact canonical bytes
+(sorted keys, no whitespace); add `binding` (the catalogue entry's name) and `machine` (the target's SSH host key
+fingerprint); `expires` an absolute UTC time capped at now+120 s; the nonce set stays.
+
+The original proposal for D4 follows.
 
 A catalogue entry kind for a grant binding (machine, prompt owner, prompt text, button), owner-approved like any
 other; a tool (or a `devauth_type` form) that, for an approved binding, signs the statement and runs desktape's

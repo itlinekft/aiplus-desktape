@@ -30,5 +30,5 @@ the authorization comes from devauth, the way a test password does.
 
 `desktape.py` (target profile `use:`, `Runner` click path on macOS, a grant check, `act`, the panel's audit line),
 `macos/desktape-input.swift` (`front` at a point), `docs/tape-format.md`, `targets.example.yaml`, selftests, the
-CHANGELOG. Coordinated with `itline-ai-devauth`, which owns the authorization side (its catalogue binding, its
+CHANGELOG. Coordinated with devauth (a private credential tool of the team), which owns the authorization side (its catalogue binding, its
 signing key, its tool). No new driver tool; no new Python dependency (`ssh-keygen -Y verify`).
