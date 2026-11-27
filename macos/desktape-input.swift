@@ -6,7 +6,8 @@
 //   desktape-input type -                the text from standard input (a secret never shows in the process list)
 //   desktape-input serve                 read lines from standard input until it ends, over one kept SSH
 //                                        connection (panel-live D2, D5): "move <x> <y>" (screen points) posts a
-//                                        mouse move, "key <combo>" a key, "text <base64 UTF-8>" the characters
+//                                        mouse move, "key <combo>" a key, "text <base64 UTF-8>" the characters,
+//                                        "click <x> <y> <left|right|middle> <1-3>" a click (panel-mac-click)
 //   desktape-input front                 the ordinary windows front to back (top 6), as JSON lines
 //                                        {"window_id", "pid", "app", "alpha"}; the caller skips overlays
 //
@@ -101,6 +102,24 @@ case "serve":
             if let k = key { post(k, flags) }
         } else if f.count == 2, f[0] == "text", let d = Data(base64Encoded: f[1]), let s = String(data: d, encoding: .utf8) {
             for ch in s { post(0, [], text: String(ch)) }
+        } else if f.count == 5, f[0] == "click", let x = Double(f[1]), let y = Double(f[2]), let n = Int(f[4]) {
+            // panel-mac-click D2: a person's click from the panel, where the driver refused (a system prompt)
+            let p = CGPoint(x: x, y: y)
+            let (down, up, button): (CGEventType, CGEventType, CGMouseButton) =
+                f[3] == "right" ? (.rightMouseDown, .rightMouseUp, .right)
+                : f[3] == "middle" ? (.otherMouseDown, .otherMouseUp, .center) : (.leftMouseDown, .leftMouseUp, .left)
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+            usleep(30_000)
+            for i in 1...max(1, min(n, 3)) {
+                for t in [down, up] {
+                    if let e = CGEvent(mouseEventSource: nil, mouseType: t, mouseCursorPosition: p, mouseButton: button) {
+                        e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
+                        e.post(tap: .cghidEventTap)
+                    }
+                    usleep(20_000)
+                }
+            }
         }
     }
 case "front":

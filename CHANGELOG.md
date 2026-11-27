@@ -6,6 +6,10 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- **A panel click reaches a macOS system prompt** (`panel-mac-click`): when the Mac's driver refuses a person's click
+  from the panel because the point is over an app that is "not the app in front" (a consent prompt drawn by a system
+  process), the panel sends the same click through desktape's own input helper as a real mouse click, with one audit
+  line per click. Other refusals still reach the page; tapes and `act` are unchanged.
 - **The panel shows each target's address** (`panel-address`): the tile header in the live grid and the status card
   give the IP the controller reaches the target on, the port when not 22, and the network: LAN, VPN (Tailscale's
   `100.64.0.0/10`), loopback or public.

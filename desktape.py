@@ -6702,6 +6702,32 @@ def control_call(op, body):
     raise ValueError(f"unknown control operation {op!r}")
 
 
+NOT_IN_FRONT = "which is not the app in front"      # the macOS driver's refusal of a desktop click (2026-11-27)
+
+
+def mac_helper_click(g, args, refused, wait=10.0):
+    """panel-mac-click D2/D3: a person's click from the panel that the driver refused on a Mac (a system prompt it does
+    not see), sent as a real click through desktape's own input helper at the same point, in screen points."""
+    h, end = g.helper_ready(), time.time() + wait
+    while h is None and time.time() < end:
+        time.sleep(0.25)
+        h = g.helper_ready()
+    if h is None:
+        raise RuntimeError(f"{str(refused)[:200]} — the input helper is starting; click again")
+    x, y = args["x"] / g.scale, args["y"] / g.scale
+    t0 = time.time()
+    h.send(f"click {x:.0f} {y:.0f} {args.get('button', 'left')} {args.get('count', 1)}")
+    with g.inp_mu:              # one audit line per click, not a per-minute count: a person answered a system prompt
+        if g.inp is not None and getattr(g.inp, "audit", None) is not None:
+            g.inp.audit.write(json.dumps({"ts": round(t0, 3), "tool": "helper click", "ok": True,
+                                          "args": {"x": round(x), "y": round(y), "button": args.get("button", "left"),
+                                                   "count": args.get("count", 1)},
+                                          "ms": int((time.time() - t0) * 1000), "why": "driver: not in front"}) + "\n")
+            g.inp.audit.flush()
+    logger.info("panel: the driver refused a click on %s at %.0f,%.0f (not in front); sent through the input helper",
+                g.host, x, y)
+
+
 def grabber_act(g, op, body):
     """Send one input on the grabber's input connection (panel-live D1), at the native screen point that matches the
     point on the page's frame, then ask for a frame. A move on a Mac goes to the pointer helper (D2)."""
@@ -6740,6 +6766,7 @@ def grabber_act(g, op, body):
                     g.pointer = None
                 else:
                     g.keyboard = None
+    refused = None
     for attempt in (1, 2):
         with g.inp_mu:
             if g.inp is None:
@@ -6756,6 +6783,9 @@ def grabber_act(g, op, body):
                 try:
                     g.inp.call(tool, sent, secret=secret, timeout=10)
                 except RuntimeError as e:
+                    if tool == "click" and NOT_IN_FRONT in str(e) and Target(g.host).mac:
+                        refused = e         # panel-mac-click D1: a system prompt the driver does not see
+                        break
                     if "background_unavailable" not in str(e):
                         raise
                     logger.info("panel: %s on %s needs foreground delivery; repeating it", tool, g.host)
@@ -6768,6 +6798,8 @@ def grabber_act(g, op, body):
                 if not (ended and attempt == 1):
                     raise
                 logger.info("panel: the input session on %s had ended; %s again in a new one", g.host, tool)
+    if refused is not None:
+        mac_helper_click(g, args, refused)
     if op != "move":
         g.wanted = time.time()
         g.kick.set()
@@ -7408,6 +7440,46 @@ def selftest_booking_panel():
                         assert e.code == code, (path, e.code)
             finally:
                 srv.shutdown(); srv.server_close()
+        # panel-mac-click D1-D3: a click the driver refuses as "not in front" on a Mac goes through the input helper
+        class MacDrv:
+            mac, audit = True, io.StringIO()
+
+            def call(self, tool, args, secret=False, timeout=None):
+                if tool == "click":
+                    raise RuntimeError(f"click failed: (1021, 437) is over Claude (pid 1, window 2), {NOT_IN_FRONT}"
+                                       if args["x"] < 5000 else "click failed: something else")
+                return {}, None
+
+            def count_call(self, *a):
+                pass
+
+        class Helper:
+            lines = []
+
+            def alive(self):
+                return True
+
+            def send(self, line):
+                self.lines.append(line)
+        TARGET_OS["user@mac"] = "macos"
+        with tempfile.TemporaryDirectory() as d:
+            mg = FrameGrabber("user@mac", d, connect=MacDrv)
+            mg.fresh, mg.frame, mg.frame_wh, mg.scale, mg.helpers = True, b"x", (2048, 1280), 2.0, False
+            mg.pointer = Helper()
+            grabber_act(mg, "click", {"x": 2042, "y": 874})
+            assert Helper.lines == ["click 1021 437 left 1"], Helper.lines
+            assert '"helper click"' in mg.inp.audit.getvalue() and '"why": "driver: not in front"' in mg.inp.audit.getvalue()
+            try:
+                grabber_act(mg, "click", {"x": 6000, "y": 1}); raise AssertionError("another refusal must reach the page")
+            except RuntimeError as e:
+                assert "something else" in str(e) and len(Helper.lines) == 1, (e, Helper.lines)
+            mg.pointer, mg.pointer_busy = None, True          # a helper that never comes up: the refusal, and a hint
+            try:
+                mac_helper_click(mg, {"x": 10, "y": 10}, RuntimeError(NOT_IN_FRONT), wait=0.3)
+                raise AssertionError("expected the helper-starting refusal")
+            except RuntimeError as e:
+                assert "click again" in str(e), e
+        TARGET_OS.pop("user@mac", None)
         # panel-control: the input mapping, the lock, the idle release, the token and Origin checks
         assert control_call("click", {"x": 10.4, "y": 20})[:2] == ("click", {"x": 10, "y": 20, "button": "left", "count": 1})
         assert control_call("type", {"text": "árvíztűrő"})[2] is True
