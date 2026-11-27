@@ -307,6 +307,26 @@ Measured on the Hungarian build 26300 VM while writing `windows/setup-target.ps1
   to bottom”, wait about 4 s, a real mouse click on the button's `screenshot_frame`, wait about 3 s, and click again.
   Measured on the Hungarian build 26300 VM, 2026-11-24 12:05–12:30, reported by a consuming project.
 
+- **Installed artifact apps („Install as app”, beta) behave like this.** Measured on the Hungarian build 26300 VM,
+  Claude Desktop Store build 6.28899.6.0, 2026-11-27: (1) the app window's title-bar menu (About, Permissions,
+  Uninstall App…) is the window's system menu, so Alt+Space opens it; „Uninstall App…” is reached with Up, Up, Enter
+  from there. A real click on the open menu is refused by a window check, because the menu is its own popup window,
+  not the app's. The „Uninstall …?” confirmation is a separate top-level `claude.exe` window. (2) After Install the
+  app window opens by itself a few seconds later. (3) A connector grant given to the app survives Uninstall and
+  Install, and a republish whose tool list did not change; no grant dialog appears in either case. (4) A size set on
+  the app window is not remembered: every launch opens at 986×713. (5) With the internet unreachable, a launch gives a
+  window titled „Claude · Artifact window”, entirely blank, whose tree holds only `chrome-error://chromewebdata/`. It
+  does not recover when the network returns; closing and reopening it does.
+- **The taskbar and the Start button are not in the driver's window list.** A real click there cannot be checked
+  against a window handle; use the Win key, or a real click with no window check, and read the screen afterwards.
+- **Taking a QEMU user-network VM offline without losing SSH.** SSH reaches such a VM through the VM's own network
+  (a host port forwarded to the guest), so turning the guest's adapter off also cuts the control channel. What
+  worked: a Windows Firewall outbound block rule on every remote address except the guest network's own range
+  (`0.0.0.0-10.0.1.255`, `10.0.3.0-126.255.255.255`, `128.0.0.0-255.255.255.255`, `2000::/3` for the default
+  10.0.2.0/24), with a SYSTEM scheduled task that removes the rule a few minutes later whatever happens. `curl` to an
+  outside site then fails while SSH stays up. Windows still shows the adapter as connected, so this is „internet
+  unreachable”, not „cable unplugged”. Same VM, same day.
+
 ## Upgrading Cua Driver
 
 - **The release installer hangs when the running daemon is elevated and UAC is on.** Its "stopping any previous
