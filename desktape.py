@@ -57,6 +57,7 @@ EXE = EXE_AT.format(DRIVER_VERSION)
 TARGET_DRIVER = {}    # host string -> a profile's `driver:` version (driver-054 D4: one target at a time)
 DRIVER_PINS_READ = [None]   # the targets file's mtime when TARGET_DRIVER was filled
 TARGET_TIDY = {}      # host string -> "minimize" when tidy must close nothing there (tidy-minimize-only D1)
+TARGET_USE = {}       # host string -> "test" | "personal" (real-click-policy D2)
 # agent-efficiency D3: the driver tools that only read; any other call may change the screen
 READ_TOOLS = {"list_windows", "get_window_state", "get_recording_state", "get_desktop_state", "get_screen_size",
               "screenshot"}
@@ -80,8 +81,9 @@ def host_default():
 SSH_OPTS = {}         # host string -> extra ssh/scp options, from the target's profile (an identity file)
 HOMES = {}            # host string -> the target user's home folder, asked once
 TARGET_FIELDS = {"host", "user", "identity", "label", "note", "alert_cmd", "call_deadline", "os", "paired", "driver",
-                 "tidy"}
+                 "tidy", "use"}
 TIDY_MODES = ("close", "minimize")
+USES = ("test", "personal")        # real-click-policy D2
 
 
 def targets_path():
@@ -105,6 +107,7 @@ def load_targets(path=None):
     if os.path.abspath(path) == os.path.abspath(targets_path()):
         TARGET_DRIVER.clear()                   # driver-054 D4: a `driver:` line removed from the file is gone too
         TARGET_TIDY.clear()
+        TARGET_USE.clear()
         DRIVER_PINS_READ[0] = os.path.getmtime(path)
     for name, t in targets.items():
         if not isinstance(t, dict) or not t.get("host"):
@@ -123,6 +126,9 @@ def load_targets(path=None):
                 raise ValueError(f"{path}: target {name!r} has tidy {t['tidy']!r}; known: {', '.join(TIDY_MODES)}")
             if t["tidy"] == "minimize":
                 TARGET_TIDY[ssh_host(t)] = "minimize"
+        if t.get("use") is not None and t["use"] not in USES:     # real-click-policy D2
+            raise ValueError(f"{path}: target {name!r} has use {t['use']!r}; known: {', '.join(USES)}")
+        TARGET_USE[ssh_host(t)] = t.get("use") or ("personal" if t.get("tidy") == "minimize" else "test")
     if doc.get("default") and doc["default"] not in targets:
         raise ValueError(f"{path}: default {doc['default']!r} is not a target; known: {sorted(targets)}")
     return {"default": doc.get("default"), "targets": targets, "path": path}
@@ -2132,6 +2138,38 @@ def mac_input(host, *args, audit=None, secret=False, stdin=None):
 OVERLAY_APPS = {"Cua Driver", "CuaDriver"}    # the agent cursor is an ordinary-layer window that never takes keys
 
 
+def target_use(host):
+    """real-click-policy D2: what a target is for; a profile with `tidy: minimize` is a person's machine."""
+    return TARGET_USE.get(host) or ("personal" if TARGET_TIDY.get(host) == "minimize" else "test")
+
+
+class NeedsPerson(AssertionError):
+    """real-click-policy D3a: a real click would answer a system prompt; that stays a person's act (panel click)."""
+
+
+def mac_real_click(host, window, x, y, audit=None, label=None, bookings=None, now=None):
+    """real-click-policy D1-D3a: one real click at screen point (x, y), in points, through desktape's input helper,
+    only when the system's window list has `window` topmost there; on a personal target only inside the session's
+    own booking. A point on a system prompt is refused: answering it is a person's act. Nothing is clicked otherwise."""
+    now = now or time.time()
+    if target_use(host) == "personal":
+        mine = [b for b in (BoxLock(host).read_bookings() if bookings is None else bookings)
+                if b.get("from", 0) <= now < b.get("until", 0) and b.get("label") == (label or BoxLock(host).label)]
+        if not mine:
+            raise AssertionError(f"real click at {x:.0f},{y:.0f}: {host} is a personal machine (use: personal) and "
+                                 "this session has no active booking there; book it first. Nothing was clicked")
+    at = mac_front_at(host, x, y, audit)
+    top = at[0] if at else {}
+    if top.get("window_id") == window.get("window_id") or (top.get("pid") == window.get("pid") and top.get("layer") == 0):
+        mac_input(host, "click", round(x), round(y), audit=audit)
+        return top
+    if top and top.get("layer", 0) != 0:
+        raise NeedsPerson(f"real click at {x:.0f},{y:.0f}: the point is on a system prompt (owner {top.get('app')!r}, "
+                          f"layer {top.get('layer')}); it needs a person (panel click). Nothing was clicked")
+    raise AssertionError(f"real click at {x:.0f},{y:.0f}: the point is on {top.get('app') or 'no window'!r}, not on "
+                         f"{window.get('title') or window.get('app_name')!r}. Nothing was clicked")
+
+
 def mac_front_at(host, x, y, audit=None):
     """real-click-policy D1/D5: the windows containing screen point (x, y) in points, front to back, any layer, from
     the system's own window list, overlays and transparent windows left out."""
@@ -3531,6 +3569,17 @@ class Runner:
             return out
         return os_input(self.cua.host, a["into"], keys, self.cua.audit, secret, at, wait=wait)
 
+    def mac_at_click(self, a):
+        """real-click-policy D1/D2: an `os: true` step with an anchored `at` on macOS: the window raised and in front,
+        then one real click through desktape's input helper, aimed at that window, then `click_wait`. The driver is
+        not asked to click; desktape's own rules decide (the target's `use:`, the window at the point)."""
+        self.check_front(a["into"])
+        w, x, y = self.anchored_point(a["into"], a["at"])
+        top = mac_real_click(self.cua.host, w, x, y, self.cua.audit)
+        logger.info("real click at %d,%d in %r (%s)", x, y, a["into"], top.get("app"))
+        self.dirty = True
+        time.sleep(float(a.get("click_wait", self.click_wait)))
+
     def anchored_point(self, title, at):
         """form-replay D2: (window, x, y) of an anchored click point, in screen pixels: `{window: centre|left|right,
         dx, dy}` from the window's bounds, `{from: selector, dx, dy}` from the element's frame (one read). A point
@@ -3930,7 +3979,10 @@ class Runner:
             if "env" in a or "file" in a:
                 a = {**a, "text": secret_text(a)}    # read now, on the controller; the step keeps only the name
             if a.get("into") and self.mac and a.get("os"):   # mac-file-dialog D1: a keyboard's events
-                self.check_front(a["into"])
+                if isinstance(a.get("at"), dict):
+                    self.mac_at_click(a)         # real-click-policy D1: a real click into the field first
+                else:
+                    self.check_front(a["into"])
                 mac_input(self.cua.host, "type", "-", stdin=a["text"], audit=self.cua.audit, secret=a.get("secret", False))
                 self.dirty = True
                 return
@@ -3988,8 +4040,12 @@ class Runner:
         elif kind == "key":
             a = arg if isinstance(arg, dict) else {"key": arg}
             if a.get("into") and self.mac and a.get("os"):   # mac-file-dialog D1
-                self.check_front(a["into"])
-                mac_input(self.cua.host, "key", a["key"], audit=self.cua.audit)
+                if isinstance(a.get("at"), dict):
+                    self.mac_at_click(a)         # real-click-policy D1: `key: ""` is a click alone
+                else:
+                    self.check_front(a["into"])
+                if a["key"]:
+                    mac_input(self.cua.host, "key", a["key"], audit=self.cua.audit)
             elif a.get("into") and self.mac:     # macos-target D5
                 ids = self.check_front(a["into"])
                 self.cua.call("press_key", {**ids, "key": a["key"], "delivery_mode": "foreground"})
@@ -7502,6 +7558,42 @@ def selftest_booking_panel():
                 assert "click again" in str(e), e
         globals()["mac_front_at"] = real_front_at
         TARGET_OS.pop("user@mac", None)
+        # real-click-policy D1-D3a: a real click on macOS is aimed at one window, decided by the target's use
+        sent_mac, here = [], {"top": []}
+        real_fa, real_mi = globals()["mac_front_at"], globals()["mac_input"]
+        globals()["mac_front_at"] = lambda h, x, y, audit=None: here["top"]
+        globals()["mac_input"] = lambda h, *args, **kw: sent_mac.append(args) or "ok"
+        try:
+            TARGET_USE.clear(); TARGET_TIDY.clear()
+            assert target_use("m@test") == "test"
+            TARGET_TIDY["m@home"] = "minimize"
+            assert target_use("m@home") == "personal", "tidy: minimize means a person's machine"
+            claude = {"window_id": 7, "pid": 70, "title": "Claude", "app_name": "Claude"}
+            here["top"] = [{"window_id": 7, "pid": 70, "app": "Claude", "layer": 0}]
+            mac_real_click("m@test", claude, 100, 200)
+            assert sent_mac == [("click", 100, 200)], sent_mac
+            here["top"] = [{"window_id": 99, "pid": 5, "app": "UserNotificationCenter", "layer": 8}]
+            try:
+                mac_real_click("m@test", claude, 100, 200); raise AssertionError("a system prompt needs a person")
+            except NeedsPerson as e:
+                assert "panel click" in str(e) and len(sent_mac) == 1, e
+            here["top"] = [{"window_id": 50, "pid": 6, "app": "Finder", "layer": 0}]
+            try:
+                mac_real_click("m@test", claude, 100, 200); raise AssertionError("another app's window")
+            except AssertionError as e:
+                assert "'Finder'" in str(e) and not isinstance(e, NeedsPerson) and len(sent_mac) == 1, e
+            here["top"] = [{"window_id": 7, "pid": 70, "app": "Claude", "layer": 0}]
+            try:
+                mac_real_click("m@home", claude, 1, 2, label="me", bookings=[]); raise AssertionError("personal: no booking")
+            except AssertionError as e:
+                assert "book it first" in str(e) and len(sent_mac) == 1, e
+            t_now = time.time()
+            mac_real_click("m@home", claude, 1, 2, label="me", now=t_now,
+                           bookings=[{"label": "me", "from": t_now - 5, "until": t_now + 60}])
+            assert sent_mac[-1] == ("click", 1, 2), sent_mac
+        finally:
+            globals()["mac_front_at"], globals()["mac_input"] = real_fa, real_mi
+            TARGET_USE.clear(); TARGET_TIDY.clear()
         # panel-control: the input mapping, the lock, the idle release, the token and Origin checks
         assert control_call("click", {"x": 10.4, "y": 20})[:2] == ("click", {"x": 10, "y": 20, "button": "left", "count": 1})
         assert control_call("type", {"text": "árvíztűrő"})[2] is True

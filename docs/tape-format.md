@@ -340,6 +340,12 @@ steps:
   clicks it only when it falls on that window; a point outside the window fails the step without a click. A
   program that centres its forms in its window keeps a field at the same `window: centre` offset at any width. The
   fraction form `at: [fx, dy]` keeps its meaning.
+- **On macOS** an anchored `at` on an `os: true` `key` or `type` step is a real click through desktape's input
+  helper, not the driver's: the window is raised, desktape checks with the system's own window list that it is
+  topmost at the point, clicks, waits `click_wait`, then sends the keys (`key: ""` clicks only). A point on another
+  app fails without a click; a point on a system prompt (a consent or permission prompt) fails with "needs a person
+  (panel click)". On a target with `use: personal` (the default with `tidy: minimize`) the click also needs this
+  session's own active booking (`desktape book`).
 - **`click_wait:`** (tape, or a step's own) is the wait between the click and the keys of one `os: true` step. A
   field that fills itself a moment after it gets the focus needs more than the default 0.3 s.
 

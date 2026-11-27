@@ -6,6 +6,12 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
 ## [Unreleased]
 
 ### Added
+- **A real click on macOS, decided by desktape** (`real-click-policy`): an `os: true` `key` or `type` step with an
+  anchored `at:` on a Mac clicks for real through desktape's input helper (`key: ""` is a click alone), only when the
+  system's window list has the step's window topmost at the point. A target profile's `use: test | personal` decides
+  (default: `personal` with `tidy: minimize`): on a personal machine the click needs this session's own booking. A
+  point on a system prompt fails with "needs a person (panel click)". The panel's helper clicks record the window's
+  owner at the point.
 - **A panel click reaches a macOS system prompt** (`panel-mac-click`): when the Mac's driver refuses a person's click
   from the panel because the point is over an app that is "not the app in front" (a consent prompt drawn by a system
   process), the panel sends the same click through desktape's own input helper as a real mouse click, with one audit

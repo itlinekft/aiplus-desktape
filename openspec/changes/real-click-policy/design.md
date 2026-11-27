@@ -16,7 +16,7 @@ otherwise `test`. The difference for real input:
 
 | | test | personal |
 |---|---|---|
-| real click on the step's own window | with the lock | with the lock, and inside a booking when one exists |
+| real click on the step's own window | with the lock | with the lock, and an active booking of this session's label |
 | real click on a system prompt (a grant) | devauth authorization | devauth authorization |
 
 The driver's own refusal is no longer the decision: on macOS an `os: true` click does not ask the driver to click.

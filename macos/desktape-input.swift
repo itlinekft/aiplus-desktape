@@ -10,6 +10,7 @@
 //                                        "click <x> <y> <left|right|middle> <1-3>" a click (panel-mac-click)
 //   desktape-input front                 the ordinary windows front to back (top 6), as JSON lines
 //                                        {"window_id", "pid", "app", "alpha"}; the caller skips overlays
+//   desktape-input click <x> <y>         one real left click at (x, y) screen points (real-click-policy D1)
 //   desktape-input front-at <x> <y>      the windows containing that point, front to back, any layer, with
 //                                        "layer" and bounds (real-click-policy D1)
 //
@@ -51,8 +52,26 @@ func post(_ code: CGKeyCode, _ flags: CGEventFlags, text: String? = nil) {
     }
 }
 
+func click(_ p: CGPoint, _ which: String, _ count: Int) {
+    let (down, up, button): (CGEventType, CGEventType, CGMouseButton) =
+        which == "right" ? (.rightMouseDown, .rightMouseUp, .right)
+        : which == "middle" ? (.otherMouseDown, .otherMouseUp, .center) : (.leftMouseDown, .leftMouseUp, .left)
+    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?
+        .post(tap: .cghidEventTap)
+    usleep(30_000)
+    for i in 1...max(1, min(count, 3)) {
+        for t in [down, up] {
+            if let e = CGEvent(mouseEventSource: nil, mouseType: t, mouseCursorPosition: p, mouseButton: button) {
+                e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
+                e.post(tap: .cghidEventTap)
+            }
+            usleep(20_000)
+        }
+    }
+}
+
 let a = Array(CommandLine.arguments.dropFirst())
-guard let cmd = a.first else { fail("usage: desktape-input glide <x> <y> [ms] | key <combo> | type <text> | serve | front") }
+guard let cmd = a.first else { fail("usage: desktape-input glide <x> <y> [ms] | click <x> <y> | key <combo> | type <text> | serve | front | front-at <x> <y>") }
 switch cmd {
 case "glide":
     let n = a.dropFirst().compactMap { Double($0) }
@@ -70,6 +89,12 @@ case "glide":
     }
     let end = CGEvent(source: nil)?.location ?? CGPoint(x: n[0], y: n[1])
     print("\(Int(end.x)) \(Int(end.y))")
+case "click":
+    // real-click-policy D1: one real click at (x, y) screen points; the caller has checked the window there
+    let n = a.dropFirst().compactMap { Double($0) }
+    guard n.count >= 2 else { fail("click needs x and y") }
+    click(CGPoint(x: n[0], y: n[1]), "left", 1)
+    print("ok")
 case "key":
     guard a.count == 2 else { fail("key needs one combination, e.g. cmd+shift+g") }
     var flags: CGEventFlags = []
@@ -105,23 +130,7 @@ case "serve":
         } else if f.count == 2, f[0] == "text", let d = Data(base64Encoded: f[1]), let s = String(data: d, encoding: .utf8) {
             for ch in s { post(0, [], text: String(ch)) }
         } else if f.count == 5, f[0] == "click", let x = Double(f[1]), let y = Double(f[2]), let n = Int(f[4]) {
-            // panel-mac-click D2: a person's click from the panel, where the driver refused (a system prompt)
-            let p = CGPoint(x: x, y: y)
-            let (down, up, button): (CGEventType, CGEventType, CGMouseButton) =
-                f[3] == "right" ? (.rightMouseDown, .rightMouseUp, .right)
-                : f[3] == "middle" ? (.otherMouseDown, .otherMouseUp, .center) : (.leftMouseDown, .leftMouseUp, .left)
-            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?
-                .post(tap: .cghidEventTap)
-            usleep(30_000)
-            for i in 1...max(1, min(n, 3)) {
-                for t in [down, up] {
-                    if let e = CGEvent(mouseEventSource: nil, mouseType: t, mouseCursorPosition: p, mouseButton: button) {
-                        e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
-                        e.post(tap: .cghidEventTap)
-                    }
-                    usleep(20_000)
-                }
-            }
+            click(CGPoint(x: x, y: y), f[3], n)   // panel-mac-click D2: a person's click where the driver refused
         }
     }
 case "front":
