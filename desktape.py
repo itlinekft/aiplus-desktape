@@ -5766,9 +5766,14 @@ def cmd_doctor(a):
             rows.append((bool(ff), f"ffmpeg on {host}", ff or INSTALL["ffmpeg"]["darwin" if t.mac else "win32"]
                          + " (run it on that machine)"))
         except (Exception, SystemExit) as e:
-            rows.append((False, f"target {host or a.host or a.target}", f"not reachable: {e}. Next: `desktape "
+            note = found_note(host) if host else ""     # found-address-fallback D3: the likely cause, named
+            rows.append((False, f"target {host or a.host or a.target}", f"not reachable: {e}. " +
+                         (f"Likely cause: {note}. " if note else "") + "Next: `desktape "
                          "targets` lists the known names; `desktape pair NAME --check` tests the key login; a new "
                          "machine: `desktape pair NAME --os windows` (docs/pairing.md)"))
+        else:
+            if found_note(host):
+                rows.append((True, f"address of {host}", found_note(host)))
         if host:
             rows += doctor_target_driver(host, mac=bool(t and t.mac))
     for ok, piece, detail in rows:
@@ -5877,14 +5882,65 @@ def found_addresses(directory=None):
     return _FOUND["data"]
 
 
-def ssh_opts(host):
+def ssh_opts(host, check=True):
     """The SSH options for a host: its profile's identity file, and a found address over the configured one (D2).
-    The key is still checked under its own name, so a found address never weakens the host key check."""
+    The key is still checked under its own name, so a found address never weakens the host key check.
+    found-address-fallback D1: a found address that does not answer gives way to the configured one first."""
     o = list(SSH_OPTS.get(host, []))
     f = found_addresses().get(host)
+    if f and f.get("address") and check and drop_stale_found(host, f):
+        f = None
     if f and f.get("address"):
         o += ["-o", f"HostName={f['address']}", "-o", f"HostKeyAlias={f['keyname']}"]
     return o
+
+
+_FOUND_CHECKED = {}           # found-address-fallback D1: (host, address) -> when it was last checked, this process
+
+
+def drop_stale_found(host, f, tcp=None, config=None, scan=None, known=None, forget=None, now=None):
+    """found-address-fallback D1: True when the found address `f` was forgotten because it does not answer and the
+    ssh config's own address shows the same pinned host key. Checked once per (host, address) per FIND_EVERY."""
+    now = time.time() if now is None else now
+    k = (host, f.get("address"))
+    if now - _FOUND_CHECKED.get(k, -FIND_EVERY) < FIND_EVERY:
+        return False
+    _FOUND_CHECKED[k] = now
+    tcp, config, scan = tcp or probe_tcp, config or ssh_config, scan or scan_keys
+    known, forget = known or pinned_keys, forget or write_found
+    try:
+        kv = config(host)
+        if kv.get("proxyjump", "none") != "none" or kv.get("proxycommand", "none") != "none":
+            return False
+        port, configured = int(kv.get("port") or 22), kv.get("hostname") or host.split("@")[-1]
+        if configured == f["address"]:
+            return False
+        res = tcp((f["address"], port), 2.0, {})
+        if res.get("ok"):
+            return False
+        same = scan(configured, port) & known(f["keyname"], port)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        logger.warning("%s: the found address %s was not checked: %s", host, f.get("address"), e)
+        return False
+    if same:            # D2: say it, both ways
+        forget(host, None)
+        logger.warning("%s: the found address %s does not answer (%s); the ssh config's %s shows the same host key, "
+                       "so desktape connects there again (found address forgotten)", host, f["address"],
+                       res.get("detail"), configured)
+        return True
+    logger.warning("%s: desktape connects to the found address %s (from `find --save`), not the ssh config's %s, and "
+                   "it does not answer (%s); `desktape find --forget` goes back to the ssh config", host, f["address"],
+                   configured, res.get("detail"))
+    return False
+
+
+def found_note(host):
+    """found-address-fallback D3: a found address in use for this host, in one phrase, or ''."""
+    f = found_addresses().get(host)
+    if not (f and f.get("address")):
+        return ""
+    return (f"desktape connects to {f['address']}, found by `find --save`, not the ssh config's address; "
+            "`desktape find --forget` goes back to it")
 
 
 def write_found(host, entry, directory=None):
@@ -9894,8 +9950,26 @@ def selftest_find():
         try:
             assert ssh_opts("user@box") == list(SSH_OPTS.get("user@box", [])), (ssh_opts("user@box"), found_addresses(), found_path())
             write_found("user@box", {"address": "10.0.0.9", "keyname": "box", "found": 1})
-            o = ssh_opts("user@box")
+            o = ssh_opts("user@box", check=False)
             assert o[-4:] == ["-o", "HostName=10.0.0.9", "-o", "HostKeyAlias=box"], o
+            # found-address-fallback D1/D2: a silent found address gives way to a configured one with the same key
+            f, gone = found_addresses()["user@box"], []
+            down = lambda ep, t, w: {"ok": False, "detail": "ssh: No route to host"}
+            vpn = lambda h: {"hostname": "100.64.0.7", "port": "22"}
+            fb = lambda **kw: drop_stale_found("user@box", f, **{"tcp": down, "config": vpn, "known": lambda k, p: {key},
+                                                                   "forget": lambda h, e: gone.append(h), "now": 1e9, **kw})
+            _FOUND_CHECKED.clear()
+            assert fb(scan=lambda a, p: {key}) is True and gone == ["user@box"], "same key: forgotten"
+            assert fb(scan=lambda a, p: {key}) is False and len(gone) == 1, "checked once per FIND_EVERY"
+            _FOUND_CHECKED.clear()
+            assert fb(scan=lambda a, p: {other}) is False and len(gone) == 1, "another key there: kept"
+            _FOUND_CHECKED.clear()
+            assert fb(tcp=lambda ep, t, w: {"ok": True}, scan=lambda a, p: {key}) is False, "it answers: kept"
+            _FOUND_CHECKED.clear()
+            assert fb(config=lambda h: {"hostname": "10.0.0.9"}, scan=lambda a, p: {key}) is False, "same address"
+            _FOUND_CHECKED.clear()
+            assert fb(config=lambda h: {"hostname": "x", "proxyjump": "gw"}, scan=lambda a, p: {key}) is False, "proxy"
+            assert "10.0.0.9" in found_note("user@box") and "find --forget" in found_note("user@box")
             st = PanelState("127.0.0.1", probe=False)
             saved = []
             got = st.find_moved("user@box", find=lambda h: ("10.0.0.12", "box", ["10.0.0.12"]),
@@ -9905,6 +9979,7 @@ def selftest_find():
                                  endpoint=lambda h: ("10.0.0.9", 22220)) is None and len(saved) == 1, "same address"
             assert os.path.dirname(found_path()) != lock_dir(), "not in the locks folder: the panel lists every JSON there"
             write_found("user@box", None)
+            assert found_note("user@box") == ""
             assert ssh_opts("user@box") == list(SSH_OPTS.get("user@box", [])), (ssh_opts("user@box"), found_addresses(), found_path())
         finally:
             if old_env is None: os.environ.pop("XDG_STATE_HOME", None)

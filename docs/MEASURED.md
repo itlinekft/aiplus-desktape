@@ -806,6 +806,22 @@ python3 desktape.py --target VM act 'focus: {title: " - Google Chrome", suffix: 
 python3 desktape.py --target VM look --window "dt value test - Google Chrome" --full
 ```
 
+## 2026-11-27: a stale found address gives way to the ssh config (`found-address-fallback`)
+
+Reported by another project the same day on the MacBook target (ssh config: a Tailscale address): `found.json` held a
+LAN address from an earlier `find --save`, and `doctor` and `look` failed with "No route to host" while `ssh` to the
+alias worked. Measured on the Windows 11 test box from the Linux controller (Python 3.14.3, Cua Driver 0.55.0), with
+`XDG_STATE_HOME` set to a scratch folder so the panel's own `found.json` was not touched:
+
+- Found address set to `192.0.2.1` (unused), ssh config address the box's LAN address, `HostKeyAlias` pinned:
+  `desktape doctor --target <box>` printed one warning ("the found address 192.0.2.1 does not answer (ssh: timed out);
+  the ssh config's … shows the same host key, so desktape connects there again (found address forgotten)"), then every
+  row ok (driver answered, 8 windows); 4.0 s in all, `found.json` empty afterwards.
+- Found address equal to the configured one: `doctor` printed the row "address of <box>: desktape connects to …, found
+  by `find --save`, not the ssh config's address; `desktape find --forget` goes back to it".
+- Not measured on a real machine: a configured address that answers with another host key (the found address is
+  kept and named); that case is in the selftest only.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

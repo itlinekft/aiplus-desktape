@@ -11,6 +11,11 @@ The plugin's versions, newest first ([Keep a Changelog](https://keepachangelog.c
   `100.64.0.0/10`), loopback or public.
 
 ### Fixed
+- **A stale found address no longer hides the ssh config** (`found-address-fallback`): an address saved by
+  `find --save` that does not answer is checked against the ssh config's own address; when that one shows the same
+  pinned host key, desktape forgets the found address, says so in one line and connects as configured (before, a
+  machine that had moved from the LAN to its VPN address failed with "No route to host" while plain `ssh` worked).
+  Otherwise the warning names the found address and `find --forget`; `doctor --target` names a found address in use.
 - **A lost take is never silent** (`record-fail-loud`): `record` writes `summary.json` with `"ok"` and the reason on
   every exit, prints `record FAILED:`, alerts and exits 1. A driver connection that closes mid-take (the daemon
   crashed when a Windows VM ran out of commit memory) is seen within a second instead of after two minutes, a new
