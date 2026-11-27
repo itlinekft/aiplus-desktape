@@ -21,8 +21,7 @@ The pointer helper starts in the background (it may compile once). If it is not 
 the panel starts it and waits up to 10 s; if it is still not up, the page gets the driver's refusal plus "the input
 helper is starting; click again".
 
-## Not measured yet
+## Measured
 
-Whether macOS acts on a synthetic click on a TCC consent prompt. If it ignores it, the page says the click was sent
-by the helper and the next frame shows the prompt still there; that result goes to `docs/MEASURED.md` and
-`knowledge/macos.md` either way.
+2026-11-27, macOS 26.4, Cua Driver 0.55.0: the driver refused the person's click on a consent prompt's "Allow", the
+helper's click was accepted and the prompt closed (`docs/MEASURED.md`).

@@ -822,6 +822,18 @@ alias worked. Measured on the Windows 11 test box from the Linux controller (Pyt
 - Not measured on a real machine: a configured address that answers with another host key (the found address is
   kept and named); that case is in the selftest only.
 
+## 2026-11-27: a panel click on a macOS consent prompt
+
+**Machine:** a Mac mini (macOS 26.4, arm64), Cua Driver 0.55.0, driven from the panel on the Linux controller.
+**What:** a system consent prompt ("… would like to access data from other apps") over Claude Desktop; the person
+clicked its "Allow" button on the panel's zoomed frame.
+
+- Before `panel-mac-click`: the driver refused every click on the button (desktop target, "is over Claude …, which
+  is not the app in front"); nothing was sent, the prompt stayed.
+- After (commit f6c1c20, panel restarted): the driver refused the click again, the panel sent it through the input
+  helper (`helper click`, `why: driver: not in front` in the panel's audit), and the prompt closed. The helper started
+  in 0.1 s; the click needed no second try.
+
 ## Not tested yet
 
 - Cowork: desktape inside a Cowork session, in the cloud or on the user's own computer.

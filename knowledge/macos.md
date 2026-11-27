@@ -111,6 +111,11 @@ Measured: 2026-10-25, macOS 26.4, Claude Desktop.
   avfoundation hangs. Only the driver's app holds the screen-recording grant. Same day.
 - Text typed by the helper is unicode, so the keyboard layout does not matter. Key names (`cmd+shift+g`)
   follow US key positions, which match the letters in use on a Hungarian layout too.
+- A system consent prompt ("… would like to access data from other apps") is drawn by a system process the driver's
+  hit test does not see. A desktop-target click on its button is refused: the point "is over" the app underneath,
+  "which is not the app in front". A real click posted by the helper (`serve`: `click x y left 1`) is accepted and
+  answers the prompt; the panel does this by itself for a person's click (`panel-mac-click`). Measured: 2026-11-27,
+  macOS 26.4, Cua Driver 0.55.0.
 
 Measured: 2026-10-25, macOS 26.4, Cua Driver 0.34.1.
 
